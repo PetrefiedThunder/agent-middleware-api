@@ -1,0 +1,88 @@
+version: "3.9"
+
+# ===========================================================================
+# Agent-Native Middleware API — Production Stack
+# ===========================================================================
+# docker-compose -f docker-compose.prod.yml up -d
+# ===========================================================================
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.production
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      mqtt-broker:
+        condition: service_started
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # --- MQTT Broker (IoT Protocol Bridge) ---
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    restart: unless-stopped
+
+  # --- Redis (Rate Limiting, Caching, Crawl Queue) ---
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # --- PostgreSQL (ACID Ledger, Wallet Store, Content Store) ---
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: middleware
+      POSTGRES_USER: middleware
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_in_production}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U middleware"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  mqtt_data:
+  mqtt_log:
+  redis_data:
+  pgdata:

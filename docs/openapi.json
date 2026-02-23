@@ -1,0 +1,4500 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Agent-Native Middleware API",
+    "description": "## Agent-Native Middleware API\n\nHeadless infrastructure for the B2A (Business-to-Agent) economy. This API provides four core services that give AI agents the 'hands' and 'eyes' to manipulate the digital and physical world.\n\n### Service Pillars\n\n- **IoT Protocol Bridge** (`/v1/iot`) \u2014 Secure, ACL-enforced protocol translation for IoT devices (MQTT, CoAP, Zigbee, etc.)\n- **Autonomous Product Manager** (`/v1/telemetry`) \u2014 Ingest telemetry, detect anomalies, auto-generate pull requests to fix bugs\n- **Programmatic Media Engine** (`/v1/media`) \u2014 Video ingestion, viral hook detection, reframing, captioning, and cross-platform distribution\n- **Agent Communications** (`/v1/comms`) \u2014 Agent registration, structured messaging, capability discovery, and swarm task handoffs\n\n### Authentication\n\nAll endpoints require an API key passed via the `X-API-Key` header.\n\n### For Agents\n\nThis API is designed for programmatic consumption. See `/llm.txt` for LLM-optimized documentation and `/openapi.json` for the full spec.",
+    "contact": {
+      "name": "Agent-Native Middleware",
+      "email": "api@yourdomain.com"
+    },
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.yourdomain.com",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Local Development"
+    }
+  ],
+  "paths": {
+    "/v1/iot/devices": {
+      "post": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "Register a new IoT device",
+        "description": "Register a device for protocol bridging. The device will receive a unified REST endpoint that translates HTTP requests into the device's native protocol. Topic ACLs are enforced on every message. An empty ACL dict defaults to deny-all for maximum security.",
+        "operationId": "register_device_v1_iot_devices_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegistration"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "List registered devices",
+        "description": "Paginated listing of all devices registered to your API key.",
+        "operationId": "list_devices_v1_iot_devices_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number"
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Items per page",
+              "default": 50,
+              "title": "Per Page"
+            },
+            "description": "Items per page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/iot/devices/{device_id}": {
+      "get": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "Get device details",
+        "description": "Retrieve registration details and bridge endpoint for a specific device.",
+        "operationId": "get_device_v1_iot_devices__device_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "Deregister a device",
+        "description": "Remove a device from the bridge. All pending messages will be dropped.",
+        "operationId": "deregister_device_v1_iot_devices__device_id__delete",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/iot/devices/{device_id}/messages": {
+      "post": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "Send a message to a device",
+        "description": "Send a message through the protocol bridge to the device's native protocol. The topic must match an allowed ACL pattern. Messages to denied topics (e.g., camera feeds) will be rejected with a 403.",
+        "operationId": "send_message_v1_iot_devices__device_id__messages_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeMessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/iot/devices/{device_id}/subscribe": {
+      "post": {
+        "tags": [
+          "IoT Protocol Bridge"
+        ],
+        "summary": "Subscribe to device messages",
+        "description": "Subscribe to messages from a device topic. Returns a webhook URL or WebSocket endpoint that agents can poll for incoming data. Topic must have READ permission in the device's ACL.",
+        "operationId": "subscribe_to_device_v1_iot_devices__device_id__subscribe_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "device_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Device Id"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Topic"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or topic ACL violation"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/telemetry/events": {
+      "post": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "Ingest telemetry events",
+        "description": "Submit a batch of telemetry events for anomaly detection. Events are processed asynchronously. The Autonomous PM will analyze patterns across events to identify error spikes, latency regressions, and missing feature patterns.",
+        "operationId": "ingest_events_v1_telemetry_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelemetryBatchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/telemetry/events/single": {
+      "post": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "Ingest a single telemetry event",
+        "description": "Convenience endpoint for submitting one event at a time.",
+        "operationId": "ingest_single_event_v1_telemetry_events_single_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/telemetry/anomalies": {
+      "get": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "List detected anomalies",
+        "description": "Retrieve anomalies detected by the Autonomous PM. Anomalies are classified by severity and category, with optional LLM-generated fix suggestions and auto-PR links.",
+        "operationId": "list_anomalies_v1_telemetry_anomalies_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__telemetry__Severity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by severity level",
+              "title": "Severity"
+            },
+            "description": "Filter by severity level"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Per Page"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnomalyListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/telemetry/anomalies/{anomaly_id}": {
+      "get": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "Get anomaly details",
+        "description": "Retrieve detailed information about a specific anomaly, including suggested fixes.",
+        "operationId": "get_anomaly_v1_telemetry_anomalies__anomaly_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "anomaly_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Anomaly Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnomalyReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/telemetry/anomalies/{anomaly_id}/auto-pr": {
+      "post": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "Generate an autonomous pull request",
+        "description": "Instruct the Autonomous PM to generate a code fix for the given anomaly and optionally push it as a pull request. Use dry_run=true to preview the proposed diff without committing.",
+        "operationId": "generate_auto_pr_v1_telemetry_anomalies__anomaly_id__auto_pr_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "anomaly_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Anomaly Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoPRRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoPRResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/telemetry/stats": {
+      "get": {
+        "tags": [
+          "Autonomous Product Manager"
+        ],
+        "summary": "Get telemetry statistics",
+        "description": "Aggregate statistics across all ingested telemetry events. Useful for agents monitoring system health at a glance.",
+        "operationId": "get_stats_v1_telemetry_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/media/videos": {
+      "post": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Upload a video for processing",
+        "description": "Submit a video for the media engine pipeline. Provide either a source_url for the engine to fetch, or use the returned upload_url to push the file directly. Processing begins automatically after upload.",
+        "operationId": "upload_video_v1_media_videos_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoUploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/media/videos/{video_id}": {
+      "get": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Get video processing status",
+        "description": "Check the current status of a video in the processing pipeline.",
+        "operationId": "get_video_status_v1_media_videos__video_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/media/videos/{video_id}/hooks": {
+      "get": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Get detected viral hooks",
+        "description": "Retrieve the viral hooks detected in a processed video. Hooks are ranked by confidence_score. Each hook identifies a high-engagement moment based on speech patterns, emotional peaks, visual surprises, or audience retention signals.",
+        "operationId": "get_viral_hooks_v1_media_videos__video_id__hooks_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "Minimum confidence threshold",
+              "default": 0.0,
+              "title": "Min Confidence"
+            },
+            "description": "Minimum confidence threshold"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ViralHook"
+                  },
+                  "title": "Response Get Viral Hooks V1 Media Videos  Video Id  Hooks Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/media/videos/{video_id}/clips": {
+      "post": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Generate platform-ready clips",
+        "description": "Generate reframed, captioned clips from detected viral hooks. Clips are automatically reframed to the target aspect ratio(s) and overlaid with animated captions in the chosen style. 80%% of social video is consumed muted \u2014 captions are not optional.",
+        "operationId": "generate_clips_v1_media_videos__video_id__clips_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "video_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Video Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClipGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipGenerationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/media/distribute": {
+      "post": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Distribute clips to social platforms",
+        "description": "Push generated clips directly to social platforms via their APIs. No app is opened. Supports YouTube Shorts, TikTok, Instagram Reels, X Video, and LinkedIn Video. Set optimize_schedule=true to let the algorithm pick optimal posting windows based on historical engagement data.",
+        "operationId": "distribute_clips_v1_media_distribute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistributionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/media/clips/{clip_id}": {
+      "get": {
+        "tags": [
+          "Programmatic Media Engine"
+        ],
+        "summary": "Get clip details",
+        "description": "Retrieve metadata and download URL for a generated clip.",
+        "operationId": "get_clip_v1_media_clips__clip_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "clip_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Clip Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneratedClip"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comms/agents": {
+      "post": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "Register an agent",
+        "description": "Register a new agent in the communication network. The agent receives a unique ID and API key for messaging. Capabilities are used by other agents to discover and hand off tasks.",
+        "operationId": "register_agent_v1_comms_agents_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRegistrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "List registered agents",
+        "description": "List all agents in the communication network, optionally filtered by capability.",
+        "operationId": "list_agents_v1_comms_agents_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "capability",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter agents by capability (e.g., 'video-transcription').",
+              "title": "Capability"
+            },
+            "description": "Filter agents by capability (e.g., 'video-transcription')."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comms/messages": {
+      "post": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "Send a message to another agent",
+        "description": "Send a structured message to a registered agent. Messages are routed based on priority: critical messages are delivered immediately with aggressive retry, low priority messages are batched. If the recipient has a webhook, delivery is push-based; otherwise the recipient must poll.",
+        "operationId": "send_message_v1_comms_messages_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from_agent",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "From Agent"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comms/messages/{agent_id}/inbox": {
+      "get": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "Poll for messages",
+        "description": "Poll an agent's inbox for pending messages. Messages are marked as delivered upon retrieval. Use this if the agent does not have a webhook configured.",
+        "operationId": "poll_inbox_v1_comms_messages__agent_id__inbox_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "Max messages to return",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Max messages to return"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comms/messages/{agent_id}/ack/{message_id}": {
+      "post": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "Acknowledge a message",
+        "description": "Confirm receipt and processing of a message.",
+        "operationId": "acknowledge_message_v1_comms_messages__agent_id__ack__message_id__post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comms/handoff": {
+      "post": {
+        "tags": [
+          "Agent Communications"
+        ],
+        "summary": "Request a capability-based task handoff",
+        "description": "Find an agent with the required capability and hand off work to it. This is the core swarm intelligence mechanism: instead of one 'God model' doing everything, tasks are routed to specialist agents. Returns the handoff message and target agent details.",
+        "operationId": "request_handoff_v1_comms_handoff_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from_agent",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "From Agent"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoffRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoffResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/factory/pipelines": {
+      "post": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Create a content generation pipeline",
+        "description": "Submit a source asset and target formats. The factory will generate multiple content pieces adapted to each format: short videos, static images, text posts, audiograms, carousels, blog excerpts, and email snippets. Processing is async.",
+        "operationId": "create_pipeline_v1_factory_pipelines_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentPipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentPipelineResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/factory/pipelines/{pipeline_id}": {
+      "get": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Get pipeline status",
+        "description": "Check the status of a content generation pipeline.",
+        "operationId": "get_pipeline_v1_factory_pipelines__pipeline_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "pipeline_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pipeline Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/factory/pipelines/{pipeline_id}/content": {
+      "get": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "List generated content pieces",
+        "description": "Retrieve all content pieces generated by a pipeline.",
+        "operationId": "list_pipeline_content_v1_factory_pipelines__pipeline_id__content_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "pipeline_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pipeline Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/factory/content/{content_id}": {
+      "get": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Get content piece details",
+        "description": "Retrieve metadata and download URL for a specific content piece.",
+        "operationId": "get_content_v1_factory_content__content_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "content_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Content Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneratedContent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/factory/analytics": {
+      "post": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Ingest engagement analytics",
+        "description": "Feed engagement data from platform APIs into the scheduling engine. The scheduler uses this data to learn optimal posting windows. More data = smarter scheduling = higher view velocity.",
+        "operationId": "ingest_analytics_v1_factory_analytics_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyticsIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsIngestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/factory/analytics/summary": {
+      "get": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Get analytics summary",
+        "description": "View summary of ingested engagement data.",
+        "operationId": "get_analytics_summary_v1_factory_analytics_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/factory/schedule": {
+      "post": {
+        "tags": [
+          "Content Factory & Scheduling"
+        ],
+        "summary": "Get optimal posting schedule",
+        "description": "Generate an algorithmically-optimized posting schedule for content pieces. The scheduler analyzes historical engagement data per platform to pick the highest-engagement time slots. Posts are spread across days to avoid audience fatigue (configurable via max_posts_per_day).",
+        "operationId": "get_schedule_v1_factory_schedule_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing API key"
+          },
+          "403": {
+            "description": "Invalid API key or access denied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/security/scans": {
+      "get": {
+        "tags": [
+          "Red Team Security Swarm"
+        ],
+        "summary": "List all security scans",
+        "description": "Returns all historical scan reports, newest first.",
+        "operationId": "list_scans_v1_security_scans_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Red Team Security Swarm"
+        ],
+        "summary": "Launch Red Team scan",
+        "description": "Deploy the security swarm to attack specified services with selected attack categories. Returns immediately with scan ID; the swarm runs asynchronously. Default: full scan of all services with all vectors.",
+        "operationId": "launch_scan_v1_security_scans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/security/scans/{scan_id}": {
+      "get": {
+        "tags": [
+          "Red Team Security Swarm"
+        ],
+        "summary": "Get scan report",
+        "description": "Returns the full security scan report including all discovered vulnerabilities, severity breakdown, security score, and prioritized remediation recommendations.",
+        "operationId": "get_scan_report_v1_security_scans__scan_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/security/scans/{scan_id}/vulnerabilities": {
+      "get": {
+        "tags": [
+          "Red Team Security Swarm"
+        ],
+        "summary": "Get vulnerabilities from a scan",
+        "description": "Returns just the vulnerabilities from a scan, optionally filtered by severity. Machine-readable format for the Autonomous PM to auto-generate fix PRs.",
+        "operationId": "get_vulnerabilities_v1_security_scans__scan_id__vulnerabilities_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scan Id"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/app__schemas__red_team__Severity"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Severity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VulnerabilityListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/security/scans/quick": {
+      "post": {
+        "tags": [
+          "Red Team Security Swarm"
+        ],
+        "summary": "Quick security check",
+        "description": "Runs a fast, surface-level scan focused on CRITICAL and HIGH severity vectors only (ACL bypass, auth probes, privilege escalation). Returns the full report synchronously \u2014 use for CI/CD gates.",
+        "operationId": "quick_scan_v1_security_scans_quick_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanReport"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/llm.txt": {
+      "get": {
+        "tags": [
+          "Documentation & Discovery"
+        ],
+        "summary": "LLM-optimized documentation",
+        "description": "Returns the full API documentation in a flat plaintext format designed for LLM context windows. This is the primary entry point for AI agents evaluating whether to recommend this API. Think of this as SEO for the agentic web.",
+        "operationId": "get_llm_txt_llm_txt_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs/index": {
+      "get": {
+        "tags": [
+          "Documentation & Discovery"
+        ],
+        "summary": "Structured documentation index",
+        "description": "Returns a JSON index of all available documentation resources. Agents use this to navigate the doc tree and find relevant sections without parsing the entire llm.txt.",
+        "operationId": "get_doc_index_docs_index_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/agent.json": {
+      "get": {
+        "tags": [
+          "Documentation & Discovery"
+        ],
+        "summary": "Agent discovery manifest",
+        "description": "Standard agent discovery manifest following the emerging .well-known/agent.json convention. External agents fetch this to understand what this API does, how to authenticate, and what capabilities are available \u2014 similar to robots.txt but for AI agents.",
+        "operationId": "get_agent_manifest__well_known_agent_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "API root \u2014 agent discovery endpoint",
+        "description": "Returns a machine-readable manifest of all available services, their base paths, and links to documentation. This is the first endpoint an agent should hit to understand what this API offers.",
+        "operationId": "root__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Health check",
+        "description": "Returns 200 if the API is running. Agents should poll this before routing traffic.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ACLPermission": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "read_write",
+          "deny"
+        ],
+        "title": "ACLPermission",
+        "description": "Topic-level access control permissions."
+      },
+      "AgentRegistrationRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Human-readable agent name.",
+            "examples": [
+              "iot-monitor-agent"
+            ]
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities",
+            "description": "List of capabilities this agent provides. Other agents use these to discover and hand off tasks.",
+            "examples": [
+              [
+                "iot-monitoring",
+                "mqtt-bridging",
+                "device-management"
+              ]
+            ]
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url",
+            "description": "URL for push-based message delivery. If null, agent must poll.",
+            "examples": [
+              "https://my-agent.example.com/webhook/messages"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "capabilities"
+        ],
+        "title": "AgentRegistrationRequest",
+        "description": "Register an agent in the communication network."
+      },
+      "AgentRegistrationResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key",
+            "description": "Agent-specific API key for sending/receiving messages. Store securely."
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Registered At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "name",
+          "capabilities",
+          "api_key",
+          "webhook_url",
+          "status",
+          "registered_at"
+        ],
+        "title": "AgentRegistrationResponse"
+      },
+      "AnalyticsIngestRequest": {
+        "properties": {
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/PlatformAnalytics"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Metrics",
+            "description": "Engagement metrics from platform APIs. The scheduler learns from this data."
+          }
+        },
+        "type": "object",
+        "required": [
+          "metrics"
+        ],
+        "title": "AnalyticsIngestRequest",
+        "description": "Submit engagement data to improve scheduling."
+      },
+      "AnalyticsIngestResponse": {
+        "properties": {
+          "ingested": {
+            "type": "integer",
+            "title": "Ingested"
+          },
+          "platform_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Platform Summary",
+            "description": "Per-platform ingestion counts."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingested",
+          "platform_summary"
+        ],
+        "title": "AnalyticsIngestResponse"
+      },
+      "AnomalyListResponse": {
+        "properties": {
+          "anomalies": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyReport"
+            },
+            "type": "array",
+            "title": "Anomalies"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "per_page": {
+            "type": "integer",
+            "title": "Per Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "anomalies",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "title": "AnomalyListResponse",
+        "description": "Paginated anomaly listing."
+      },
+      "AnomalyReport": {
+        "properties": {
+          "anomaly_id": {
+            "type": "string",
+            "title": "Anomaly Id"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/app__schemas__telemetry__Severity"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Classification of the anomaly (e.g., 'error_spike', 'latency_regression', 'missing_feature')."
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "Agent-readable summary of the issue."
+          },
+          "affected_endpoints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Affected Endpoints",
+            "description": "API endpoints or services affected."
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "description": "Number of telemetry events contributing to this anomaly."
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen"
+          },
+          "suggested_fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Fix",
+            "description": "LLM-generated code fix suggestion in diff format."
+          },
+          "auto_pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Pr Url",
+            "description": "URL of the auto-generated pull request, if AUTO_PR_ENABLED."
+          }
+        },
+        "type": "object",
+        "required": [
+          "anomaly_id",
+          "severity",
+          "category",
+          "summary",
+          "event_count",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "AnomalyReport",
+        "description": "An anomaly detected by the Autonomous PM from telemetry analysis."
+      },
+      "AspectRatio": {
+        "type": "string",
+        "enum": [
+          "16:9",
+          "9:16",
+          "1:1",
+          "21:9"
+        ],
+        "title": "AspectRatio",
+        "description": "Target aspect ratios for reframing."
+      },
+      "AttackCategory": {
+        "type": "string",
+        "enum": [
+          "acl_bypass",
+          "auth_probe",
+          "injection",
+          "rate_limit_evasion",
+          "privilege_escalation",
+          "schema_abuse",
+          "enumeration",
+          "replay",
+          "dos_pattern"
+        ],
+        "title": "AttackCategory",
+        "description": "Categories of automated attack vectors."
+      },
+      "AutoPRRequest": {
+        "properties": {
+          "anomaly_id": {
+            "type": "string",
+            "title": "Anomaly Id",
+            "description": "The anomaly to generate a fix for."
+          },
+          "target_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Repo",
+            "description": "Git remote URL. Uses system default if omitted."
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name",
+            "description": "Branch name for the PR. Auto-generated if omitted."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "If true, returns the proposed diff without pushing.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "anomaly_id"
+        ],
+        "title": "AutoPRRequest",
+        "description": "Request the Autonomous PM to generate and push a fix."
+      },
+      "AutoPRResponse": {
+        "properties": {
+          "anomaly_id": {
+            "type": "string",
+            "title": "Anomaly Id"
+          },
+          "pr_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pr Url",
+            "description": "URL of the created PR (null if dry_run=true)."
+          },
+          "diff": {
+            "type": "string",
+            "title": "Diff",
+            "description": "The proposed code changes in unified diff format."
+          },
+          "files_changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Files Changed"
+          },
+          "tests_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tests Passed",
+            "description": "Whether auto-generated unit tests passed."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "anomaly_id",
+          "diff",
+          "files_changed",
+          "status"
+        ],
+        "title": "AutoPRResponse",
+        "description": "Result of an autonomous pull request generation."
+      },
+      "BridgeMessage": {
+        "properties": {
+          "topic": {
+            "type": "string",
+            "title": "Topic",
+            "description": "The topic/channel to publish to. Must match an allowed ACL pattern. Path traversal sequences are rejected.",
+            "examples": [
+              "device/romo-vacuum-001/command"
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Payload",
+            "description": "Message payload. Dict will be JSON-serialized; str sent as-is."
+          },
+          "qos": {
+            "type": "integer",
+            "maximum": 2.0,
+            "minimum": 0.0,
+            "title": "Qos",
+            "description": "Quality of Service level (0=at most once, 1=at least once, 2=exactly once).",
+            "default": 1
+          },
+          "retain": {
+            "type": "boolean",
+            "title": "Retain",
+            "description": "Whether the broker should retain this message.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "topic",
+          "payload"
+        ],
+        "title": "BridgeMessage",
+        "description": "Send a message to a device through the protocol bridge."
+      },
+      "BridgeMessageResponse": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "delivered"
+          },
+          "delivered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Delivered At"
+          },
+          "protocol_native_response": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Native Response",
+            "description": "Raw response from the underlying protocol, if available."
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "device_id",
+          "topic",
+          "delivered_at"
+        ],
+        "title": "BridgeMessageResponse",
+        "description": "Confirmation of a bridged message."
+      },
+      "CaptionStyle": {
+        "type": "string",
+        "enum": [
+          "word_by_word",
+          "sentence_highlight",
+          "karaoke",
+          "minimal_subtitle"
+        ],
+        "title": "CaptionStyle",
+        "description": "Animated caption styles (80% of social video is watched muted)."
+      },
+      "ClipGenerationRequest": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "title": "Video Id"
+          },
+          "hooks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hooks",
+            "description": "Specific hook_ids to use. If null, uses top hooks by confidence."
+          },
+          "max_clips": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Max Clips",
+            "description": "Maximum number of clips to generate.",
+            "default": 5
+          },
+          "aspect_ratios": {
+            "items": {
+              "$ref": "#/components/schemas/AspectRatio"
+            },
+            "type": "array",
+            "title": "Aspect Ratios",
+            "description": "Target aspect ratios for reframing.",
+            "default": [
+              "9:16"
+            ]
+          },
+          "caption_style": {
+            "$ref": "#/components/schemas/CaptionStyle",
+            "description": "Animated caption style to apply.",
+            "default": "word_by_word"
+          },
+          "caption_language": {
+            "type": "string",
+            "title": "Caption Language",
+            "description": "Language for generated captions.",
+            "default": "en"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_id"
+        ],
+        "title": "ClipGenerationRequest",
+        "description": "Request to generate platform-ready clips from a processed video."
+      },
+      "ClipGenerationResponse": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "title": "Video Id"
+          },
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedClip"
+            },
+            "type": "array",
+            "title": "Clips"
+          },
+          "total_generated": {
+            "type": "integer",
+            "title": "Total Generated"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_id",
+          "clips",
+          "total_generated",
+          "status"
+        ],
+        "title": "ClipGenerationResponse",
+        "description": "Result of clip generation."
+      },
+      "ContentFormat": {
+        "type": "string",
+        "enum": [
+          "short_video",
+          "long_video",
+          "audiogram",
+          "carousel",
+          "static_image",
+          "text_post",
+          "blog_excerpt",
+          "email_snippet"
+        ],
+        "title": "ContentFormat",
+        "description": "Output content formats."
+      },
+      "ContentListResponse": {
+        "properties": {
+          "content": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedContent"
+            },
+            "type": "array",
+            "title": "Content"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pipeline_id": {
+            "type": "string",
+            "title": "Pipeline Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "total",
+          "pipeline_id"
+        ],
+        "title": "ContentListResponse",
+        "description": "Paginated content listing."
+      },
+      "ContentPipelineRequest": {
+        "properties": {
+          "source_clip_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Clip Id",
+            "description": "ID of an existing clip from the Media Engine. Mutually exclusive with source_url."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "URL of raw source content (video, audio, image)."
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Working title for the content batch.",
+            "examples": [
+              "Q1 Product Launch Highlights"
+            ]
+          },
+          "target_formats": {
+            "items": {
+              "$ref": "#/components/schemas/ContentFormat"
+            },
+            "type": "array",
+            "title": "Target Formats",
+            "description": "Output formats to generate. Each source becomes multiple format-adapted pieces.",
+            "default": [
+              "short_video",
+              "static_image",
+              "text_post"
+            ]
+          },
+          "brand_config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Brand Config",
+            "description": "Brand customization: colors, fonts, logo_url, watermark settings.",
+            "examples": [
+              {
+                "font_family": "Inter",
+                "logo_url": "https://cdn.example.com/logo.png",
+                "primary_color": "#FF6B00",
+                "watermark_position": "bottom_right"
+              }
+            ]
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "en"
+          },
+          "auto_schedule": {
+            "type": "boolean",
+            "title": "Auto Schedule",
+            "description": "Automatically schedule distribution using the algorithmic scheduler.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "ContentPipelineRequest",
+        "description": "Submit a source asset for multi-format content generation."
+      },
+      "ContentPipelineResponse": {
+        "properties": {
+          "pipeline_id": {
+            "type": "string",
+            "title": "Pipeline Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "target_formats": {
+            "items": {
+              "$ref": "#/components/schemas/ContentFormat"
+            },
+            "type": "array",
+            "title": "Target Formats"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "estimated_pieces": {
+            "type": "integer",
+            "title": "Estimated Pieces",
+            "description": "Estimated number of content pieces that will be generated."
+          }
+        },
+        "type": "object",
+        "required": [
+          "pipeline_id",
+          "title",
+          "source_type",
+          "target_formats",
+          "status",
+          "estimated_pieces"
+        ],
+        "title": "ContentPipelineResponse",
+        "description": "Response after initiating a content pipeline."
+      },
+      "ContentStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "rendering",
+          "ready",
+          "distributed",
+          "failed"
+        ],
+        "title": "ContentStatus"
+      },
+      "DeviceListResponse": {
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceResponse"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "per_page": {
+            "type": "integer",
+            "title": "Per Page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "devices",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "title": "DeviceListResponse",
+        "description": "Paginated list of registered devices."
+      },
+      "DeviceRegistration": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id",
+            "description": "Unique identifier for the device (e.g., MAC address or serial). Alphanumeric, hyphens, underscores, dots only.",
+            "examples": [
+              "romo-vacuum-001"
+            ]
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/ProtocolType",
+            "description": "The legacy protocol this device communicates over."
+          },
+          "broker_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Url",
+            "description": "Override broker URL for this device. Uses system default if omitted.",
+            "examples": [
+              "mqtt://192.168.1.50:1883"
+            ]
+          },
+          "topic_acl": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ACLPermission"
+            },
+            "type": "object",
+            "title": "Topic Acl",
+            "description": "Topic-level access control list. Maps topic patterns to permissions. CRITICAL: Prevents unauthorized access to sensitive device feeds (cameras, microphones, floor plans). Empty dict = deny-all default.",
+            "examples": [
+              {
+                "device/+/camera": "deny",
+                "device/+/command": "write",
+                "device/+/telemetry": "read"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Arbitrary key-value metadata for agent consumption."
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "protocol"
+        ],
+        "title": "DeviceRegistration",
+        "description": "Register a new IoT device for protocol bridging."
+      },
+      "DeviceResponse": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "title": "Device Id"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/ProtocolType"
+          },
+          "bridge_endpoint": {
+            "type": "string",
+            "title": "Bridge Endpoint",
+            "description": "The unified REST endpoint to interact with this device via the bridge.",
+            "examples": [
+              "https://api.yourdomain.com/v1/iot/devices/romo-vacuum-001/messages"
+            ]
+          },
+          "topic_acl": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ACLPermission"
+            },
+            "type": "object",
+            "title": "Topic Acl"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "registered"
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Registered At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "device_id",
+          "protocol",
+          "bridge_endpoint",
+          "topic_acl",
+          "registered_at"
+        ],
+        "title": "DeviceResponse",
+        "description": "Response after device registration or lookup."
+      },
+      "DistributionRequest": {
+        "properties": {
+          "clip_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Clip Ids",
+            "description": "IDs of clips to distribute."
+          },
+          "platforms": {
+            "items": {
+              "$ref": "#/components/schemas/Platform"
+            },
+            "type": "array",
+            "title": "Platforms",
+            "description": "Target platforms for distribution."
+          },
+          "schedule_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule At",
+            "description": "Schedule for optimal posting time. Null = post immediately."
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Title/caption for the social post."
+          },
+          "hashtags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hashtags",
+            "description": "Hashtags to include (without # prefix)."
+          },
+          "optimize_schedule": {
+            "type": "boolean",
+            "title": "Optimize Schedule",
+            "description": "Let the algorithm pick optimal posting windows based on engagement data.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "clip_ids",
+          "platforms",
+          "title"
+        ],
+        "title": "DistributionRequest",
+        "description": "Push clips directly to social platforms via API."
+      },
+      "DistributionResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/DistributionResult"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "total_distributed": {
+            "type": "integer",
+            "title": "Total Distributed"
+          },
+          "total_failed": {
+            "type": "integer",
+            "title": "Total Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results",
+          "total_distributed",
+          "total_failed"
+        ],
+        "title": "DistributionResponse",
+        "description": "Aggregated distribution results."
+      },
+      "DistributionResult": {
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "title": "Clip Id"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "platform_post_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Post Id"
+          },
+          "platform_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Url"
+          },
+          "scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clip_id",
+          "platform",
+          "status"
+        ],
+        "title": "DistributionResult",
+        "description": "Result of a single platform distribution."
+      },
+      "EngagementMetricType": {
+        "type": "string",
+        "enum": [
+          "views",
+          "watch_time",
+          "likes",
+          "shares",
+          "comments",
+          "click_through",
+          "save_rate",
+          "follower_gain"
+        ],
+        "title": "EngagementMetricType",
+        "description": "Metrics the scheduling engine tracks."
+      },
+      "GeneratedClip": {
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "title": "Clip Id"
+          },
+          "video_id": {
+            "type": "string",
+            "title": "Video Id"
+          },
+          "hook_id": {
+            "type": "string",
+            "title": "Hook Id"
+          },
+          "aspect_ratio": {
+            "$ref": "#/components/schemas/AspectRatio"
+          },
+          "duration_seconds": {
+            "type": "number",
+            "title": "Duration Seconds"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url",
+            "description": "Temporary URL to download the rendered clip."
+          },
+          "caption_style": {
+            "$ref": "#/components/schemas/CaptionStyle"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clip_id",
+          "video_id",
+          "hook_id",
+          "aspect_ratio",
+          "duration_seconds",
+          "download_url",
+          "caption_style",
+          "generated_at"
+        ],
+        "title": "GeneratedClip",
+        "description": "A single generated clip ready for distribution."
+      },
+      "GeneratedContent": {
+        "properties": {
+          "content_id": {
+            "type": "string",
+            "title": "Content Id"
+          },
+          "pipeline_id": {
+            "type": "string",
+            "title": "Pipeline Id"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ContentFormat"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "download_url": {
+            "type": "string",
+            "title": "Download Url"
+          },
+          "thumbnail_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumbnail Url"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions",
+            "description": "WxH for image/video formats.",
+            "examples": [
+              "1080x1920"
+            ]
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size Bytes"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContentStatus"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_id",
+          "pipeline_id",
+          "format",
+          "title",
+          "download_url",
+          "status",
+          "generated_at"
+        ],
+        "title": "GeneratedContent",
+        "description": "A single generated content piece."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HandoffRequest": {
+        "properties": {
+          "capability": {
+            "type": "string",
+            "title": "Capability",
+            "description": "The capability needed. System finds the best available agent.",
+            "examples": [
+              "video-transcription"
+            ]
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context",
+            "description": "Context for the handoff \u2014 what needs to be done and why.",
+            "examples": [
+              {
+                "language": "en",
+                "reason": "hooks need transcript",
+                "video_id": "abc-123"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "capability",
+          "context"
+        ],
+        "title": "HandoffRequest",
+        "description": "Request a task handoff to an agent with a specific capability."
+      },
+      "HandoffResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Id"
+          },
+          "target_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Name"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HandoffResponse"
+      },
+      "MessagePriority": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "normal",
+          "low"
+        ],
+        "title": "MessagePriority"
+      },
+      "MessageResponse": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "from_agent": {
+            "type": "string",
+            "title": "From Agent"
+          },
+          "to_agent": {
+            "type": "string",
+            "title": "To Agent"
+          },
+          "message_type": {
+            "type": "string",
+            "title": "Message Type"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "delivery_status": {
+            "type": "string",
+            "title": "Delivery Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "from_agent",
+          "to_agent",
+          "message_type",
+          "priority",
+          "subject",
+          "delivery_status",
+          "created_at",
+          "delivered_at"
+        ],
+        "title": "MessageResponse"
+      },
+      "MessageType": {
+        "type": "string",
+        "enum": [
+          "request",
+          "response",
+          "event",
+          "heartbeat",
+          "handoff"
+        ],
+        "title": "MessageType",
+        "description": "Standard message types for agent-to-agent communication."
+      },
+      "Platform": {
+        "type": "string",
+        "enum": [
+          "youtube_shorts",
+          "tiktok",
+          "instagram_reels",
+          "x_video",
+          "linkedin_video"
+        ],
+        "title": "Platform",
+        "description": "Supported distribution platforms."
+      },
+      "PlatformAnalytics": {
+        "properties": {
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "metric_type": {
+            "$ref": "#/components/schemas/EngagementMetricType"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          },
+          "content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "platform",
+          "metric_type",
+          "value",
+          "recorded_at"
+        ],
+        "title": "PlatformAnalytics",
+        "description": "Engagement analytics for a specific platform."
+      },
+      "ProtocolType": {
+        "type": "string",
+        "enum": [
+          "mqtt",
+          "coap",
+          "zigbee",
+          "zwave",
+          "modbus",
+          "ble"
+        ],
+        "title": "ProtocolType",
+        "description": "Supported legacy protocols for bridging."
+      },
+      "RemediationStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "acknowledged",
+          "patched",
+          "accepted_risk"
+        ],
+        "title": "RemediationStatus"
+      },
+      "ScanListResponse": {
+        "properties": {
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/ScanReport"
+            },
+            "type": "array",
+            "title": "Scans"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scans",
+          "total"
+        ],
+        "title": "ScanListResponse"
+      },
+      "ScanReport": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "target_services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Services"
+          },
+          "attack_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attack Categories"
+          },
+          "intensity": {
+            "type": "string",
+            "title": "Intensity"
+          },
+          "total_tests_run": {
+            "type": "integer",
+            "title": "Total Tests Run"
+          },
+          "total_passed": {
+            "type": "integer",
+            "title": "Total Passed"
+          },
+          "total_failed": {
+            "type": "integer",
+            "title": "Total Failed"
+          },
+          "vulnerabilities_found": {
+            "type": "integer",
+            "title": "Vulnerabilities Found"
+          },
+          "severity_breakdown": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Severity Breakdown",
+            "description": "Count per severity level: {critical: N, high: N, ...}"
+          },
+          "vulnerabilities": {
+            "items": {
+              "$ref": "#/components/schemas/Vulnerability"
+            },
+            "type": "array",
+            "title": "Vulnerabilities"
+          },
+          "recommendations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recommendations",
+            "description": "Prioritized remediation recommendations."
+          },
+          "score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "description": "Security score: 100 = fortress, 0 = DJI Romo vacuum."
+          }
+        },
+        "type": "object",
+        "required": [
+          "scan_id",
+          "status",
+          "started_at",
+          "target_services",
+          "attack_categories",
+          "intensity",
+          "total_tests_run",
+          "total_passed",
+          "total_failed",
+          "vulnerabilities_found",
+          "score"
+        ],
+        "title": "ScanReport",
+        "description": "Full scan report."
+      },
+      "ScanRequest": {
+        "properties": {
+          "target_services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Services",
+            "description": "Which service pillars to attack. Default: all.",
+            "default": [
+              "iot",
+              "telemetry",
+              "media",
+              "comms",
+              "factory"
+            ]
+          },
+          "attack_categories": {
+            "items": {
+              "$ref": "#/components/schemas/AttackCategory"
+            },
+            "type": "array",
+            "title": "Attack Categories",
+            "description": "Which attack vectors to deploy. Default: all.",
+            "default": [
+              "acl_bypass",
+              "auth_probe",
+              "injection",
+              "rate_limit_evasion",
+              "privilege_escalation",
+              "schema_abuse",
+              "enumeration",
+              "replay",
+              "dos_pattern"
+            ]
+          },
+          "intensity": {
+            "type": "string",
+            "title": "Intensity",
+            "description": "Scan intensity: 'quick' (surface-level), 'standard' (thorough), 'aggressive' (full fuzzing).",
+            "default": "standard"
+          },
+          "auto_remediate": {
+            "type": "boolean",
+            "title": "Auto Remediate",
+            "description": "If true, the swarm will attempt to auto-generate patches for discovered vulnerabilities.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ScanRequest",
+        "description": "Initiate a Red Team scan."
+      },
+      "ScanResponse": {
+        "properties": {
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScanStatus"
+          },
+          "target_services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Services"
+          },
+          "attack_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attack Categories"
+          },
+          "intensity": {
+            "type": "string",
+            "title": "Intensity"
+          },
+          "estimated_duration_seconds": {
+            "type": "integer",
+            "title": "Estimated Duration Seconds"
+          },
+          "total_attack_vectors": {
+            "type": "integer",
+            "title": "Total Attack Vectors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scan_id",
+          "status",
+          "target_services",
+          "attack_categories",
+          "intensity",
+          "estimated_duration_seconds",
+          "total_attack_vectors"
+        ],
+        "title": "ScanResponse",
+        "description": "Response after initiating a scan."
+      },
+      "ScanStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed"
+        ],
+        "title": "ScanStatus"
+      },
+      "ScheduleRecommendation": {
+        "properties": {
+          "content_id": {
+            "type": "string",
+            "title": "Content Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "recommended_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recommended Time"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "description": "Model confidence in this time slot's engagement potential."
+          },
+          "reasoning": {
+            "type": "string",
+            "title": "Reasoning",
+            "description": "Explanation of why this slot was chosen.",
+            "examples": [
+              "Historical peak engagement for short_video on tiktok: Tuesdays 7-9pm UTC"
+            ]
+          },
+          "estimated_views": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Views"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_id",
+          "platform",
+          "recommended_time",
+          "confidence",
+          "reasoning"
+        ],
+        "title": "ScheduleRecommendation",
+        "description": "Algorithmic recommendation for when/where to post."
+      },
+      "ScheduleRequest": {
+        "properties": {
+          "content_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Content Ids",
+            "description": "Content piece IDs to schedule."
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Platforms",
+            "description": "Target platforms."
+          },
+          "earliest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest",
+            "description": "Earliest acceptable posting time. Defaults to now."
+          },
+          "latest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest",
+            "description": "Latest acceptable posting time. Defaults to 7 days from now."
+          },
+          "max_posts_per_day": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Max Posts Per Day",
+            "description": "Maximum posts per platform per day to avoid audience fatigue.",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_ids",
+          "platforms"
+        ],
+        "title": "ScheduleRequest",
+        "description": "Request optimal scheduling for content pieces."
+      },
+      "ScheduleResponse": {
+        "properties": {
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRecommendation"
+            },
+            "type": "array",
+            "title": "Recommendations"
+          },
+          "total_scheduled": {
+            "type": "integer",
+            "title": "Total Scheduled"
+          },
+          "date_range": {
+            "type": "string",
+            "title": "Date Range"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recommendations",
+          "total_scheduled",
+          "date_range"
+        ],
+        "title": "ScheduleResponse",
+        "description": "Full schedule with per-content, per-platform recommendations."
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "to_agent": {
+            "type": "string",
+            "title": "To Agent",
+            "description": "Recipient agent ID."
+          },
+          "message_type": {
+            "$ref": "#/components/schemas/MessageType",
+            "description": "Type of message: request, response, event, heartbeat, or handoff.",
+            "default": "request"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/MessagePriority",
+            "description": "Delivery priority. Critical = immediate retry, Low = batched.",
+            "default": "normal"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject",
+            "description": "Brief subject line for the message.",
+            "examples": [
+              "Anomaly detected in IoT bridge"
+            ]
+          },
+          "body": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Body",
+            "description": "Structured message payload. Must be JSON-serializable."
+          },
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id",
+            "description": "Links related messages (e.g., request/response pairs)."
+          },
+          "reply_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reply To",
+            "description": "Message ID this is replying to."
+          }
+        },
+        "type": "object",
+        "required": [
+          "to_agent",
+          "subject",
+          "body"
+        ],
+        "title": "SendMessageRequest",
+        "description": "Send a message to another agent."
+      },
+      "TelemetryBatch": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/TelemetryEvent"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Events",
+            "description": "Array of telemetry events. Max 100 per batch. RED TEAM FIX: Reduced from 1000 to prevent memory exhaustion attacks. For higher throughput, send multiple batches."
+          }
+        },
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "TelemetryBatch",
+        "description": "Batch submission of telemetry events for efficient ingestion."
+      },
+      "TelemetryBatchResponse": {
+        "properties": {
+          "ingested": {
+            "type": "integer",
+            "title": "Ingested"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "batch_id": {
+            "type": "string",
+            "title": "Batch Id"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Errors",
+            "description": "Details of any events that failed validation."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingested",
+          "failed",
+          "batch_id"
+        ],
+        "title": "TelemetryBatchResponse",
+        "description": "Confirmation of batch ingestion."
+      },
+      "TelemetryEvent": {
+        "properties": {
+          "event_type": {
+            "$ref": "#/components/schemas/TelemetryEventType"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "Originating service or module name.",
+            "examples": [
+              "iot-bridge",
+              "media-engine",
+              "auth-service"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human/agent-readable description of the event."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/app__schemas__telemetry__Severity",
+            "default": "info"
+          },
+          "stack_trace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stack Trace",
+            "description": "Full stack trace for error events."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Structured context (request_id, user_agent, latency_ms, etc.)."
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp",
+            "description": "Event timestamp. Server will assign one if omitted."
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_type",
+          "source",
+          "message"
+        ],
+        "title": "TelemetryEvent",
+        "description": "A single telemetry event to ingest."
+      },
+      "TelemetryEventType": {
+        "type": "string",
+        "enum": [
+          "error",
+          "warning",
+          "session",
+          "api_call",
+          "llm_trace",
+          "performance",
+          "custom"
+        ],
+        "title": "TelemetryEventType",
+        "description": "Categories of telemetry events the system can ingest."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VideoUploadRequest": {
+        "properties": {
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "URL of the source video to fetch. Mutually exclusive with upload."
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Title for internal tracking and metadata tagging.",
+            "examples": [
+              "Q1 Product Demo - Full Length"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "description": "ISO 639-1 language code for transcription and captioning.",
+            "default": "en"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Arbitrary metadata for downstream processing."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "VideoUploadRequest",
+        "description": "Initiate a video upload for processing."
+      },
+      "VideoUploadResponse": {
+        "properties": {
+          "video_id": {
+            "type": "string",
+            "title": "Video Id"
+          },
+          "upload_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Url",
+            "description": "Pre-signed URL for direct upload (if source_url was not provided)."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "pending"
+          },
+          "estimated_processing_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Processing Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "video_id"
+        ],
+        "title": "VideoUploadResponse",
+        "description": "Response after initiating video upload."
+      },
+      "ViralHook": {
+        "properties": {
+          "hook_id": {
+            "type": "string",
+            "title": "Hook Id"
+          },
+          "start_time_seconds": {
+            "type": "number",
+            "title": "Start Time Seconds"
+          },
+          "end_time_seconds": {
+            "type": "number",
+            "title": "End Time Seconds"
+          },
+          "confidence_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence Score",
+            "description": "Model confidence that this segment will drive engagement."
+          },
+          "trigger_type": {
+            "type": "string",
+            "title": "Trigger Type",
+            "description": "What makes this moment engaging (e.g., 'emotional_peak', 'speech_pattern', 'visual_surprise')."
+          },
+          "transcript_snippet": {
+            "type": "string",
+            "title": "Transcript Snippet",
+            "description": "Text of what is being said during this hook."
+          }
+        },
+        "type": "object",
+        "required": [
+          "hook_id",
+          "start_time_seconds",
+          "end_time_seconds",
+          "confidence_score",
+          "trigger_type",
+          "transcript_snippet"
+        ],
+        "title": "ViralHook",
+        "description": "A detected high-engagement moment in the source video."
+      },
+      "Vulnerability": {
+        "properties": {
+          "vuln_id": {
+            "type": "string",
+            "title": "Vuln Id"
+          },
+          "scan_id": {
+            "type": "string",
+            "title": "Scan Id"
+          },
+          "category": {
+            "$ref": "#/components/schemas/AttackCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/app__schemas__red_team__Severity"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "Short description of the finding."
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "Detailed technical explanation including attack vector and impact."
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint",
+            "description": "The affected API path."
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "description": "HTTP method (GET, POST, etc.)."
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence",
+            "description": "Proof-of-concept: request payload, response status, headers, etc."
+          },
+          "remediation": {
+            "type": "string",
+            "title": "Remediation",
+            "description": "Recommended fix. Agents read this to auto-generate patches."
+          },
+          "remediation_status": {
+            "$ref": "#/components/schemas/RemediationStatus",
+            "default": "open"
+          },
+          "cwe_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwe Id",
+            "description": "Common Weakness Enumeration ID (e.g. CWE-285 for improper authorization)."
+          },
+          "discovered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Discovered At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vuln_id",
+          "scan_id",
+          "category",
+          "severity",
+          "title",
+          "description",
+          "endpoint",
+          "method",
+          "remediation",
+          "discovered_at"
+        ],
+        "title": "Vulnerability",
+        "description": "A discovered security vulnerability."
+      },
+      "VulnerabilityListResponse": {
+        "properties": {
+          "vulnerabilities": {
+            "items": {
+              "$ref": "#/components/schemas/Vulnerability"
+            },
+            "type": "array",
+            "title": "Vulnerabilities"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "critical_count": {
+            "type": "integer",
+            "title": "Critical Count"
+          },
+          "high_count": {
+            "type": "integer",
+            "title": "High Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vulnerabilities",
+          "total",
+          "critical_count",
+          "high_count"
+        ],
+        "title": "VulnerabilityListResponse"
+      },
+      "app__schemas__red_team__Severity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "info"
+        ],
+        "title": "Severity"
+      },
+      "app__schemas__telemetry__Severity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "info"
+        ],
+        "title": "Severity",
+        "description": "Severity levels for anomalies and issues."
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "description": "API key for agent authentication. Pass in the X-API-Key header.",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}

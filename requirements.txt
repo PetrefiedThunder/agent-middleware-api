@@ -1,0 +1,26 @@
+# Agent-Native Middleware API - Dependencies
+# Python 3.11+
+
+# --- Core Framework ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+
+# --- IoT Protocol Bridge ---
+aiomqtt>=2.3.0          # Async MQTT client
+aiocoap>=0.4.0          # CoAP protocol support
+
+# --- Telemetry / Autonomous PM ---
+httpx>=0.27.0           # Async HTTP client for git API calls
+
+# --- Media Engine ---
+python-multipart>=0.0.9 # File upload support
+
+# --- Utilities ---
+python-dotenv>=1.0.0    # .env file loading
+
+# --- Development ---
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+httpx>=0.27.0           # Also used for test client
