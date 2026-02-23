@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from ..core.durable_state import get_durable_state
 from ..schemas.telemetry import (
     TelemetryEvent,
     Severity,
@@ -54,9 +55,58 @@ class EventStore:
         self._events: list[StoredEvent] = []
         self._retention = timedelta(hours=retention_hours)
         self._lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._hydrated = False
+        self._state = get_durable_state()
+
+    async def _hydrate_if_needed(self):
+        if self._hydrated:
+            return
+
+        async with self._init_lock:
+            if self._hydrated:
+                return
+
+            payload = await self._state.load_json("telemetry.events")
+            if isinstance(payload, list):
+                loaded_events: list[StoredEvent] = []
+                for record in payload:
+                    if not isinstance(record, dict):
+                        continue
+                    try:
+                        loaded_events.append(
+                            StoredEvent(
+                                event_id=record["event_id"],
+                                batch_id=record["batch_id"],
+                                event=TelemetryEvent.model_validate(record["event"]),
+                                ingested_at=datetime.fromisoformat(record["ingested_at"]),
+                            )
+                        )
+                    except Exception:
+                        logger.exception("Skipping corrupt telemetry event record")
+                self._events = loaded_events
+
+            self._hydrated = True
+
+    async def _persist_locked(self):
+        if not self._state.enabled:
+            return
+        await self._state.save_json(
+            "telemetry.events",
+            [
+                {
+                    "event_id": se.event_id,
+                    "batch_id": se.batch_id,
+                    "event": se.event.model_dump(mode="json"),
+                    "ingested_at": se.ingested_at,
+                }
+                for se in self._events
+            ],
+        )
 
     async def ingest(self, events: list[TelemetryEvent], batch_id: str) -> tuple[int, list[dict]]:
         """Ingest a batch of events. Returns (ingested_count, errors)."""
+        await self._hydrate_if_needed()
         ingested = 0
         errors = []
 
@@ -76,6 +126,8 @@ class EventStore:
 
         # Lazy cleanup of expired events
         await self._evict_expired()
+        async with self._lock:
+            await self._persist_locked()
         return ingested, errors
 
     async def query(
@@ -88,6 +140,7 @@ class EventStore:
         limit: int = 1000,
     ) -> list[StoredEvent]:
         """Query events with optional filters."""
+        await self._hydrate_if_needed()
         results = []
         for se in reversed(self._events):
             if event_type and se.event.event_type != event_type:
@@ -108,6 +161,7 @@ class EventStore:
 
     async def stats(self) -> dict:
         """Aggregate statistics."""
+        await self._hydrate_if_needed()
         by_type: dict[str, int] = defaultdict(int)
         by_severity: dict[str, int] = defaultdict(int)
         by_source: dict[str, int] = defaultdict(int)
@@ -126,12 +180,16 @@ class EventStore:
 
     async def _evict_expired(self):
         """Remove events older than retention period."""
+        await self._hydrate_if_needed()
         cutoff = datetime.now(timezone.utc) - self._retention
         async with self._lock:
+            before = len(self._events)
             self._events = [
                 se for se in self._events
                 if se.ingested_at >= cutoff
             ]
+            if len(self._events) != before:
+                await self._persist_locked()
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +223,44 @@ class AnomalyDetector:
         self._store = event_store
         self._anomalies: dict[str, AnomalyReport] = {}
         self._lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._hydrated = False
+        self._state = get_durable_state()
+
+    async def _hydrate_if_needed(self):
+        if self._hydrated:
+            return
+
+        async with self._init_lock:
+            if self._hydrated:
+                return
+
+            payload = await self._state.load_json("telemetry.anomalies")
+            if isinstance(payload, dict):
+                loaded: dict[str, AnomalyReport] = {}
+                for anomaly_id, record in payload.items():
+                    try:
+                        loaded[anomaly_id] = AnomalyReport.model_validate(record)
+                    except Exception:
+                        logger.exception("Skipping corrupt telemetry anomaly: %s", anomaly_id)
+                self._anomalies = loaded
+
+            self._hydrated = True
+
+    async def _persist_locked(self):
+        if not self._state.enabled:
+            return
+        await self._state.save_json(
+            "telemetry.anomalies",
+            {k: v.model_dump(mode="json") for k, v in self._anomalies.items()},
+        )
 
     async def analyze(self) -> list[AnomalyReport]:
         """
         Run all detection strategies and return new/updated anomalies.
         Call this periodically (e.g., every 60 seconds).
         """
+        await self._hydrate_if_needed()
         new_anomalies = []
 
         # Strategy 1: Error rate spike
@@ -198,6 +288,7 @@ class AnomalyDetector:
             )
             async with self._lock:
                 self._anomalies[anomaly_id] = report
+                await self._persist_locked()
             logger.warning(f"Anomaly detected: [{report.severity}] {report.summary}")
 
         return new_anomalies
@@ -208,6 +299,7 @@ class AnomalyDetector:
         page: int = 1,
         per_page: int = 50,
     ) -> tuple[list[AnomalyReport], int]:
+        await self._hydrate_if_needed()
         anomalies = list(self._anomalies.values())
         if severity:
             anomalies = [a for a in anomalies if a.severity == severity]
@@ -217,6 +309,7 @@ class AnomalyDetector:
         return anomalies[start:start + per_page], total
 
     async def get_anomaly(self, anomaly_id: str) -> AnomalyReport | None:
+        await self._hydrate_if_needed()
         return self._anomalies.get(anomaly_id)
 
     async def _detect_error_spike(self) -> AnomalyCandidate | None:

@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import get_settings
+from .core.durable_state import close_durable_state, get_durable_state
 from .core.rate_limiter import RateLimitMiddleware
 from .routers import (
     iot, telemetry, media, comms, docs, factory, red_team, oracle,
@@ -331,3 +332,29 @@ async def health():
         "status": "healthy",
         "version": settings.APP_VERSION,
     }
+
+
+@app.get(
+    "/health/dependencies",
+    tags=["Discovery"],
+    summary="Dependency health check",
+    description=(
+        "Returns runtime dependency status for durable state backends "
+        "(PostgreSQL/Redis) and MQTT configuration."
+    ),
+)
+async def health_dependencies():
+    state_report = await get_durable_state().health_report()
+    return {
+        "status": "healthy" if state_report.get("ok", False) else "degraded",
+        "state_store": state_report,
+        "mqtt": {
+            "configured": bool(settings.MQTT_BROKER_URL),
+            "broker_url": settings.MQTT_BROKER_URL,
+        },
+    }
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await close_durable_state()

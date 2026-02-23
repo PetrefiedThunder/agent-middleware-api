@@ -15,10 +15,12 @@ machine-to-machine messaging with built-in routing and delivery confirmation.
 import asyncio
 import uuid
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+from ..core.durable_state import get_durable_state
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +96,69 @@ class RegisteredAgent:
     message_count: int = 0
 
 
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 class AgentRegistry:
     """Registry of agents in the communication network."""
 
     def __init__(self):
         self._agents: dict[str, RegisteredAgent] = {}
         self._lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._hydrated = False
+        self._state = get_durable_state()
+
+    @staticmethod
+    def _agent_from_dict(data: dict[str, Any]) -> RegisteredAgent:
+        payload = dict(data)
+        registered = _parse_dt(payload.get("registered_at"))
+        if registered is not None:
+            payload["registered_at"] = registered
+        last_seen = _parse_dt(payload.get("last_seen"))
+        payload["last_seen"] = last_seen
+        return RegisteredAgent(**payload)
+
+    async def _hydrate_if_needed(self):
+        if self._hydrated:
+            return
+
+        async with self._init_lock:
+            if self._hydrated:
+                return
+
+            payload = await self._state.load_json("comms.registry")
+            if isinstance(payload, dict):
+                loaded: dict[str, RegisteredAgent] = {}
+                for agent_id, record in payload.items():
+                    try:
+                        loaded[agent_id] = self._agent_from_dict(record)
+                    except Exception:
+                        logger.exception("Skipping corrupt comms agent record: %s", agent_id)
+                self._agents = loaded
+
+            self._hydrated = True
+
+    async def _persist_locked(self):
+        if not self._state.enabled:
+            return
+        await self._state.save_json(
+            "comms.registry",
+            {agent_id: asdict(agent) for agent_id, agent in self._agents.items()},
+        )
+
+    async def persist(self):
+        await self._hydrate_if_needed()
+        async with self._lock:
+            await self._persist_locked()
 
     async def register(
         self,
@@ -108,6 +167,7 @@ class AgentRegistry:
         webhook_url: str | None = None,
         owner_key: str = "",
     ) -> RegisteredAgent:
+        await self._hydrate_if_needed()
         agent = RegisteredAgent(
             agent_id=f"agent-{uuid.uuid4().hex[:12]}",
             name=name,
@@ -118,20 +178,24 @@ class AgentRegistry:
         )
         async with self._lock:
             self._agents[agent.agent_id] = agent
+            await self._persist_locked()
         logger.info(f"Agent registered: {agent.agent_id} ({agent.name})")
         return agent
 
     async def get(self, agent_id: str) -> RegisteredAgent | None:
+        await self._hydrate_if_needed()
         return self._agents.get(agent_id)
 
     async def find_by_capability(self, capability: str) -> list[RegisteredAgent]:
         """Find agents that advertise a specific capability."""
+        await self._hydrate_if_needed()
         return [
             a for a in self._agents.values()
             if capability in a.capabilities and a.status == "active"
         ]
 
     async def list_all(self) -> list[RegisteredAgent]:
+        await self._hydrate_if_needed()
         return list(self._agents.values())
 
 
@@ -155,9 +219,81 @@ class MessageRouter:
         self._inbox: dict[str, list[AgentMessage]] = {}  # agent_id → messages
         self._outbox: list[AgentMessage] = []
         self._lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._hydrated = False
+        self._state = get_durable_state()
+
+    @staticmethod
+    def _message_from_dict(data: dict[str, Any]) -> AgentMessage:
+        payload = dict(data)
+        payload["message_type"] = MessageType(payload["message_type"])
+        payload["priority"] = MessagePriority(payload["priority"])
+        payload["delivery_status"] = DeliveryStatus(payload["delivery_status"])
+        payload["created_at"] = _parse_dt(payload.get("created_at")) or datetime.now(timezone.utc)
+        payload["expires_at"] = _parse_dt(payload.get("expires_at"))
+        payload["delivered_at"] = _parse_dt(payload.get("delivered_at"))
+        payload["acknowledged_at"] = _parse_dt(payload.get("acknowledged_at"))
+        return AgentMessage(**payload)
+
+    async def _hydrate_if_needed(self):
+        if self._hydrated:
+            return
+
+        async with self._init_lock:
+            if self._hydrated:
+                return
+
+            inbox_payload = await self._state.load_json("comms.inbox")
+            if isinstance(inbox_payload, dict):
+                loaded_inbox: dict[str, list[AgentMessage]] = {}
+                for agent_id, records in inbox_payload.items():
+                    if not isinstance(records, list):
+                        continue
+                    loaded_messages: list[AgentMessage] = []
+                    for record in records:
+                        try:
+                            loaded_messages.append(self._message_from_dict(record))
+                        except Exception:
+                            logger.exception("Skipping corrupt inbox message for %s", agent_id)
+                    loaded_inbox[agent_id] = loaded_messages
+                self._inbox = loaded_inbox
+
+            outbox_payload = await self._state.load_json("comms.outbox")
+            if isinstance(outbox_payload, list):
+                loaded_outbox: list[AgentMessage] = []
+                for record in outbox_payload:
+                    try:
+                        loaded_outbox.append(self._message_from_dict(record))
+                    except Exception:
+                        logger.exception("Skipping corrupt outbox message")
+                self._outbox = loaded_outbox
+
+            self._hydrated = True
+
+    async def _persist_locked(self):
+        if not self._state.enabled:
+            return
+
+        await self._state.save_json(
+            "comms.inbox",
+            {
+                agent_id: [asdict(message) for message in messages]
+                for agent_id, messages in self._inbox.items()
+            },
+        )
+        await self._state.save_json(
+            "comms.outbox",
+            [asdict(message) for message in self._outbox],
+        )
+
+    async def persist(self):
+        await self._hydrate_if_needed()
+        async with self._lock:
+            await self._persist_locked()
 
     async def send(self, message: AgentMessage) -> AgentMessage:
         """Route a message to the recipient."""
+        await self._hydrate_if_needed()
         recipient = await self._registry.get(message.to_agent)
         if not recipient:
             message.delivery_status = DeliveryStatus.FAILED
@@ -183,6 +319,8 @@ class MessageRouter:
             # No webhook — agent must poll
             message.delivery_status = DeliveryStatus.QUEUED
 
+        await self.persist()
+
         logger.info(
             f"Message routed: {message.from_agent} → {message.to_agent} "
             f"[{message.message_type.value}] status={message.delivery_status.value}"
@@ -191,6 +329,8 @@ class MessageRouter:
 
     async def poll(self, agent_id: str, limit: int = 50) -> list[AgentMessage]:
         """Poll for messages in an agent's inbox."""
+        await self._hydrate_if_needed()
+        changed = False
         async with self._lock:
             messages = self._inbox.get(agent_id, [])[:limit]
             # Mark as delivered
@@ -198,16 +338,21 @@ class MessageRouter:
                 if msg.delivery_status == DeliveryStatus.QUEUED:
                     msg.delivery_status = DeliveryStatus.DELIVERED
                     msg.delivered_at = datetime.now(timezone.utc)
+                    changed = True
+        if changed:
+            await self.persist()
         return messages
 
     async def acknowledge(self, agent_id: str, message_id: str) -> bool:
         """Acknowledge receipt of a message."""
+        await self._hydrate_if_needed()
         async with self._lock:
             messages = self._inbox.get(agent_id, [])
             for msg in messages:
                 if msg.message_id == message_id:
                     msg.delivery_status = DeliveryStatus.ACKNOWLEDGED
                     msg.acknowledged_at = datetime.now(timezone.utc)
+                    await self._persist_locked()
                     return True
         return False
 

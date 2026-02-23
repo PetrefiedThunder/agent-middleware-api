@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # --- Durable Runtime State ---
+    # Backends: auto, postgres, redis, memory
+    STATE_BACKEND: str = "auto"
+    STATE_NAMESPACE: str = "agent_middleware"
+    DATABASE_URL: str = ""
+    REDIS_URL: str = ""
+
     # --- Authentication ---
     API_KEY_HEADER: str = "X-API-Key"
     # Comma-separated list of valid API keys (use a secrets manager in production)

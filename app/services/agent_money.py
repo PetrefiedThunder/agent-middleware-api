@@ -47,10 +47,11 @@ import asyncio
 import uuid
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from ..core.durable_state import get_durable_state
 from ..schemas.billing import (
     WalletType,
     WalletStatus,
@@ -149,7 +150,7 @@ class Wallet:
 
 
 class WalletStore:
-    """In-memory wallet and ledger store. Production: PostgreSQL with row-level locking."""
+    """Wallet and ledger store with optional Redis/PostgreSQL durability."""
 
     def __init__(self):
         self._wallets: dict[str, Wallet] = {}
@@ -157,13 +158,107 @@ class WalletStore:
         self._top_ups: dict[str, dict] = {}
         self._alerts: list[BillingAlert] = []
         self._lock = asyncio.Lock()
+        self._init_lock = asyncio.Lock()
+        self._hydrated = False
+        self._state = get_durable_state()
+
+    @staticmethod
+    def _parse_dt(value: Any) -> datetime | None:
+        if value is None or isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _wallet_from_dict(cls, data: dict[str, Any]) -> Wallet:
+        payload = dict(data)
+        payload["wallet_type"] = WalletType(payload["wallet_type"])
+        payload["status"] = WalletStatus(payload.get("status", WalletStatus.ACTIVE))
+        parsed_created = cls._parse_dt(payload.get("created_at"))
+        if parsed_created is not None:
+            payload["created_at"] = parsed_created
+        return Wallet(**payload)
+
+    async def _hydrate_if_needed(self):
+        if self._hydrated:
+            return
+
+        async with self._init_lock:
+            if self._hydrated:
+                return
+
+            wallets_payload = await self._state.load_json("billing.wallets")
+            if isinstance(wallets_payload, dict):
+                loaded: dict[str, Wallet] = {}
+                for wallet_id, wallet_data in wallets_payload.items():
+                    try:
+                        loaded[wallet_id] = self._wallet_from_dict(wallet_data)
+                    except Exception:
+                        logger.exception("Skipping corrupt wallet record: %s", wallet_id)
+                self._wallets = loaded
+
+            ledger_payload = await self._state.load_json("billing.ledger")
+            if isinstance(ledger_payload, list):
+                loaded_ledger: list[LedgerEntry] = []
+                for entry in ledger_payload:
+                    try:
+                        loaded_ledger.append(LedgerEntry.model_validate(entry))
+                    except Exception:
+                        logger.exception("Skipping corrupt billing ledger entry")
+                self._ledger = loaded_ledger
+
+            alerts_payload = await self._state.load_json("billing.alerts")
+            if isinstance(alerts_payload, list):
+                loaded_alerts: list[BillingAlert] = []
+                for alert in alerts_payload:
+                    try:
+                        loaded_alerts.append(BillingAlert.model_validate(alert))
+                    except Exception:
+                        logger.exception("Skipping corrupt billing alert")
+                self._alerts = loaded_alerts
+
+            topups_payload = await self._state.load_json("billing.topups")
+            if isinstance(topups_payload, dict):
+                self._top_ups = topups_payload
+
+            self._hydrated = True
+
+    async def _persist_locked(self):
+        if not self._state.enabled:
+            return
+
+        await self._state.save_json(
+            "billing.wallets",
+            {wallet_id: asdict(wallet) for wallet_id, wallet in self._wallets.items()},
+        )
+        await self._state.save_json(
+            "billing.ledger",
+            [entry.model_dump(mode="json") for entry in self._ledger],
+        )
+        await self._state.save_json(
+            "billing.alerts",
+            [alert.model_dump(mode="json") for alert in self._alerts],
+        )
+        await self._state.save_json("billing.topups", self._top_ups)
+
+    async def persist(self):
+        await self._hydrate_if_needed()
+        async with self._lock:
+            await self._persist_locked()
 
     async def create_wallet(self, wallet: Wallet) -> Wallet:
+        await self._hydrate_if_needed()
         async with self._lock:
             self._wallets[wallet.wallet_id] = wallet
+            await self._persist_locked()
         return wallet
 
     async def get_wallet(self, wallet_id: str) -> Wallet | None:
+        await self._hydrate_if_needed()
         return self._wallets.get(wallet_id)
 
     async def list_wallets(
@@ -171,6 +266,7 @@ class WalletStore:
         wallet_type: WalletType | None = None,
         sponsor_id: str | None = None,
     ) -> list[Wallet]:
+        await self._hydrate_if_needed()
         wallets = list(self._wallets.values())
         if wallet_type:
             wallets = [w for w in wallets if w.wallet_type == wallet_type]
@@ -179,27 +275,34 @@ class WalletStore:
         return wallets
 
     async def append_ledger(self, entry: LedgerEntry):
+        await self._hydrate_if_needed()
         async with self._lock:
             self._ledger.append(entry)
+            await self._persist_locked()
 
     async def get_ledger(
         self,
         wallet_id: str,
         limit: int = 50,
     ) -> list[LedgerEntry]:
+        await self._hydrate_if_needed()
         entries = [e for e in self._ledger if e.wallet_id == wallet_id]
         return entries[-limit:]
 
     async def store_alert(self, alert: BillingAlert):
+        await self._hydrate_if_needed()
         async with self._lock:
             self._alerts.append(alert)
+            await self._persist_locked()
 
     async def get_alerts(self, wallet_id: str | None = None) -> list[BillingAlert]:
+        await self._hydrate_if_needed()
         if wallet_id:
             return [a for a in self._alerts if a.wallet_id == wallet_id]
         return list(self._alerts)
 
     async def get_all_ledger_entries(self) -> list[LedgerEntry]:
+        await self._hydrate_if_needed()
         return list(self._ledger)
 
 
@@ -447,6 +550,7 @@ class AgentMoney:
             ))
 
         child.status = WalletStatus.CLOSED
+        await self.store.persist()
 
         return {
             "child_wallet_id": child_wallet_id,
