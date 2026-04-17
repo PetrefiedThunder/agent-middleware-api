@@ -258,6 +258,75 @@ class APIKeyModel(SQLModel, table=True):
         arbitrary_types_allowed = True
 
 
+class SecurityScanModel(SQLModel, table=True):
+    """
+    Shared table for both red_team (internal pillar scans) and rtaas
+    (multi-tenant external customer scans). ``scan_type`` discriminates.
+
+    Internal scans target pillar names (``["iot", "media", ...]``) while
+    rtaas scans target URL/method tuples — both serialize as
+    ``targets_json`` for schema consolidation.
+    """
+    __tablename__ = "security_scans"
+
+    scan_id: str = Field(primary_key=True, max_length=64)
+    scan_type: str = Field(max_length=20, index=True)  # "internal" | "rtaas"
+    tenant_id: Optional[str] = Field(default=None, max_length=100, index=True)
+
+    targets_json: Optional[str] = Field(default=None)
+    attack_categories_json: Optional[str] = Field(default=None)
+    intensity: str = Field(default="standard", max_length=20)
+
+    status: str = Field(max_length=20, index=True)
+    total_tests_run: int = Field(default=0)
+    total_passed: Optional[int] = Field(default=None)
+    total_failed: Optional[int] = Field(default=None)
+    security_score: float = Field(default=0.0)
+
+    recommendations_json: Optional[str] = Field(default=None)
+
+    started_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class SecurityVulnerabilityModel(SQLModel, table=True):
+    """
+    Shared vulnerability rows for both scan types. Endpoint is a full URL
+    for rtaas scans and an API path for internal scans — callers know
+    which based on the parent scan's scan_type.
+    """
+    __tablename__ = "security_vulnerabilities"
+
+    vuln_id: str = Field(primary_key=True, max_length=64)
+    scan_id: str = Field(
+        max_length=64,
+        foreign_key="security_scans.scan_id",
+        index=True,
+    )
+
+    category: str = Field(max_length=50, index=True)
+    severity: str = Field(max_length=20, index=True)
+    title: str = Field(max_length=500)
+    description: str = Field(default="", max_length=4000)
+
+    endpoint: str = Field(max_length=2048)
+    method: Optional[str] = Field(default=None, max_length=10)
+
+    evidence_json: Optional[str] = Field(default=None)
+    remediation: str = Field(default="", max_length=4000)
+    remediation_status: str = Field(default="open", max_length=30)
+    cwe_id: Optional[str] = Field(default=None, max_length=20)
+
+    discovered_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class OracleCrawlTargetModel(SQLModel, table=True):
     """
     Records of URLs the Oracle was asked to crawl. A target row tracks the

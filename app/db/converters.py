@@ -27,6 +27,14 @@ from ..schemas.oracle import (
     OracleStatus,
     RegistrationResult,
 )
+from ..schemas.red_team import (
+    AttackCategory,
+    RemediationStatus,
+    ScanReport,
+    ScanStatus,
+    Severity as RTSeverity,
+    Vulnerability,
+)
 from ..schemas.telemetry import (
     TelemetryEvent,
     TelemetryEventType,
@@ -39,6 +47,8 @@ from .models import (
     OracleCrawlTargetModel,
     OracleIndexedAPIModel,
     OracleRegistrationModel,
+    SecurityScanModel,
+    SecurityVulnerabilityModel,
     TelemetryEventModel,
 )
 
@@ -269,4 +279,131 @@ def registration_model_to_schema(
         status=OracleStatus(row.status),
         registration_id=row.registration_id or None,
         message=row.message,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Security scans (shared by red_team + rtaas)
+# ---------------------------------------------------------------------------
+
+def _str_list_to_json(values: list | None) -> str | None:
+    if not values:
+        return None
+    return json.dumps(list(values), default=str)
+
+
+def _parse_json_list(raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def scan_report_to_scan_model(report: ScanReport) -> SecurityScanModel:
+    """Internal red_team ScanReport → row (no tenant)."""
+    return SecurityScanModel(
+        scan_id=report.scan_id,
+        scan_type="internal",
+        tenant_id=None,
+        targets_json=_str_list_to_json(report.target_services),
+        attack_categories_json=_str_list_to_json(report.attack_categories),
+        intensity=report.intensity,
+        status=report.status.value,
+        total_tests_run=report.total_tests_run,
+        total_passed=report.total_passed,
+        total_failed=report.total_failed,
+        security_score=report.score,
+        recommendations_json=_str_list_to_json(report.recommendations),
+        started_at=report.started_at,
+        completed_at=report.completed_at,
+    )
+
+
+def vulnerability_to_model(vuln: Vulnerability) -> SecurityVulnerabilityModel:
+    return SecurityVulnerabilityModel(
+        vuln_id=vuln.vuln_id,
+        scan_id=vuln.scan_id,
+        category=vuln.category.value,
+        severity=vuln.severity.value,
+        title=vuln.title,
+        description=vuln.description,
+        endpoint=vuln.endpoint,
+        method=vuln.method,
+        evidence_json=(
+            json.dumps(vuln.evidence, default=str) if vuln.evidence else None
+        ),
+        remediation=vuln.remediation,
+        remediation_status=vuln.remediation_status.value,
+        cwe_id=vuln.cwe_id,
+        discovered_at=vuln.discovered_at,
+    )
+
+
+def vulnerability_model_to_schema(
+    row: SecurityVulnerabilityModel,
+) -> Vulnerability:
+    evidence: dict = {}
+    if row.evidence_json:
+        try:
+            loaded = json.loads(row.evidence_json)
+            evidence = loaded if isinstance(loaded, dict) else {"value": loaded}
+        except json.JSONDecodeError:
+            evidence = {}
+
+    return Vulnerability(
+        vuln_id=row.vuln_id,
+        scan_id=row.scan_id,
+        category=AttackCategory(row.category),
+        severity=RTSeverity(row.severity),
+        title=row.title,
+        description=row.description,
+        endpoint=row.endpoint,
+        method=row.method or "",
+        evidence=evidence,
+        remediation=row.remediation,
+        remediation_status=RemediationStatus(row.remediation_status),
+        cwe_id=row.cwe_id,
+        discovered_at=row.discovered_at,
+    )
+
+
+def scan_model_to_report(
+    scan: SecurityScanModel,
+    vulns: list[SecurityVulnerabilityModel],
+) -> ScanReport:
+    """Row + child vulns → internal ScanReport."""
+    vulnerabilities = [vulnerability_model_to_schema(v) for v in vulns]
+
+    severity_breakdown: dict[str, int] = {}
+    for v in vulnerabilities:
+        severity_breakdown[v.severity.value] = (
+            severity_breakdown.get(v.severity.value, 0) + 1
+        )
+
+    duration = None
+    if scan.started_at and scan.completed_at:
+        duration = (scan.completed_at - scan.started_at).total_seconds()
+
+    return ScanReport(
+        scan_id=scan.scan_id,
+        status=ScanStatus(scan.status),
+        started_at=scan.started_at or scan.created_at,
+        completed_at=scan.completed_at,
+        duration_seconds=duration,
+        target_services=_parse_json_list(scan.targets_json),
+        attack_categories=[str(c) for c in _parse_json_list(scan.attack_categories_json)],
+        intensity=scan.intensity,
+        total_tests_run=scan.total_tests_run,
+        total_passed=scan.total_passed or 0,
+        total_failed=scan.total_failed or 0,
+        vulnerabilities_found=len(vulnerabilities),
+        severity_breakdown=severity_breakdown,
+        vulnerabilities=vulnerabilities,
+        recommendations=[
+            str(r) for r in _parse_json_list(scan.recommendations_json)
+        ],
+        score=scan.security_score,
     )
