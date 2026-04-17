@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.config import get_settings
 from .core.durable_state import close_durable_state, get_durable_state
 from .core.rate_limiter import RateLimitMiddleware
+from .core.runtime_mode import get_simulation_modes
 from .db.database import init_db, close_db
 from .services.mcp_phase9_tools import (
     ensure_phase9_registered,
@@ -671,4 +672,5 @@ async def health_dependencies():
             "configured": bool(settings.MQTT_BROKER_URL),
             "broker_url": settings.MQTT_BROKER_URL,
         },
+        "simulation_modes": get_simulation_modes(),
     }
