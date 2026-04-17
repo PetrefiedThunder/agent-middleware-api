@@ -19,6 +19,14 @@ from ..schemas.billing import (
     AlertSeverity,
     KYCStatus,
 )
+from ..schemas.oracle import (
+    CompatibilityTier,
+    DirectoryType,
+    IndexedAPI,
+    IndexedCapability,
+    OracleStatus,
+    RegistrationResult,
+)
 from ..schemas.telemetry import (
     TelemetryEvent,
     TelemetryEventType,
@@ -28,6 +36,9 @@ from .models import (
     WalletModel,
     LedgerEntryModel,
     BillingAlertModel,
+    OracleCrawlTargetModel,
+    OracleIndexedAPIModel,
+    OracleRegistrationModel,
     TelemetryEventModel,
 )
 
@@ -174,4 +185,88 @@ def telemetry_event_model_to_schema(row: TelemetryEventModel) -> TelemetryEvent:
         stack_trace=row.stack_trace,
         metadata=parse_metadata_json(row.payload_json),
         timestamp=row.event_timestamp,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Oracle
+# ---------------------------------------------------------------------------
+
+def indexed_api_to_model(api: IndexedAPI) -> OracleIndexedAPIModel:
+    """Flatten an IndexedAPI schema into its stored row."""
+    return OracleIndexedAPIModel(
+        api_id=api.api_id,
+        url=api.url,
+        name=api.name,
+        description=api.description,
+        directory_type=api.directory_type.value,
+        compatibility_tier=api.compatibility_tier.value,
+        compatibility_score=api.compatibility_score,
+        capabilities_json=json.dumps(
+            [c.model_dump() for c in api.capabilities], default=str
+        ),
+        tags_json=json.dumps(api.tags, default=str),
+        status=api.status.value,
+        last_crawled=api.last_crawled,
+    )
+
+
+def indexed_api_model_to_schema(row: OracleIndexedAPIModel) -> IndexedAPI:
+    """Rebuild an IndexedAPI from its row."""
+    caps: list[IndexedCapability] = []
+    if row.capabilities_json:
+        try:
+            for item in json.loads(row.capabilities_json):
+                caps.append(IndexedCapability.model_validate(item))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    tags: list[str] = []
+    if row.tags_json:
+        try:
+            parsed = json.loads(row.tags_json)
+            if isinstance(parsed, list):
+                tags = [str(t) for t in parsed]
+        except json.JSONDecodeError:
+            pass
+
+    return IndexedAPI(
+        api_id=row.api_id,
+        url=row.url,
+        name=row.name,
+        description=row.description,
+        directory_type=DirectoryType(row.directory_type),
+        capabilities=caps,
+        compatibility_tier=CompatibilityTier(row.compatibility_tier),
+        compatibility_score=row.compatibility_score,
+        tags=tags,
+        last_crawled=row.last_crawled,
+        status=OracleStatus(row.status),
+    )
+
+
+def registration_result_to_model(
+    result: RegistrationResult,
+) -> OracleRegistrationModel:
+    """Store a RegistrationResult. Requires a non-null registration_id —
+    caller (oracle.RegistrationEngine.register) always produces one on
+    success; failures synthesize one before storing."""
+    return OracleRegistrationModel(
+        registration_id=result.registration_id or "",
+        directory_url=result.directory_url,
+        directory_type=result.directory_type.value,
+        status=result.status.value,
+        message=result.message,
+    )
+
+
+def registration_model_to_schema(
+    row: OracleRegistrationModel,
+) -> RegistrationResult:
+    return RegistrationResult(
+        directory_url=row.directory_url,
+        directory_type=DirectoryType(row.directory_type),
+        status=OracleStatus(row.status),
+        registration_id=row.registration_id or None,
+        message=row.message,
     )
