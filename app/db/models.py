@@ -258,6 +258,108 @@ class APIKeyModel(SQLModel, table=True):
         arbitrary_types_allowed = True
 
 
+class ContentPipelineModel(SQLModel, table=True):
+    """
+    A content generation pipeline. Format lists and brand config are
+    stored as JSON — they vary by caller and are rarely filtered on.
+    In live-campaign mode, ``hook_json`` captures the full ContentHook
+    object; it's null otherwise.
+    """
+    __tablename__ = "content_pipelines"
+
+    pipeline_id: str = Field(primary_key=True, max_length=64)
+    title: str = Field(max_length=500)
+    source_clip_id: Optional[str] = Field(default=None, max_length=100)
+    source_url: Optional[str] = Field(default=None, max_length=2048)
+    target_formats_json: Optional[str] = Field(default=None)
+    brand_config_json: Optional[str] = Field(default=None)
+    language: str = Field(default="en", max_length=10)
+    auto_schedule: bool = Field(default=True)
+    owner_key: str = Field(default="", max_length=255, index=True)
+    status: str = Field(default="queued", max_length=30, index=True)
+    hook_json: Optional[str] = Field(default=None)
+    caption_style: str = Field(default="bold_impact", max_length=30)
+    aspect_ratio: str = Field(default="9:16", max_length=10)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class ContentPieceModel(SQLModel, table=True):
+    """
+    A single generated content piece. ``download_url`` is the blob
+    reference (produced by app/core/blob.py when the media engine goes
+    real — see #39). ``metadata_json`` captures format-specific fields
+    that don't justify dedicated columns.
+    """
+    __tablename__ = "content_pieces"
+
+    content_id: str = Field(primary_key=True, max_length=64)
+    pipeline_id: str = Field(
+        max_length=64,
+        foreign_key="content_pipelines.pipeline_id",
+        index=True,
+    )
+    format: str = Field(max_length=30, index=True)
+    title: str = Field(max_length=500)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    download_url: str = Field(max_length=2048)
+    thumbnail_url: Optional[str] = Field(default=None, max_length=2048)
+    duration_seconds: Optional[float] = Field(default=None)
+    dimensions: Optional[str] = Field(default=None, max_length=30)
+    file_size_bytes: Optional[int] = Field(default=None)
+    status: str = Field(max_length=20, index=True)
+    metadata_json: Optional[str] = Field(default=None)
+    generated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class ContentCampaignModel(SQLModel, table=True):
+    """Top-level live campaign linking many pipelines + many hooks."""
+    __tablename__ = "content_campaigns"
+
+    campaign_id: str = Field(primary_key=True, max_length=64)
+    campaign_title: str = Field(max_length=500)
+    source_url: str = Field(max_length=2048)
+    hooks_json: Optional[str] = Field(default=None)
+    pipeline_ids_json: Optional[str] = Field(default=None)
+    status: str = Field(default="running", max_length=30, index=True)
+    owner_key: str = Field(default="", max_length=255, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
+class ContentScheduleModel(SQLModel, table=True):
+    """
+    Persisted posting recommendations from AlgorithmicScheduler.
+    Currently only written by tests — the scheduler returns
+    recommendations in-memory today. When the ML scheduler lands this
+    table becomes authoritative for audit and replay.
+    """
+    __tablename__ = "content_schedules"
+
+    schedule_id: str = Field(primary_key=True, max_length=64)
+    content_id: str = Field(
+        max_length=64,
+        foreign_key="content_pieces.content_id",
+        index=True,
+    )
+    platform: str = Field(max_length=50, index=True)
+    recommended_time: datetime = Field(index=True)
+    confidence: float = Field(default=0.0)
+    reasoning: str = Field(default="", max_length=2000)
+    estimated_views: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class SecurityScanModel(SQLModel, table=True):
     """
     Shared table for both red_team (internal pillar scans) and rtaas

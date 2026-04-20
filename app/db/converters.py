@@ -19,6 +19,14 @@ from ..schemas.billing import (
     AlertSeverity,
     KYCStatus,
 )
+from ..schemas.content_factory import (
+    CaptionStyle,
+    ContentFormat,
+    ContentHook,
+    ContentStatus,
+    GeneratedContent,
+    ScheduleRecommendation,
+)
 from ..schemas.oracle import (
     CompatibilityTier,
     DirectoryType,
@@ -44,6 +52,10 @@ from .models import (
     WalletModel,
     LedgerEntryModel,
     BillingAlertModel,
+    ContentCampaignModel,
+    ContentPieceModel,
+    ContentPipelineModel,
+    ContentScheduleModel,
     OracleCrawlTargetModel,
     OracleIndexedAPIModel,
     OracleRegistrationModel,
@@ -367,6 +379,74 @@ def vulnerability_model_to_schema(
         remediation_status=RemediationStatus(row.remediation_status),
         cwe_id=row.cwe_id,
         discovered_at=row.discovered_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Content factory
+# ---------------------------------------------------------------------------
+
+
+def content_piece_to_model(piece: GeneratedContent) -> ContentPieceModel:
+    return ContentPieceModel(
+        content_id=piece.content_id,
+        pipeline_id=piece.pipeline_id,
+        format=piece.format.value,
+        title=piece.title,
+        description=piece.description,
+        download_url=piece.download_url,
+        thumbnail_url=piece.thumbnail_url,
+        duration_seconds=piece.duration_seconds,
+        dimensions=piece.dimensions,
+        file_size_bytes=piece.file_size_bytes,
+        status=piece.status.value,
+        metadata_json=metadata_dict_to_json(piece.metadata),
+        generated_at=piece.generated_at,
+    )
+
+
+def content_piece_model_to_schema(row: ContentPieceModel) -> GeneratedContent:
+    return GeneratedContent(
+        content_id=row.content_id,
+        pipeline_id=row.pipeline_id,
+        format=ContentFormat(row.format),
+        title=row.title,
+        description=row.description,
+        download_url=row.download_url,
+        thumbnail_url=row.thumbnail_url,
+        duration_seconds=row.duration_seconds,
+        dimensions=row.dimensions,
+        file_size_bytes=row.file_size_bytes,
+        status=ContentStatus(row.status),
+        generated_at=row.generated_at,
+        metadata=parse_metadata_json(row.metadata_json),
+    )
+
+
+def schedule_recommendation_to_model(
+    rec: ScheduleRecommendation, schedule_id: str
+) -> ContentScheduleModel:
+    return ContentScheduleModel(
+        schedule_id=schedule_id,
+        content_id=rec.content_id,
+        platform=rec.platform,
+        recommended_time=rec.recommended_time,
+        confidence=rec.confidence,
+        reasoning=rec.reasoning,
+        estimated_views=rec.estimated_views,
+    )
+
+
+def schedule_model_to_recommendation(
+    row: ContentScheduleModel,
+) -> ScheduleRecommendation:
+    return ScheduleRecommendation(
+        content_id=row.content_id,
+        platform=row.platform,
+        recommended_time=row.recommended_time,
+        confidence=row.confidence,
+        reasoning=row.reasoning,
+        estimated_views=row.estimated_views,
     )
 
 
