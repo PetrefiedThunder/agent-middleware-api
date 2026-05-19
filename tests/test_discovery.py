@@ -53,6 +53,13 @@ async def test_openapi_json_accessible(client):
     assert "paths" in data
     assert "components" in data
     assert len(data["paths"]) > 15  # We have ~25 endpoints now
+    description = data["info"]["description"]
+    assert description.startswith("## Agent Ops War Room")
+    assert (
+        "discover -> authorize -> invoke -> meter -> receipt -> audit -> verify"
+        in description
+    )
+    assert "discover -> authenticate -> invoke -> meter -> govern" not in description
 
 
 # --- Doc Index ---
