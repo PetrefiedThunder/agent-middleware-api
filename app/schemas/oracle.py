@@ -234,7 +234,7 @@ class VisibilityScore(BaseModel):
 
 
 class NetworkGraphNode(BaseModel):
-    """A node in the agent network graph."""
+    """A node in the discovery provenance graph."""
     node_id: str
     name: str
     url: str
@@ -250,7 +250,7 @@ class NetworkGraphNode(BaseModel):
 
 
 class NetworkGraphResponse(BaseModel):
-    """The agent network graph centered on our API."""
+    """The discovery provenance graph centered on our API."""
     nodes: list[NetworkGraphNode]
     edges: list[dict]
     total_nodes: int

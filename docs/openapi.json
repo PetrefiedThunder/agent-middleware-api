@@ -2701,7 +2701,7 @@
           "Agent Oracle & Network Infiltration"
         ],
         "summary": "List all registrations",
-        "description": "View all directories where our API has been registered.",
+        "description": "View controlled discovery targets where API profile metadata has been recorded, including provenance status.",
         "operationId": "list_registrations_v1_oracle_registrations_get",
         "responses": {
           "200": {
@@ -2764,8 +2764,8 @@
         "tags": [
           "Agent Oracle & Network Infiltration"
         ],
-        "summary": "Get agent network graph",
-        "description": "Returns the agent network graph centered on our API. Shows all indexed APIs, registered directories, and their compatibility relationships. Use this to visualize our position in the agent ecosystem.",
+        "summary": "Get discovery provenance graph",
+        "description": "Returns a discovery provenance graph centered on this API. Shows indexed APIs, controlled discovery targets, compatibility relationships, and operational visibility.",
         "operationId": "get_network_graph_v1_oracle_network_get",
         "responses": {
           "200": {
@@ -8137,7 +8137,7 @@
           "Agent Financial Gateways"
         ],
         "summary": "Register a billable service",
-        "description": "Register a new service in the marketplace that agents can discover and pay for.",
+        "description": "Register a governed MCP service that agents can discover under controlled billing and policy boundaries.",
         "operationId": "register_service_v1_billing_services_post",
         "security": [
           {
@@ -8195,7 +8195,7 @@
           "Agent Financial Gateways"
         ],
         "summary": "List available services",
-        "description": "List all registered billable services in the marketplace.",
+        "description": "List registered billable services in the governed service registry.",
         "operationId": "list_services_v1_billing_services_get",
         "security": [
           {
@@ -18401,7 +18401,7 @@
           "node_type"
         ],
         "title": "NetworkGraphNode",
-        "description": "A node in the agent network graph."
+        "description": "A node in the discovery provenance graph."
       },
       "NetworkGraphResponse": {
         "properties": {
@@ -18443,7 +18443,7 @@
           "center_node"
         ],
         "title": "NetworkGraphResponse",
-        "description": "The agent network graph centered on our API."
+        "description": "The discovery provenance graph centered on our API."
       },
       "OptimizerRequest": {
         "properties": {
@@ -20516,7 +20516,7 @@
           "credits_per_unit"
         ],
         "title": "RegisterServiceRequest",
-        "description": "Register a new billable service in the marketplace."
+        "description": "Register a new billable service in the governed service registry."
       },
       "RegistrationRequest": {
         "properties": {
@@ -21615,7 +21615,7 @@
           "created_at"
         ],
         "title": "ServiceRegistration",
-        "description": "A registered billable service in the marketplace."
+        "description": "A registered billable service in the governed service registry."
       },
       "SessionContextResponse": {
         "properties": {

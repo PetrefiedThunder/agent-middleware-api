@@ -38,11 +38,11 @@ async def get_doc_index():
         "sections": [
             {
                 "id": "agent_manifest",
-                "title": "Agent plugin manifest",
+                "title": "Agent operations manifest",
                 "path": "/.well-known/agent.json",
                 "content_type": "application/json",
                 "summary": (
-                    "Canonical bootstrap: capabilities, endpoints, and agent_first."
+                    "Control-plane bootstrap: capabilities, endpoints, and agent_first."
                 ),
             },
             {

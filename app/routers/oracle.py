@@ -279,7 +279,10 @@ async def register_in_directories(
 @router.get(
     "/registrations",
     summary="List all registrations",
-    description="View all directories where our API has been registered.",
+    description=(
+        "View controlled discovery targets where API profile metadata has been "
+        "recorded, including provenance status."
+    ),
 )
 async def list_registrations(
     api_key: str = Depends(verify_api_key),
@@ -322,12 +325,11 @@ async def get_visibility(
 @router.get(
     "/network",
     response_model=NetworkGraphResponse,
-    summary="Get agent network graph",
+    summary="Get discovery provenance graph",
     description=(
-        "Returns the agent network graph centered on our API. "
-        "Shows all indexed APIs, registered directories, and their "
-        "compatibility relationships. Use this to visualize our position "
-        "in the agent ecosystem."
+        "Returns a discovery provenance graph centered on this API. "
+        "Shows indexed APIs, controlled discovery targets, compatibility "
+        "relationships, and operational visibility."
     ),
 )
 async def get_network_graph(

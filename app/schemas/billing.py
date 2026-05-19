@@ -570,7 +570,7 @@ class AlertListResponse(BaseModel):
 
 
 class RegisterServiceRequest(BaseModel):
-    """Register a new billable service in the marketplace."""
+    """Register a new billable service in the governed service registry."""
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field(default="", max_length=1000)
     category: ServiceCategory
@@ -580,7 +580,7 @@ class RegisterServiceRequest(BaseModel):
 
 
 class ServiceRegistration(ExactDecimalFieldsMixin):
-    """A registered billable service in the marketplace."""
+    """A registered billable service in the governed service registry."""
     _decimal_exact_fields: ClassVar[dict[str, str]] = {
         "credits_per_unit": "credits_per_unit_exact",
     }

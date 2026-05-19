@@ -871,8 +871,8 @@ async def get_alerts(
     status_code=status.HTTP_201_CREATED,
     summary="Register a billable service",
     description=(
-        "Register a new service in the marketplace that agents can discover "
-        "and pay for."
+        "Register a governed MCP service that agents can discover under "
+        "controlled billing and policy boundaries."
     ),
 )
 async def register_service(
@@ -881,9 +881,9 @@ async def register_service(
     money: AgentMoney = Depends(get_agent_money),
 ):
     """
-    Register a billable service in the agent marketplace.
+    Register a billable service in the governed service registry.
 
-    The service will be discoverable by other agents via the services endpoint.
+    The service will be discoverable by agents via the services endpoint.
     Charges for this service will be credited to the owner's wallet.
     """
     try:
@@ -907,7 +907,7 @@ async def register_service(
 @router.get(
     "/services",
     summary="List available services",
-    description="List all registered billable services in the marketplace.",
+    description="List registered billable services in the governed service registry.",
 )
 async def list_services(
     category: ServiceCategory | None = Query(None),

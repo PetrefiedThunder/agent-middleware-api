@@ -73,6 +73,14 @@ async def test_doc_index(client):
     assert "services" in data
     assert data["agent_first"]["design_principle"] == "agent_first"
     assert data["sections"][0]["path"] == "/.well-known/agent.json"
+    first_section_text = (
+        f"{data['sections'][0]['title']} {data['sections'][0]['summary']}".lower()
+    )
+    assert "plugin" not in first_section_text
+    assert (
+        "operations" in first_section_text
+        or "control-plane" in first_section_text
+    )
     assert len(data["services"]) >= 15  # 13 pillars + dashboard + broadcast
 
 
