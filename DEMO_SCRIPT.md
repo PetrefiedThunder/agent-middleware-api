@@ -1,16 +1,19 @@
-# Demo Script: Concrete Trust-Plane Proof
+# Agent Ops War Room Demo Script
 
-This is the design-partner demo for the current trust-plane proof. It shows one
-bounded agent tool call moving through the control plane:
+Agent Ops War Room proves the control plane loop:
 
 ```text
-scoped signed permit -> governed MCP invoke -> wallet charge -> signed receipt
--> ledger -> audit chain -> replay no double charge -> out-of-scope denial
+discover -> authorize -> invoke -> meter -> receipt -> audit -> verify
 ```
+
+This is the design-partner demo for the current agent operations control-plane
+proof. It shows one bounded agent tool call moving through signed authority,
+governed MCP invocation, wallet metering, signed receipts, ledger inspection,
+tamper-evident audit verification, replay safety, and out-of-scope denial.
 
 The proof is intentionally narrow. It demonstrates that the governed MCP path
 can enforce scope, meter a call, produce verifiable artifacts, and reject misuse.
-It does not claim production readiness, settlement rails, or a complete
+It does not claim production agent banking, settlement rails, or a complete
 autonomous economic actor infrastructure.
 
 ## Environment
@@ -100,6 +103,8 @@ live demo flow below when walking a partner through the product story.
   again."
 - "Trying a different tool with the same permit is denied, which is the core
   governance behavior partners need to see."
+- "Audit-chain verification gives operators tamper evidence for the wallet's
+  operation history."
 
 ## Proof Artifacts
 
@@ -115,8 +120,8 @@ live demo flow below when walking a partner through the product story.
 
 ## Keep The Claim Narrow
 
-Say: "This proves a governed MCP trust-plane path for scoped, metered,
-replay-safe tool calls."
+Say: "Agent Ops War Room proves the control plane loop: discover -> authorize
+-> invoke -> meter -> receipt -> audit -> verify."
 
-Do not say: "This is production-grade agent banking," "full autonomous economic
+Do not say: "This is production agent banking," "full autonomous economic
 actor infrastructure," or "complete cross-framework governance."

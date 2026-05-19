@@ -12,27 +12,30 @@
 ![Docker](https://img.shields.io/badge/Docker-Ready-blue)
 ![Stars](https://img.shields.io/github/stars/PetrefiedThunder/agent-middleware-api?style=social)
 
-> **Production beta — agent-discoverable, not production complete.** Built on arXiv:2506.10953v1.
+> **Production beta proof — agent-discoverable, not production complete.** Built on arXiv:2506.10953v1.
 
-**Product:** Agent Middleware API is narrowing around an MCP governance and metering layer for agent tool calls. The current spine is wallet-scoped auth, billing, MCP invocation, signed permits, signed receipts, replay protection, and audit.
+**Product:** Agent Ops War Room proves an MCP governance and metering layer for agent tool calls. The current spine is wallet-scoped auth, billing, MCP invocation, signed permits, signed receipts, replay protection, and audit.
 
 **Platform:** A self-hostable infrastructure layer for wallet-scoped agents that need to discover capabilities, authenticate, invoke tools, meter usage, and operate inside enforceable boundaries.
 
 **Thesis:** Autonomous systems will require the same operational infrastructure humans and cloud workloads already depend on.
 
-The target trust loop is:
+Agent Ops War Room proves the control plane loop:
 
 ```text
-discover -> authenticate -> authorize -> invoke -> meter -> receipt -> audit -> govern
+discover -> authorize -> invoke -> meter -> receipt -> audit -> verify
 ```
 
-The governed MCP invocation path can now validate a signed permit, enforce idempotency, charge the wallet, write a ledger entry, generate a signed receipt, and persist a signed audit-chain event.
+The governed MCP invocation path can now validate a signed permit, enforce
+idempotency, charge the wallet once, write a ledger entry, generate a signed
+receipt, persist a signed audit-chain event, and verify tamper evidence for
+operators.
 
 Everything else in this repository exists to strengthen that loop or prove it in realistic agent workflows.
 
-### Trust Plane Demo
+### Agent Ops War Room Demo
 
-Run the concrete local proof:
+Run the compact trust-artifact proof:
 
 ```bash
 make demo-trust-plane
@@ -94,10 +97,11 @@ AWI, browser control, content generation, oracle crawls, sandbox demos, media ut
 ### Current Implementation Status
 
 This repository is a production-beta control plane, not a finished production
-platform. The wallet/key auth path, billing ledger, MCP discovery, health checks,
-golden-path flow, and core API contracts are executable and tested.
+platform or production agent banking system. The wallet/key auth path, billing
+ledger, MCP discovery, health checks, golden-path flow, and core API contracts
+are executable and tested.
 
-**Phase 1 (on `master`, simulation-gated "real" mode):** With PostgreSQL and the right env flags, these areas persist state and/or call external models instead of returning only synthetic payloads:
+**Durable, simulation-gated surfaces:** With PostgreSQL and the right env flags, these areas persist state and/or call external models instead of returning only synthetic payloads:
 
 - **Agent Oracle** — Durable crawl payload hashing and index surfaces (`SIMULATION_MODE_ORACLE=false`).
 - **Agent Comms** — SQL-backed send + inbox at **`/v1/agent-comms/send`** and **`/v1/agent-comms/inbox`** (`SIMULATION_MODE_AGENT_COMMS=false`). Legacy **`/v1/comms/*`** remains for compatibility.
@@ -159,7 +163,7 @@ Not part of the autonomous-client contract — for people running this service:
 | Stripe Webhooks          | `/webhooks/stripe`| -       | -            | Yes           |
 | Telemetry                | `/v1/telemetry`   | Yes     | Yes          | Yes           |
 | Comms                    | `/v1/comms`       | Yes     | Yes          | Yes           |
-| **Agent Comms (Phase 1)**| `/v1/agent-comms` | When sim off | Yes     | Yes           |
+| **Agent Comms**          | `/v1/agent-comms` | When sim off | Yes     | Yes           |
 | **Content Factory (text)**| `/v1/content`    | When sim off | Yes     | Yes           |
 | **Agent Oracle**         | `/v1/oracle`      | When sim off | Yes     | Yes           |
 | **Planner Optimizer**    | `/v1/planner`     | Telemetry table | Yes  | No            |
@@ -173,7 +177,7 @@ Not part of the autonomous-client contract — for people running this service:
 
 ---
 
-## Phase 1: Durable oracle, comms, and content
+## Durable Oracle, Comms, And Content
 
 Routes are always registered; **whether work hits the database or an external LLM** depends on `SIMULATION_MODE_*`, `DATABASE_URL` / `STATE_BACKEND`, and (for text generation) `LLM_*`. Use `GET /health/dependencies` for `simulation_modes` and integration hints before you trust responses.
 
@@ -742,7 +746,7 @@ POST /v1/billing/dry-run/session/{session_id}/revert
 
 ---
 
-## Behavioral Sandbox Engine (Phase 6)
+## Behavioral Sandbox Engine
 
 **Authenticated tool-behavior testing with safe dry runs, mocked backends, and optional Docker isolation.**
 
@@ -859,9 +863,9 @@ python my_server.py
 
 ---
 
-## Proof Surface: External AWI Adoption Kit — Phase 8
+## Proof Surface: External AWI Adoption Kit
 
-**Turn any website into an agent-native platform in <30 minutes.**
+**Expose a governed machine-readable adapter alongside an existing human UI.**
 
 Website owners can expose an **Agentic Web Interface (AWI)** that exercises the control plane's identity, billing, task-queue, and governance flows without changing their existing human UI.
 
@@ -886,19 +890,19 @@ AWI is a proof-of-usefulness surface for the broader infrastructure thesis: agen
 
 ---
 
-## Agent Discoverability (Phase 9)
+## Agent Operations Discovery
 
-**Making agents find and use this platform automatically.**
+**Front-door surfaces for the Agent Ops War Room control-plane proof.**
 
 ### Discovery Endpoints
 
-Agents discover services through machine-readable endpoints:
+Agents discover the control plane through machine-readable endpoints:
 
 ```bash
-# Main discovery manifest
+# Expanded capability index
 GET /v1/discover
 
-# Standard agent manifest
+# Agent operations manifest
 GET /.well-known/agent.json
 
 # MCP tools manifest
@@ -943,11 +947,11 @@ See [`docs/agent-recipes.md`](docs/agent-recipes.md) for examples.
 
 ---
 
-## Proof Surface: Agentic Web Interface (AWI) — Phase 7
+## Proof Surface: Agentic Web Interface (AWI)
 
 **Based on arXiv:2506.10953v1 — "Build the web for agents, not agents for the web"** ([Lù et al., 2025, CC BY 4.0](https://arxiv.org/abs/2506.10953))
 
-Agents should not be forced to adapt to human-designed UIs and DOM trees. AWI is the primary browser-facing proof surface for the control plane and implements the paper's six guiding principles:
+Agents should not be forced to adapt to human-designed UIs and DOM trees. AWI is a browser-facing proof surface for the control plane and implements the paper's six guiding principles:
 
 - **Stateful sessions** (`awi_session.py`)
 - **13 standardized higher-level actions** (`awi_action_vocab.py`)
@@ -1077,7 +1081,7 @@ SQLite backend provides durable state without requiring PostgreSQL or Redis infr
 - `GET /health` returns `200`
 - `GET /health/dependencies` reports healthy state backend
 - `GET /docs` loads OpenAPI UI
-- Run database migrations (`alembic upgrade head`) so Phase 1 tables exist (e.g. revisions `010`–`013`).
+- Run database migrations (`alembic upgrade head`) so durable service tables exist (e.g. revisions `010`–`013`).
 
 ### PostgreSQL Connection String
 
@@ -1113,7 +1117,7 @@ railway variables get DATABASE_URL
 Current durable service stores:
 - Billing (`wallets`, `ledger`, `alerts`, `velocity_snapshots`, `services`)
 - Comms (`agent registry`, row-keyed `inbox` and `outbox` messages)
-- **Agent Comms Phase 1** (`agent_comms_messages` when `SIMULATION_MODE_AGENT_COMMS=false`)
+- **Agent Comms** (`agent_comms_messages` when `SIMULATION_MODE_AGENT_COMMS=false`)
 - **Oracle crawl/index** (payload hash column + crawl durability when `SIMULATION_MODE_ORACLE=false`)
 - **Content Factory** (`content_factory_generations` when `SIMULATION_MODE_CONTENT_FACTORY=false`)
 - **Planner Optimizer telemetry** (`optimizer_telemetry`)
@@ -1130,14 +1134,14 @@ string companions for programmatic reconciliation, for example `balance_exact`,
 ## Roadmap
 
 - [ ] Deepen trust primitives: full action audit trail, replayable execution records, explicit trust boundaries, and policy enforcement
-- [x] Phase 1 Agent Oracle durable crawl/index (simulation-gated)
-- [x] Phase 1 Agent Comms SQL store + `/v1/agent-comms` API
+- [x] Agent Oracle durable crawl/index (simulation-gated)
+- [x] Agent Comms SQL store + `/v1/agent-comms` API
 - [x] Content Factory durable text generation + `/v1/content` API
 - [x] Constrained planner optimizer + `/v1/planner/optimize` API
 - [x] PostgreSQL ledger with ACID transactions
 - [x] Stripe fiat ingestion with webhooks
 - [x] Agent-to-agent transfers with child wallets
-- [x] Service marketplace
+- [x] Governed service registry for MCP tool exposure
 - [x] Spend velocity monitoring with auto-freeze
 - [x] Python SDK (`b2a-sdk`)
 - [x] MCP Server Generator for agent tool exposure

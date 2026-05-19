@@ -1,4 +1,4 @@
-# Agent-Native Middleware API — LLM-Readable Documentation
+# Agent Ops War Room — LLM-Readable Control-Plane Documentation
 
 **Agent-first:** You are the intended reader. This file is primary prose for autonomous agents and orchestrators. Before acting, fetch `GET /.well-known/agent.json` and use `GET /health/dependencies` (`simulation_modes`) so you do not treat simulated domains as real.
 
@@ -10,22 +10,24 @@
 
 ## What This API Does
 
-Agent Middleware API is the operational control plane for autonomous agents:
+Agent Ops War Room is the proof surface for an agent operations control plane:
 identity, billing, discovery, policy, and execution governance for
-machine-native software tenants.
+machine-native software tenants. The demo is a proof, not complete production
+agent banking.
 
 The core loop is:
 
 ```text
-discover -> authenticate -> invoke -> meter -> govern
+discover -> authorize -> invoke -> meter -> receipt -> audit -> verify
 ```
 
 Core infrastructure:
 - **Identity & authority** — Wallet-scoped agents, delegated credentials, key rotation, KYC hooks
 - **Discovery** — MCP tools, `.well-known/agent.json`, `llm.txt`, OpenAPI, `/v1/discover`
-- **Execution governance** — MCP invocation, planner constraints, service health, simulation visibility
+- **Execution governance** — Signed permits, governed MCP invocation, planner constraints, service health, simulation visibility
 - **Economics** — Dry-run pricing, spend limits, ledgering, exact decimal billing fields
-- **Readiness** — Telemetry, health checks, audit surfaces, security posture
+- **Trust artifacts** — Signed permits, signed receipts, replay-safe idempotency, and denial receipts
+- **Readiness** — Telemetry, health checks, audit-chain verification, security posture
 
 Proof surfaces such as AWI, content generation, oracle crawls, and sandboxes
 exercise the control plane; they do not replace the core loop.
@@ -60,20 +62,20 @@ POST /v1/billing/wallets/agent
 }
 ```
 
-### 4. Start Using Services
+### 4. Invoke Through The Control Plane
 
 ```bash
-# Emit telemetry
-POST /v1/telemetry/events
-{"event": "agent_started", "agent_id": "your-agent-id"}
+# Issue bounded authority
+POST /v1/permits
+{"allowed_tools": ["tool-name"], "scopes": ["tool:tool-name:invoke", "billing:charge"]}
 
-# Send message to another agent
-POST /v1/comms/messages
-{"from": "your-agent-id", "to": "other-agent", "content": "hello"}
+# Invoke with wallet, permit, and idempotency context
+POST /mcp/messages
+{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "tool-name", "mcpContext": {...}}}
 
-# Make AI decision
-POST /v1/ai/decide
-{"agent_id": "your-agent-id", "context": {...}, "options": [...]}
+# Verify the resulting signed receipt and audit chain
+POST /v1/receipts/verify
+POST /v1/audit/verify-chain
 ```
 
 ---
@@ -123,7 +125,7 @@ POST /v1/awi/intervene
 {"session_id": "...", "action": "pause", "reason": "Review needed"}
 ```
 
-### AWI Phase 9 — Enhanced Capabilities
+### Additional AWI Capabilities
 
 **Passkey Authentication** — FIDO2/WebAuthn passkey support for agent sessions:
 
@@ -202,7 +204,7 @@ DELETE /v1/awi/rag/clear/{wallet_id}
 
 ### Credit System
 - 1 credit = $0.001 USD
-- Free tier: 1000 credits/month
+- Trial credits are operator-configured grants, not a public entitlement.
 - Purchase credits via Stripe at `/v1/billing/top-up`
 
 ### Rate Limits

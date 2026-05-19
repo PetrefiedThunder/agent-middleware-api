@@ -69,7 +69,30 @@ async def test_discover_and_agent_manifest_share_agent_first_contract(client):
 
     assert agent_response.status_code == 200
     assert discover_response.status_code == 200
-    assert agent_response.json()["agent_first"] == discover_response.json()["agent_first"]
+    agent_manifest = agent_response.json()
+    discover_manifest = discover_response.json()
+
+    assert agent_manifest["agent_first"] == discover_manifest["agent_first"]
+    assert "control plane" in agent_manifest["description"].lower()
+    assert "control plane" in discover_manifest["description"].lower()
+    assert (
+        "discover -> authorize -> invoke -> meter -> receipt -> audit -> verify"
+        in discover_manifest["description"].lower()
+    )
+
+
+@pytest.mark.anyio
+async def test_discovery_front_door_does_not_market_free_unlimited_tiers(client):
+    discover_response = await client.get("/v1/discover")
+    agent_response = await client.get("/.well-known/agent.json")
+
+    assert discover_response.status_code == 200
+    assert agent_response.status_code == 200
+    combined = f"{discover_response.text}\n{agent_response.text}".lower()
+
+    assert "unlimited credits" not in combined
+    assert "unlimited everything" not in combined
+    assert "free tier" not in combined
 
 
 @pytest.mark.anyio

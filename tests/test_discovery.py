@@ -82,6 +82,11 @@ async def test_v1_discover_includes_agent_first(client):
     assert af.get("primary_audience") == "autonomous_agents"
     assert af.get("design_principle") == "agent_first"
     assert af.get("simulation_and_dependency_truth") == "/health/dependencies"
+    assert "control plane" in data["description"].lower()
+    assert (
+        "discover -> authorize -> invoke -> meter -> receipt -> audit -> verify"
+        in data["description"].lower()
+    )
 
 
 # --- Agent Manifest ---
@@ -101,6 +106,10 @@ async def test_well_known_agent_json(client):
         == _build_agent_manifest().model_dump(mode="json")["capabilities"]
     )
     assert data["authentication"]["type"] == "api_key"
+    assert "control plane" in data["description"].lower()
+    assert "operational" in data["description"].lower()
+    assert "plugin directories" not in data["description"].lower()
+    assert "plugin registries" not in data["description"].lower()
 
 
 # --- LLM.txt ---
@@ -111,4 +120,7 @@ async def test_llm_txt_served(client):
     # May be 200 or 404 depending on file availability in test env
     assert resp.status_code in (200, 404)
     if resp.status_code == 200:
-        assert "Agent-Native Middleware API" in resp.text
+        assert (
+            "Agent Ops War Room" in resp.text
+            or "agent operations control plane" in resp.text.lower()
+        )

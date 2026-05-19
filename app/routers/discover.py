@@ -1,10 +1,8 @@
 """
-Agent Discovery Router — Phase 9
-================================
-Machine-readable discovery endpoints for autonomous agents.
+Agent operations discovery router.
 
-Provides standardized endpoints that agents crawl first to discover
-capabilities, tools, pricing, and how to integrate.
+Provides the expanded capability index after autonomous clients read the
+well-known control-plane manifest.
 """
 
 from fastapi import APIRouter, Depends
@@ -56,9 +54,9 @@ class PricingTier(BaseModel):
 
 
 class DiscoveryManifest(BaseModel):
-    name: str = Field(description="Service name")
+    name: str = Field(description="Control-plane service name")
     version: str = Field(description="API version")
-    description: str = Field(description="What this service provides")
+    description: str = Field(description="Operational proof this API provides")
 
     capabilities: list[ServiceCapability] = Field(
         default_factory=list, description="List of service capabilities"
@@ -401,13 +399,13 @@ def _build_pricing() -> list[PricingTier]:
     """Build pricing tiers."""
     return [
         PricingTier(
-            tier_name="free",
+            tier_name="trial",
             price_per_credit=0.0,
             minimum_purchase=0.0,
             features=[
-                "1000 credits/month",
-                "Basic telemetry",
-                "Agent messaging",
+                "Operator-configured trial credits",
+                "Dependency truth checks",
+                "Agent operations discovery",
             ],
         ),
         PricingTier(
@@ -415,10 +413,10 @@ def _build_pricing() -> list[PricingTier]:
             price_per_credit=0.001,
             minimum_purchase=10.0,
             features=[
-                "Unlimited credits",
-                "AI decision making",
-                "AWI sessions",
-                "Priority support",
+                "Metered wallet credits",
+                "Signed permits and receipts",
+                "Governed MCP invocation",
+                "Audit-chain verification",
             ],
         ),
         PricingTier(
@@ -426,8 +424,8 @@ def _build_pricing() -> list[PricingTier]:
             price_per_credit=0.0008,
             minimum_purchase=1000.0,
             features=[
-                "Unlimited everything",
-                "Custom MCP tools",
+                "Governed service registry",
+                "Custom MCP control-plane tools",
                 "Multi-tenant isolation",
                 "Dedicated support",
                 "SLA guarantees",
@@ -441,10 +439,10 @@ def _build_pricing() -> list[PricingTier]:
     response_model=DiscoveryManifest,
     summary="Agent Discovery Manifest",
     description=(
-        "Aggregated capability index: services, MCP tools, AWI endpoints, and "
-        "pricing. Bootstrap order is defined in `/.well-known/agent.json` under "
-        "`agent_first.bootstrap_sequence` (this endpoint is optional after those "
-        "hints)."
+        "Expanded agent operations capability index for the control-plane proof: "
+        "governed services, MCP tools, AWI proof surfaces, and metering terms. "
+        "Bootstrap order is defined in `/.well-known/agent.json` under "
+        "`agent_first.bootstrap_sequence`."
     ),
 )
 async def get_discovery_manifest():
@@ -458,9 +456,9 @@ async def get_discovery_manifest():
         name=settings.APP_NAME,
         version=settings.APP_VERSION,
         description=(
-            "Operational control plane for autonomous agents: identity, billing, "
-            "discovery, policy, and execution governance for machine-native "
-            "software tenants."
+            "Agent Ops War Room operational control plane for autonomous agents. "
+            "It proves the loop: discover -> authorize -> invoke -> meter -> "
+            "receipt -> audit -> verify."
         ),
         capabilities=_build_capabilities(),
         mcp_tools=_build_mcp_tools(),

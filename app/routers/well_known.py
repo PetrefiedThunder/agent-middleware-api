@@ -1,9 +1,8 @@
 """
-Agent Well-Known Router — Phase 9
-=================================
-Standard agent discovery endpoints following common conventions.
+Agent operations well-known router.
 
-Implements /.well-known/agent.json for agent directory registration.
+Implements /.well-known/agent.json as the control-plane front door for
+autonomous clients.
 """
 
 from fastapi import APIRouter, Request
@@ -36,12 +35,12 @@ def get_agent_first_metadata() -> dict[str, Any]:
     }
 
 
-class AgentPluginManifest(BaseModel):
-    """Standard agent plugin manifest format."""
+class AgentControlPlaneManifest(BaseModel):
+    """Agent operations control-plane manifest."""
 
     schema_version: str = Field(default="1.0", description="Manifest schema version")
-    name: str = Field(description="Service/plugin name")
-    description: str = Field(description="What this service provides")
+    name: str = Field(description="Control-plane surface name")
+    description: str = Field(description="Operational surface this API proves")
     version: str = Field(description="Current version")
     provider: dict = Field(
         default_factory=lambda: {
@@ -77,8 +76,8 @@ class AgentPluginManifest(BaseModel):
 
     pricing: dict = Field(
         default_factory=lambda: {
-            "model": "credit_based",
-            "free_tier": "1000 credits/month",
+            "model": "metered_credits",
+            "grants": "operator_configured",
             "credit_conversion": "$0.001 per credit",
         }
     )
@@ -102,9 +101,9 @@ class AgentPluginManifest(BaseModel):
             "llm_readable": "/llm.txt",
             "awi_guide": "/docs/awi-adoption-guide.md",
             "agent_recipes": "/docs/agent-recipes.md",
-            "phase9_passkey": "/v1/awi/passkey/register",
-            "phase9_dom_bridge": "/v1/awi/dom/snapshot",
-            "phase9_rag": "/v1/awi/rag/ingest",
+            "awi_passkey": "/v1/awi/passkey/register",
+            "awi_dom_bridge": "/v1/awi/dom/snapshot",
+            "awi_rag": "/v1/awi/rag/ingest",
         }
     )
 
@@ -117,14 +116,14 @@ class AgentPluginManifest(BaseModel):
     )
 
 
-def _build_agent_manifest() -> AgentPluginManifest:
-    """Build the agent plugin manifest."""
-    return AgentPluginManifest(
+def _build_agent_manifest() -> AgentControlPlaneManifest:
+    """Build the agent operations control-plane manifest."""
+    return AgentControlPlaneManifest(
         name="agent-middleware-api",
         description=(
-            "Operational control plane for autonomous agents: identity, billing, "
-            "discovery, policy, and execution governance for machine-native "
-            "software tenants."
+            "Agent Ops War Room operational control plane for autonomous agents. "
+            "It proves the loop: discover -> authorize -> invoke -> meter -> "
+            "receipt -> audit -> verify."
         ),
         version=settings.APP_VERSION,
         endpoints={
@@ -148,22 +147,19 @@ def _build_agent_manifest() -> AgentPluginManifest:
 
 @router.get(
     "/.well-known/agent.json",
-    summary="Agent Plugin Manifest",
+    summary="Agent Operations Manifest",
     description=(
-        "Returns a standard agent plugin manifest for agent directories "
-        "and plugin registries. This is how autonomous agents discover "
-        "and evaluate this service."
+        "Returns the agent operations control-plane manifest. Autonomous clients "
+        "use it to find bootstrap surfaces, dependency truth, signed-permit "
+        "governance, receipts, and audit verification."
     ),
     responses={
-        200: {"description": "Agent plugin manifest"},
+        200: {"description": "Agent operations control-plane manifest"},
     },
 )
 async def get_agent_json(request: Request):
     """
-    Serve the agent.json manifest.
-
-    This follows the standard /.well-known/agent.json convention
-    used by agent frameworks and directories.
+    Serve the agent.json control-plane manifest.
     """
     manifest = _build_agent_manifest()
     return JSONResponse(

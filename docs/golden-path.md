@@ -1,7 +1,16 @@
-# Golden Path: Wallet-Scoped Agent Tool Call
+# Golden Path: Agent Ops War Room Control-Plane Loop
 
-This is the canonical production-beta flow. It proves that a developer can
-provision money, issue a scoped key, let an agent act, and inspect the result.
+Agent Ops War Room proves the control plane loop:
+
+```text
+discover -> authorize -> invoke -> meter -> receipt -> audit -> verify
+```
+
+This is the canonical production-beta flow. It proves that an operator can
+provision a wallet, issue scoped authority, let an agent invoke one governed
+tool, meter the call, inspect signed trust artifacts, verify the audit chain,
+replay safely without a second charge, and see out-of-scope actions denied and
+audited.
 
 The flow uses a bootstrap/admin key only for provisioning. The agent uses a
 DB-created key scoped to its own wallet.
@@ -25,10 +34,15 @@ export BOOTSTRAP_KEY=dev-bootstrap-key
 
 ## 1. Confirm Discovery
 
+Read the front door before acting. The manifest and `llm.txt` describe this API
+as an agent operations control plane, and `/health/dependencies` tells you which
+domains are simulated.
+
 ```bash
 curl "$API_URL/.well-known/agent.json"
 curl "$API_URL/llm.txt"
 curl "$API_URL/mcp/tools.json"
+curl "$API_URL/health/dependencies"
 ```
 
 ## 2. Create A Sponsor Wallet
@@ -340,7 +354,8 @@ curl "$API_URL/v1/billing/wallets/$AGENT_WALLET_ID/velocity" \
 
 ## Success Criteria
 
-- Agent discovery endpoints respond.
+- Agent discovery endpoints frame this as Agent Ops War Room and the loop
+  `discover -> authorize -> invoke -> meter -> receipt -> audit -> verify`.
 - Sponsor and agent wallets are created.
 - Agent API key authenticates.
 - Agent API key can access only its own wallet.

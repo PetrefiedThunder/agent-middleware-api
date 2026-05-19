@@ -10817,7 +10817,7 @@
           "Agent Discovery"
         ],
         "summary": "Agent Discovery Manifest",
-        "description": "Aggregated capability index: services, MCP tools, AWI endpoints, and pricing. Bootstrap order is defined in `/.well-known/agent.json` under `agent_first.bootstrap_sequence` (this endpoint is optional after those hints).",
+        "description": "Expanded agent operations capability index for the control-plane proof: governed services, MCP tools, AWI proof surfaces, and metering terms. Bootstrap order is defined in `/.well-known/agent.json` under `agent_first.bootstrap_sequence`.",
         "operationId": "get_discovery_manifest_v1_discover_get",
         "responses": {
           "200": {
@@ -10929,12 +10929,12 @@
         "tags": [
           "Agent Discovery"
         ],
-        "summary": "Agent Plugin Manifest",
-        "description": "Returns a standard agent plugin manifest for agent directories and plugin registries. This is how autonomous agents discover and evaluate this service.",
+        "summary": "Agent Operations Manifest",
+        "description": "Returns the agent operations control-plane manifest. Autonomous clients use it to find bootstrap surfaces, dependency truth, signed-permit governance, receipts, and audit verification.",
         "operationId": "get_agent_json__well_known_agent_json_get",
         "responses": {
           "200": {
-            "description": "Agent plugin manifest",
+            "description": "Agent operations control-plane manifest",
             "content": {
               "application/json": {
                 "schema": {}
@@ -15357,7 +15357,7 @@
           "name": {
             "type": "string",
             "title": "Name",
-            "description": "Service name"
+            "description": "Control-plane service name"
           },
           "version": {
             "type": "string",
@@ -15367,7 +15367,7 @@
           "description": {
             "type": "string",
             "title": "Description",
-            "description": "What this service provides"
+            "description": "Operational proof this API provides"
           },
           "capabilities": {
             "items": {
