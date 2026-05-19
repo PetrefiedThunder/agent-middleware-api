@@ -28,6 +28,21 @@ if str(ROOT) not in sys.path:
 ALLOWED_TOOL = "war-room-echo"
 DENIED_TOOL = "war-room-denied"
 SIGNING_PRIVATE_KEY_B64 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+DEMO_ENV_VARS = (
+    "DATABASE_URL",
+    "VALID_API_KEYS",
+    "TRUST_MODE_ENABLED",
+    "ALLOW_LEGACY_UNPERMITTED_MCP",
+    "TRUST_SIGNING_KEY_ID",
+    "TRUST_SIGNING_PRIVATE_KEY_B64",
+)
+SETTINGS_MODULES = (
+    "app.main",
+    "app.routers.mcp",
+    "app.routers.discover",
+    "app.routers.well_known",
+    "app.core.auth",
+)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -89,6 +104,39 @@ def _matching_echo_debits(ledger: dict[str, Any]) -> list[dict[str, Any]]:
         and entry["service_category"] == "agent_comms"
         and ALLOWED_TOOL in entry.get("description", "")
     ]
+
+
+def _debit_entry_ids(ledger: dict[str, Any]) -> list[str]:
+    return [
+        entry["entry_id"]
+        for entry in ledger["entries"]
+        if entry["action"] == "debit" and entry["amount"] < 0
+    ]
+
+
+def _matching_tool_debits(
+    ledger: dict[str, Any],
+    tool_name: str,
+) -> list[dict[str, Any]]:
+    return [
+        entry
+        for entry in ledger["entries"]
+        if entry["action"] == "debit"
+        and entry["amount"] < 0
+        and tool_name in entry.get("description", "")
+    ]
+
+
+def _tool_names(manifest: dict[str, Any]) -> set[str]:
+    return {
+        tool["name"]
+        for tool in manifest.get("tools", [])
+        if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+    }
+
+
+def _is_zero_credit(value: Any) -> bool:
+    return value in {"0", "0.0", "0.00", 0, 0.0}
 
 
 def _mcp_call(
@@ -156,6 +204,33 @@ def _unregister_war_room_tools() -> None:
     registry.unregister_local(DENIED_TOOL)
 
 
+def _snapshot_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in DEMO_ENV_VARS}
+
+
+def _restore_env(snapshot: dict[str, str | None]) -> None:
+    for key, value in snapshot.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _reload_settings_cache() -> Any:
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    return get_settings()
+
+
+def _refresh_imported_settings_modules() -> None:
+    settings = _reload_settings_cache()
+    for module_name in SETTINGS_MODULES:
+        module = sys.modules.get(module_name)
+        if module is not None and hasattr(module, "settings"):
+            module.settings = settings
+
+
 async def run_war_room(
     *,
     client: httpx.AsyncClient,
@@ -177,10 +252,24 @@ async def run_war_room(
             isinstance(tools_manifest.get("tools"), list),
             f"unexpected MCP tools manifest: {tools_manifest}",
         )
-
         _line(emit, "register local war-room tools")
         _register_war_room_tools()
         tools_registered = True
+        registered_tools_manifest = await _get_json(client, "/mcp/tools.json")
+        _require(
+            isinstance(registered_tools_manifest.get("tools"), list),
+            f"unexpected registered MCP tools manifest: {registered_tools_manifest}",
+        )
+        registered_tool_names = _tool_names(registered_tools_manifest)
+        war_room_tool_names = [
+            name
+            for name in (ALLOWED_TOOL, DENIED_TOOL)
+            if name in registered_tool_names
+        ]
+        _require(
+            {ALLOWED_TOOL, DENIED_TOOL}.issubset(registered_tool_names),
+            f"registered war-room tools missing from discovery: {registered_tool_names}",
+        )
 
         _line(emit, "create sponsor wallet")
         sponsor = await _post_json(
@@ -282,6 +371,7 @@ async def run_war_room(
         )
         echo_debits = _matching_echo_debits(ledger_payload)
         _require(len(echo_debits) == 1, f"expected one echo debit, got {echo_debits}")
+        debit_entry_ids_before_denial = _debit_entry_ids(ledger_payload)
 
         _line(emit, "verify signed receipt")
         receipt_verify = await _post_json(
@@ -354,16 +444,60 @@ async def run_war_room(
             denial_error["message"] == "permit_tool_not_allowed",
             f"unexpected denial: {denial_error}",
         )
+        denial_receipt = denial_error.get("data", {}).get("receipt")
+        _require(
+            isinstance(denial_receipt, dict),
+            f"denial missing receipt: {denial_error}",
+        )
+        _require(
+            denial_receipt.get("outcome") == "denied",
+            f"denial receipt has wrong outcome: {denial_receipt}",
+        )
+        _require(
+            denial_receipt.get("tool") == DENIED_TOOL,
+            f"denial receipt has wrong tool: {denial_receipt}",
+        )
+        _require(
+            denial_receipt.get("ledger_entry_id") is None,
+            f"denial receipt should not have ledger entry: {denial_receipt}",
+        )
+        _require(
+            _is_zero_credit(denial_receipt.get("credits_charged")),
+            f"denial receipt charged credits: {denial_receipt}",
+        )
+        _require(
+            denial_receipt.get("wallet_id") == wallet_id,
+            f"denial receipt wallet mismatch: {denial_receipt}",
+        )
+        _require(
+            denial_receipt.get("permit_id") == permit["permit_id"],
+            f"denial receipt permit mismatch: {denial_receipt}",
+        )
+        denial_receipt_verify = await _post_json(
+            client,
+            "/v1/receipts/verify",
+            headers=agent_headers,
+            json_body={"receipt_id": denial_receipt["receipt_id"]},
+        )
+        _require(
+            denial_receipt_verify["valid"] is True,
+            f"denial receipt invalid: {denial_receipt_verify}",
+        )
 
         ledger_after_denial = await _get_json(
             client,
             f"/v1/billing/ledger/{wallet_id}",
             headers=agent_headers,
         )
-        debits_after_denial = len(_matching_echo_debits(ledger_after_denial))
+        debit_entry_ids_after_denial = _debit_entry_ids(ledger_after_denial)
+        denied_tool_debits = _matching_tool_debits(ledger_after_denial, DENIED_TOOL)
         _require(
-            debits_after_denial == len(echo_debits),
-            "replay or denial created an extra echo debit",
+            set(debit_entry_ids_after_denial) == set(debit_entry_ids_before_denial),
+            "denial changed agent-wallet debit ledger entries",
+        )
+        _require(
+            not denied_tool_debits,
+            f"denied tool was charged: {denied_tool_debits}",
         )
 
         result = {
@@ -371,7 +505,10 @@ async def run_war_room(
             "discovery": {
                 "agent_manifest": agent_manifest.get("name")
                 or agent_manifest.get("service"),
-                "tools_seen": len(tools_manifest["tools"]),
+                "bootstrap_tools_seen": len(tools_manifest["tools"]),
+                "registered_tools_seen": len(registered_tools_manifest["tools"]),
+                "war_room_tools_discoverable": True,
+                "war_room_tool_names": war_room_tool_names,
                 "openapi_title": openapi["info"]["title"],
             },
             "sponsor": {"wallet_id": sponsor["wallet_id"]},
@@ -411,8 +548,12 @@ async def run_war_room(
             },
             "denial": {
                 "reason": denial_error["message"],
-                "receipt": denial_error.get("data", {}).get("receipt"),
-                "ledger_debits_after": debits_after_denial,
+                "receipt": denial_receipt,
+                "receipt_valid": denial_receipt_verify["valid"],
+                "receipt_verify_reason": denial_receipt_verify["reason"],
+                "debit_entry_ids_before": debit_entry_ids_before_denial,
+                "debit_entry_ids_after": debit_entry_ids_after_denial,
+                "denied_tool_debits": denied_tool_debits,
             },
         }
         _line(emit, "control-plane loop proved")
@@ -433,10 +574,7 @@ def _configure_local_environment(
     os.environ["ALLOW_LEGACY_UNPERMITTED_MCP"] = "false"
     os.environ["TRUST_SIGNING_KEY_ID"] = "war-room-ed25519"
     os.environ["TRUST_SIGNING_PRIVATE_KEY_B64"] = SIGNING_PRIVATE_KEY_B64
-
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
+    _refresh_imported_settings_modules()
 
 
 async def run_in_process(
@@ -448,17 +586,28 @@ async def run_in_process(
     """Run the demo against the local FastAPI app using ASGITransport."""
 
     async def run_with_database(db_url: str) -> dict[str, Any]:
+        env_snapshot = _snapshot_env()
+
+        from app.db import database as database_module
+        from app.services import signing_keys as signing_keys_module
+
+        previous_engine = database_module._engine
+        previous_session_factory = database_module._session_factory
+        previous_signing_key_service = signing_keys_module._signing_key_service
+        demo_engine = None
         _configure_local_environment(
             database_url=db_url,
             bootstrap_api_key=bootstrap_api_key,
         )
+        signing_keys_module._signing_key_service = None
 
-        from app.db.database import close_db, init_db
-        from app.main import app
-
-        await close_db()
-        await init_db()
         try:
+            from app.db.database import init_db
+            from app.main import app
+
+            database_module._engine = None
+            database_module._session_factory = None
+            await init_db()
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(
                 transport=transport,
@@ -473,7 +622,16 @@ async def run_in_process(
                 print("AGENT OPS WAR ROOM: PASS")
             return result
         finally:
-            await close_db()
+            demo_engine = database_module._engine
+            database_module._engine = None
+            database_module._session_factory = None
+            if demo_engine is not None and demo_engine is not previous_engine:
+                await demo_engine.dispose()
+            database_module._engine = previous_engine
+            database_module._session_factory = previous_session_factory
+            signing_keys_module._signing_key_service = previous_signing_key_service
+            _restore_env(env_snapshot)
+            _refresh_imported_settings_modules()
 
     if database_url:
         return await run_with_database(database_url)
