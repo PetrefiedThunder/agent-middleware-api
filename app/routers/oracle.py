@@ -242,12 +242,11 @@ async def get_indexed_api(
     "/register",
     response_model=RegistrationResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Register in external agent directories",
+    summary="Register discovery provenance targets",
     description=(
-        "Push our API profile into external agent directories and registries. "
-        "This is how agents find us — by being listed in the directories they "
-        "already crawl. Supports /.well-known, MCP server listings, plugin stores, "
-        "and centralized agent registries."
+        "Record controlled discovery registration targets for API profiles. "
+        "This proof surface preserves destination metadata, payloads, and "
+        "operator-visible provenance for governed publication workflows."
     ),
 )
 async def register_in_directories(

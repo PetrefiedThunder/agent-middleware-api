@@ -96,6 +96,31 @@ async def test_discovery_front_door_does_not_market_free_unlimited_tiers(client)
 
 
 @pytest.mark.anyio
+async def test_public_discovery_copy_avoids_directory_marketplace_centering(client):
+    root_response = await client.get("/")
+    openapi_response = await client.get("/openapi.json")
+
+    assert root_response.status_code == 200
+    assert openapi_response.status_code == 200
+    root_payload = root_response.json()
+    oracle_register = openapi_response.json()["paths"]["/v1/oracle/register"]["post"]
+    reviewed_copy = f"{root_payload['services']}\n{oracle_register}".lower()
+
+    stale_phrases = [
+        "awi phase 9",
+        "awi_phase9",
+        "crawl directories",
+        "inbound discovery traffic",
+        "network effects engine",
+        "external agent directories",
+        "plugin stores",
+        "centralized agent registries",
+    ]
+    for phrase in stale_phrases:
+        assert phrase not in reviewed_copy
+
+
+@pytest.mark.anyio
 async def test_openapi_contains_core_control_plane_routes(client):
     response = await client.get("/openapi.json")
 

@@ -2647,8 +2647,8 @@
         "tags": [
           "Agent Oracle & Network Infiltration"
         ],
-        "summary": "Register in external agent directories",
-        "description": "Push our API profile into external agent directories and registries. This is how agents find us — by being listed in the directories they already crawl. Supports /.well-known, MCP server listings, plugin stores, and centralized agent registries.",
+        "summary": "Register discovery provenance targets",
+        "description": "Record controlled discovery registration targets for API profiles. This proof surface preserves destination metadata, payloads, and operator-visible provenance for governed publication workflows.",
         "operationId": "register_in_directories_v1_oracle_register_post",
         "requestBody": {
           "content": {

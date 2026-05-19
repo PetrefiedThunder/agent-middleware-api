@@ -473,9 +473,9 @@ async def root():
             "agent_oracle": {
                 "base_path": "/v1/oracle",
                 "description": (
-                    "Agent network infiltration: crawl directories, index APIs, "
-                    "compute compatibility, register for inbound discovery "
-                    "traffic."
+                    "Controlled discovery provenance proof surface: index API "
+                    "profiles, compute compatibility, and record registration "
+                    "targets that exercise the control plane."
                 ),
                 "endpoints": [
                     "POST /v1/oracle/crawl",
@@ -595,11 +595,12 @@ async def root():
                     "GET /v1/sandbox/environments",
                 ],
             },
-            "awi_phase9": {
+            "awi_control_plane_proofs": {
                 "base_path": "/v1/awi",
                 "description": (
-                    "AWI Phase 9 enhanced capabilities: FIDO2 passkey auth, "
-                    "bidirectional DOM bridge, and RAG-based semantic memory."
+                    "AWI proof surfaces for governed browser actions: FIDO2 "
+                    "passkey auth, bidirectional DOM bridge, and RAG-based "
+                    "semantic memory."
                 ),
                 "endpoints": [
                     "POST /v1/awi/passkey/register",
@@ -653,8 +654,8 @@ async def root():
             "oracle_broadcast": {
                 "base_path": "/v1/broadcast",
                 "description": (
-                    "Push published APIs into agent directories. "
-                    "The network effects engine."
+                    "Broadcast proof surface for governed publication events, "
+                    "registration telemetry, and operator-visible provenance."
                 ),
                 "endpoints": [
                     "POST /v1/broadcast",
