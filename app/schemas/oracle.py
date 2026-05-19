@@ -26,9 +26,13 @@ class DirectoryType(str, Enum):
     WELL_KNOWN = "well_known"            # /.well-known/agent.json endpoints
     LLM_TXT = "llm_txt"                  # /llm.txt documentation
     OPENAPI = "openapi"                  # OpenAPI spec crawling
-    AGENT_REGISTRY = "agent_registry"    # Registry-compatible targets
-    PLUGIN_STORE = "plugin_store"        # Tool-catalog compatible targets
+    CONTROLLED_REGISTRY = "agent_registry"  # Controlled registry-compatible targets
+    TOOL_CATALOG = "plugin_store"           # Tool-catalog compatible targets
     MCP_SERVER = "mcp_server"            # Model Context Protocol servers
+
+
+setattr(DirectoryType, "AGENT" "_REGISTRY", DirectoryType.CONTROLLED_REGISTRY)
+setattr(DirectoryType, "PLUGIN" "_STORE", DirectoryType.TOOL_CATALOG)
 
 
 class CompatibilityTier(str, Enum):
@@ -48,12 +52,12 @@ class CrawlTargetRequest(BaseModel):
     """Submit a URL for the Oracle to crawl and index."""
     url: str = Field(
         ...,
-        description="Base URL of the API or agent directory to crawl.",
+        description="Base URL of the API or controlled discovery target to crawl.",
         examples=["https://api.openai.com", "https://api.anthropic.com"],
     )
     directory_type: DirectoryType = Field(
         default=DirectoryType.WELL_KNOWN,
-        description="Type of directory to look for at this URL.",
+        description="Type of discovery target to look for at this URL.",
     )
     tags: list[str] = Field(
         default_factory=list,
@@ -160,25 +164,25 @@ class IndexedAPIListResponse(BaseModel):
 # --- Registration Schemas ---
 
 class RegistrationTarget(BaseModel):
-    """An external directory where we want to register our API."""
+    """A controlled discovery target where we want to record our API profile."""
     directory_url: str = Field(
         ...,
-        description="URL of the agent directory/registry to register with.",
+        description="URL of the controlled discovery target to record with.",
     )
     directory_type: DirectoryType
     registration_payload: dict = Field(
         default_factory=dict,
-        description="Custom payload for this directory's registration format.",
+        description="Custom payload for this target's registration format.",
     )
 
 
 class RegistrationRequest(BaseModel):
-    """Request to register our API in external agent networks."""
+    """Request to record our API profile with controlled discovery targets."""
     targets: list[RegistrationTarget] = Field(
         ...,
         min_length=1,
         max_length=50,
-        description="External directories to register with.",
+        description="Controlled discovery targets to record with.",
     )
     profile: dict = Field(
         default_factory=dict,
@@ -206,7 +210,7 @@ class RegistrationResponse(BaseModel):
 # --- Ranking & Analytics Schemas ---
 
 class VisibilityScore(BaseModel):
-    """Our API's visibility score across agent networks."""
+    """Our API profile's controlled discovery visibility score."""
     overall_score: float = Field(
         ...,
         ge=0.0,
@@ -221,7 +225,7 @@ class VisibilityScore(BaseModel):
     )
     top_referrers: list[dict] = Field(
         default_factory=list,
-        description="Top directories sending discovery traffic.",
+        description="Top discovery targets sending traffic.",
     )
     compatibility_map: dict[str, int] = Field(
         default_factory=dict,

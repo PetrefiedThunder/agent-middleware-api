@@ -30,7 +30,7 @@ from ..schemas.oracle import (
 
 router = APIRouter(
     prefix="/v1/oracle",
-    tags=["Agent Oracle & Network Infiltration"],
+    tags=["Agent Oracle Discovery Provenance"],
     responses={
         401: {"description": "Missing API key"},
         403: {"description": "Invalid API key or access denied"},
@@ -308,9 +308,9 @@ async def list_registrations(
 @router.get(
     "/visibility",
     response_model=VisibilityScore,
-    summary="Get visibility score",
+    summary="Get provenance visibility score",
     description=(
-        "Compute our API's overall visibility across agent networks. "
+        "Compute our API profile's controlled discovery visibility. "
         "Includes registration count, discovery hit rate, compatibility "
         "distribution, and actionable recommendations."
     ),

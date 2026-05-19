@@ -2357,7 +2357,7 @@
     "/v1/oracle/crawl": {
       "post": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Crawl and index an external API",
         "description": "Submit a URL for the Oracle to crawl. It will attempt to discover the API's capabilities via /.well-known/agent.json, /llm.txt, or OpenAPI specs, then compute a compatibility score indicating how well it fits this control plane.",
@@ -2410,7 +2410,7 @@
     "/v1/oracle/crawl/batch": {
       "post": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Batch crawl multiple URLs",
         "description": "Submit multiple URLs for concurrent crawling and indexing.",
@@ -2465,7 +2465,7 @@
     "/v1/oracle/index": {
       "get": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "List indexed APIs",
         "description": "Browse the Oracle's index of external APIs, or list durable crawl rows. Without ``domain``: returns ``apis`` (indexed APIs), filterable by tier and directory type. With ``domain``: returns ``crawl_targets`` from the database (substring match on URL). Sorted by compatibility score (apis) or queued_at descending (crawl targets).",
@@ -2591,7 +2591,7 @@
     "/v1/oracle/index/{api_id}": {
       "get": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Get indexed API details",
         "description": "Retrieve full details for a specific indexed API.",
@@ -2645,7 +2645,7 @@
     "/v1/oracle/register": {
       "post": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Register discovery provenance targets",
         "description": "Record controlled discovery registration targets for API profiles. This proof surface preserves destination metadata, payloads, and operator-visible provenance for governed publication workflows.",
@@ -2698,7 +2698,7 @@
     "/v1/oracle/registrations": {
       "get": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "List all registrations",
         "description": "View controlled discovery targets where API profile metadata has been recorded, including provenance status.",
@@ -2729,10 +2729,10 @@
     "/v1/oracle/visibility": {
       "get": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
-        "summary": "Get visibility score",
-        "description": "Compute our API's overall visibility across agent networks. Includes registration count, discovery hit rate, compatibility distribution, and actionable recommendations.",
+        "summary": "Get provenance visibility score",
+        "description": "Compute our API profile's controlled discovery visibility. Includes registration count, discovery hit rate, compatibility distribution, and actionable recommendations.",
         "operationId": "get_visibility_v1_oracle_visibility_get",
         "responses": {
           "200": {
@@ -2762,7 +2762,7 @@
     "/v1/oracle/network": {
       "get": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Get discovery provenance graph",
         "description": "Returns a discovery provenance graph centered on this API. Shows indexed APIs, controlled discovery targets, compatibility relationships, and operational visibility.",
@@ -2795,7 +2795,7 @@
     "/v1/oracle/discovery": {
       "post": {
         "tags": [
-          "Agent Oracle & Network Infiltration"
+          "Agent Oracle Discovery Provenance"
         ],
         "summary": "Record inbound discovery hit",
         "description": "Called when an external agent discovers our API. Tracks referrer for analytics. This endpoint should be called by this service whenever an agent first hits / or /.well-known/agent.json.",
@@ -14195,7 +14195,7 @@
           "url": {
             "type": "string",
             "title": "Url",
-            "description": "Base URL of the API or agent directory to crawl.",
+            "description": "Base URL of the API or controlled discovery target to crawl.",
             "examples": [
               "https://api.openai.com",
               "https://api.anthropic.com"
@@ -14203,7 +14203,7 @@
           },
           "directory_type": {
             "$ref": "#/components/schemas/DirectoryType",
-            "description": "Type of directory to look for at this URL.",
+            "description": "Type of discovery target to look for at this URL.",
             "default": "well_known"
           },
           "tags": {
@@ -20528,7 +20528,7 @@
             "maxItems": 50,
             "minItems": 1,
             "title": "Targets",
-            "description": "External directories to register with."
+            "description": "Controlled discovery targets to record with."
           },
           "profile": {
             "additionalProperties": true,
@@ -20542,7 +20542,7 @@
           "targets"
         ],
         "title": "RegistrationRequest",
-        "description": "Request to register our API in external agent networks."
+        "description": "Request to record our API profile with controlled discovery targets."
       },
       "RegistrationResponse": {
         "properties": {
@@ -20619,7 +20619,7 @@
           "directory_url": {
             "type": "string",
             "title": "Directory Url",
-            "description": "URL of the agent directory/registry to register with."
+            "description": "URL of the controlled discovery target to record with."
           },
           "directory_type": {
             "$ref": "#/components/schemas/DirectoryType"
@@ -20628,7 +20628,7 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Registration Payload",
-            "description": "Custom payload for this directory's registration format."
+            "description": "Custom payload for this target's registration format."
           }
         },
         "type": "object",
@@ -20637,7 +20637,7 @@
           "directory_type"
         ],
         "title": "RegistrationTarget",
-        "description": "An external directory where we want to register our API."
+        "description": "A controlled discovery target where we want to record our API profile."
       },
       "RemediationStatus": {
         "type": "string",
@@ -22662,7 +22662,7 @@
             },
             "type": "array",
             "title": "Top Referrers",
-            "description": "Top directories sending discovery traffic."
+            "description": "Top discovery targets sending traffic."
           },
           "compatibility_map": {
             "additionalProperties": {
@@ -22688,7 +22688,7 @@
           "directories_crawled"
         ],
         "title": "VisibilityScore",
-        "description": "Our API's visibility score across agent networks."
+        "description": "Our API profile's controlled discovery visibility score."
       },
       "Vulnerability": {
         "properties": {

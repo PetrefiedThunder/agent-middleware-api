@@ -98,13 +98,26 @@ async def test_discovery_front_door_does_not_market_free_unlimited_tiers(client)
 @pytest.mark.anyio
 async def test_public_discovery_copy_avoids_directory_marketplace_centering(client):
     root_response = await client.get("/")
+    docs_index_response = await client.get("/docs/index")
     openapi_response = await client.get("/openapi.json")
 
     assert root_response.status_code == 200
+    assert docs_index_response.status_code == 200
     assert openapi_response.status_code == 200
-    reviewed_copy = f"{root_response.text}\n{openapi_response.text}".lower()
+    reviewed_copy = (
+        f"{root_response.text}\n{docs_index_response.text}\n{openapi_response.text}"
+    )
+    reviewed_copy_lower = reviewed_copy.lower()
 
     stale_phrases = [
+        "Agent Oracle & Network Infiltration",
+        "Network Infiltration",
+        "directory-crawling",
+        "network-registration",
+        "network-graph-mapping",
+        "inbound-discovery-tracking",
+        "external agent networks",
+        "visibility score across agent networks",
         "awi phase 9",
         "awi_phase9",
         "crawl directories",
@@ -123,6 +136,13 @@ async def test_public_discovery_copy_avoids_directory_marketplace_centering(clie
         "centralized agent registries",
     ]
     for phrase in stale_phrases:
+        assert phrase.lower() not in reviewed_copy_lower
+
+    legacy_enum_names = [
+        "PLUGIN_STORE",
+        "AGENT_REGISTRY",
+    ]
+    for phrase in legacy_enum_names:
         assert phrase not in reviewed_copy
 
 
