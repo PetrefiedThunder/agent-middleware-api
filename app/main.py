@@ -546,8 +546,8 @@ async def root():
                 "base_path": "/v1/launch",
                 "description": (
                     "Day 1 production bootstrap. One POST funds wallets, "
-                    "infiltrates agent networks, ignites content campaigns, "
-                    "and arms the Red Team perimeter."
+                    "records discovery provenance, ignites content campaigns, "
+                    "and validates the Red Team perimeter."
                 ),
                 "endpoints": [
                     "POST /v1/launch/preflight",

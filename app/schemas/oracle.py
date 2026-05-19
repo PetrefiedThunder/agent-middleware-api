@@ -1,11 +1,8 @@
 """
-Schemas for the Agent Oracle Infiltration Service.
+Schemas for the Agent Oracle discovery provenance service.
 
-The Oracle crawls agent directories, indexes API capabilities,
-computes compatibility scores, and registers our API in external
-agent networks for inbound discovery traffic.
-
-Think: SEO for the agentic web. If agents can't find you, you don't exist.
+The Oracle indexes API capability profiles, computes compatibility scores, and
+records controlled discovery publication targets for operator review.
 """
 
 from pydantic import BaseModel, Field, field_validator
@@ -25,12 +22,12 @@ class OracleStatus(str, Enum):
 
 
 class DirectoryType(str, Enum):
-    """Types of agent directories the Oracle can infiltrate."""
+    """Types of discovery targets the Oracle can record."""
     WELL_KNOWN = "well_known"            # /.well-known/agent.json endpoints
     LLM_TXT = "llm_txt"                  # /llm.txt documentation
     OPENAPI = "openapi"                  # OpenAPI spec crawling
-    AGENT_REGISTRY = "agent_registry"    # Centralized agent registries
-    PLUGIN_STORE = "plugin_store"        # Plugin/tool marketplaces
+    AGENT_REGISTRY = "agent_registry"    # Registry-compatible targets
+    PLUGIN_STORE = "plugin_store"        # Tool-catalog compatible targets
     MCP_SERVER = "mcp_server"            # Model Context Protocol servers
 
 

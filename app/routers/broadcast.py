@@ -1,7 +1,7 @@
 """
 Oracle Mass-Broadcast — Router
 ================================
-Push published APIs into the agent discovery network.
+Publish discovery artifacts to operator-approved discovery targets.
 
 Endpoints:
 - POST /v1/broadcast                        — Broadcast a published API
@@ -9,7 +9,7 @@ Endpoints:
 - GET  /v1/broadcast/jobs/{job_id}           — Get broadcast job details
 - GET  /v1/broadcast/jobs/{job_id}/metrics   — Get discovery metrics
 - POST /v1/broadcast/jobs/{job_id}/events    — Simulate discovery event
-- GET  /v1/broadcast/directories             — List available directories
+- GET  /v1/broadcast/directories             — List available targets
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,7 +33,7 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 class BroadcastRequest(BaseModel):
-    """Request to broadcast a published API to agent directories."""
+    """Request to publish a generated API profile to discovery targets."""
     service_name: str = Field(..., description="Name of the API to broadcast.")
     service_version: str = Field(default="1.0.0", description="API version.")
     base_url: str = Field(..., description="Production base URL of the API.")
@@ -45,7 +45,7 @@ class BroadcastRequest(BaseModel):
     openapi_spec: dict | None = Field(None, description="Generated OpenAPI 3.1 spec.")
     agent_json: dict | None = Field(None, description="Generated agent.json manifest.")
     target_directories: list[str] | None = Field(
-        None, description="Directory IDs to target (default: all)."
+        None, description="Discovery target IDs to publish to (default: all)."
     )
 
 
@@ -104,10 +104,10 @@ class DiscoveryEventRequest(BaseModel):
     "",
     response_model=BroadcastJobResponse,
     status_code=201,
-    summary="Broadcast API to Agent Directories",
+    summary="Publish API discovery artifacts",
     description=(
-        "Pushes discovery artifacts (llm.txt, OpenAPI, agent.json) "
-        "to all registered agent directories. The network effects engine."
+        "Publishes discovery artifacts (llm.txt, OpenAPI, agent.json) "
+        "to operator-approved discovery targets with auditable job metadata."
     ),
 )
 async def broadcast_api(
@@ -240,8 +240,8 @@ async def record_discovery_event(
 
 @router.get(
     "/directories",
-    summary="List Available Directories",
-    description="All agent directories we can broadcast to.",
+    summary="List Available Discovery Targets",
+    description="Operator-approved discovery targets available for publication.",
 )
 async def list_directories():
     return {

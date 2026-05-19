@@ -2848,7 +2848,7 @@
           "Launch Sequence"
         ],
         "summary": "Execute Day 1 Launch Sequence",
-        "description": "The ignition key. Executes all four launch phases in sequence:\n\n1. **FUND** — Create sponsor wallet, inject seed capital, provision agent wallets\n2. **INFILTRATE** — Crawl 6 major APIs, register in 4 agent directories\n3. **IGNITE** — Launch B2A content campaign (3 hooks × N formats = 40+ pieces)\n4. **ARM** — Activate Red Team perimeter scanning across all API paths\n\nReturns a LaunchResponse (the system's birth certificate) with full metrics.",
+        "description": "Operator bootstrap proof. Executes four setup steps in sequence:\n\n1. **FUND** — Create sponsor wallet, inject seed capital, provision agent wallets\n2. **DISCOVER** — Index API profiles and record operator-approved discovery targets\n3. **IGNITE** — Launch B2A content campaign (3 hooks × N formats = 40+ pieces)\n4. **ARM** — Activate Red Team perimeter scanning across all API paths\n\nReturns a LaunchResponse with setup metrics.",
         "operationId": "execute_launch_v1_launch_post",
         "requestBody": {
           "content": {
@@ -3024,7 +3024,7 @@
           "Protocol Generation Engine"
         ],
         "summary": "Generate protocol package from source code",
-        "description": "Submit raw API source code and receive a complete agent-discoverable package:\n\n1. **llm.txt** — LLM-optimized documentation\n2. **OpenAPI 3.1 spec** — Machine-readable API schema\n3. **agent.json** — Agent discovery manifest\n4. **Oracle registration** — (optional) Push to agent directories\n\nThe instant go-to-market engine for any tool an agent builds.",
+        "description": "Submit raw API source code and receive a complete agent-discoverable package:\n\n1. **llm.txt** — LLM-optimized documentation\n2. **OpenAPI 3.1 spec** — Machine-readable API schema\n3. **agent.json** — Agent discovery manifest\n4. **Oracle registration** — (optional) record controlled discovery target metadata\n\nThis packages generated tools for governed discovery publication.",
         "operationId": "generate_protocol_v1_protocol_generate_post",
         "requestBody": {
           "content": {
@@ -4315,8 +4315,8 @@
         "tags": [
           "Oracle Broadcast"
         ],
-        "summary": "Broadcast API to Agent Directories",
-        "description": "Pushes discovery artifacts (llm.txt, OpenAPI, agent.json) to all registered agent directories. The network effects engine.",
+        "summary": "Publish API discovery artifacts",
+        "description": "Publishes discovery artifacts (llm.txt, OpenAPI, agent.json) to operator-approved discovery targets with auditable job metadata.",
         "operationId": "broadcast_api_v1_broadcast_post",
         "requestBody": {
           "content": {
@@ -4567,8 +4567,8 @@
         "tags": [
           "Oracle Broadcast"
         ],
-        "summary": "List Available Directories",
-        "description": "All agent directories we can broadcast to.",
+        "summary": "List Available Discovery Targets",
+        "description": "Operator-approved discovery targets available for publication.",
         "operationId": "list_directories_v1_broadcast_directories_get",
         "responses": {
           "200": {
@@ -13480,7 +13480,7 @@
               }
             ],
             "title": "Target Directories",
-            "description": "Directory IDs to target (default: all)."
+            "description": "Discovery target IDs to publish to (default: all)."
           }
         },
         "type": "object",
@@ -13490,7 +13490,7 @@
           "generation_id"
         ],
         "title": "BroadcastRequest",
-        "description": "Request to broadcast a published API to agent directories."
+        "description": "Request to publish a generated API profile to discovery targets."
       },
       "CampaignHookResult": {
         "properties": {
@@ -15329,7 +15329,7 @@
           "mcp_server"
         ],
         "title": "DirectoryType",
-        "description": "Types of agent directories the Oracle can infiltrate."
+        "description": "Types of discovery targets the Oracle can record."
       },
       "DiscoveryEventRequest": {
         "properties": {
@@ -15978,7 +15978,7 @@
           "register_in_oracle": {
             "type": "boolean",
             "title": "Register In Oracle",
-            "description": "Auto-register the generated service in the Agent Oracle directories.",
+            "description": "Auto-record the generated service with configured discovery targets.",
             "default": false
           }
         },

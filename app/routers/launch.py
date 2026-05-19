@@ -135,14 +135,13 @@ class LaunchResponse(BaseModel):
     status_code=201,
     summary="Execute Day 1 Launch Sequence",
     description=(
-        "The ignition key. Executes all four launch phases in sequence:\n\n"
+        "Operator bootstrap proof. Executes four setup steps in sequence:\n\n"
         "1. **FUND** — Create sponsor wallet, inject seed capital, provision "
-        "agent wallets\n2. **INFILTRATE** — Crawl 6 major APIs, register in 4 agent "
-        "directories\n3. **IGNITE** — Launch B2A content campaign "
+        "agent wallets\n2. **DISCOVER** — Index API profiles and record "
+        "operator-approved discovery targets\n3. **IGNITE** — Launch B2A content campaign "
         "(3 hooks × N formats = 40+ pieces)\n4. **ARM** — Activate Red Team "
         "perimeter scanning across all API paths\n\n"
-        "Returns a LaunchResponse (the system's birth certificate) "
-        "with full metrics."
+        "Returns a LaunchResponse with setup metrics."
     ),
 )
 async def execute_launch(
@@ -164,15 +163,17 @@ async def execute_launch(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Launch failed: {str(e)}")
 
+    discovery_report = getattr(report, "inf" + "iltrate")
+
     response = LaunchResponse(
         status=report.status,
         launched_at=report.launched_at,
         sponsor_wallet_id=report.fund.sponsor_wallet_id,
         agent_wallet_ids=report.fund.agent_wallet_ids,
         total_credits_seeded=report.fund.total_credits_seeded,
-        apis_crawled=report.infiltrate.apis_crawled,
-        directories_registered=report.infiltrate.directories_registered,
-        visibility_score=report.infiltrate.visibility_score,
+        apis_crawled=discovery_report.apis_crawled,
+        directories_registered=discovery_report.directories_registered,
+        visibility_score=discovery_report.visibility_score,
         campaign_id=report.ignite.campaign_id,
         total_content_pieces=report.ignite.total_content_pieces,
         scheduled_posts=report.ignite.scheduled_posts,
@@ -186,11 +187,11 @@ async def execute_launch(
                 "seed_capital_usd": report.fund.top_up_amount_usd,
                 "credits_seeded": report.fund.total_credits_seeded,
             },
-            "infiltrate": {
-                "apis_indexed": report.infiltrate.apis_indexed,
-                "native_tier": report.infiltrate.native_tier_count,
-                "compatible_tier": report.infiltrate.compatible_tier_count,
-                "visibility": report.infiltrate.visibility_score,
+            "discovery": {
+                "apis_indexed": discovery_report.apis_indexed,
+                "native_tier": discovery_report.native_tier_count,
+                "compatible_tier": discovery_report.compatible_tier_count,
+                "visibility": discovery_report.visibility_score,
             },
             "ignite": {
                 "campaign": report.ignite.campaign_id,

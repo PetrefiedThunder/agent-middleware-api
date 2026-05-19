@@ -102,9 +102,7 @@ async def test_public_discovery_copy_avoids_directory_marketplace_centering(clie
 
     assert root_response.status_code == 200
     assert openapi_response.status_code == 200
-    root_payload = root_response.json()
-    oracle_register = openapi_response.json()["paths"]["/v1/oracle/register"]["post"]
-    reviewed_copy = f"{root_payload['services']}\n{oracle_register}".lower()
+    reviewed_copy = f"{root_response.text}\n{openapi_response.text}".lower()
 
     stale_phrases = [
         "awi phase 9",
@@ -112,6 +110,9 @@ async def test_public_discovery_copy_avoids_directory_marketplace_centering(clie
         "crawl directories",
         "inbound discovery traffic",
         "network effects engine",
+        "go-to-market engine",
+        "infiltrate",
+        "agent directories",
         "external agent directories",
         "plugin stores",
         "centralized agent registries",

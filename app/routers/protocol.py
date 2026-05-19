@@ -4,7 +4,7 @@ Protocol Generation Engine Router (Pillar 11)
 Code-to-discovery pipeline. Feed raw API code,
 get back llm.txt + OpenAPI spec + agent.json + Oracle registration.
 
-The go-to-market engine for agent-built tools.
+Controlled export packaging for agent-built tools.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -49,8 +49,7 @@ class GenerateRequest(BaseModel):
     register_in_oracle: bool = Field(
         default=False,
         description=(
-            "Auto-register the generated service in the "
-            "Agent Oracle directories."
+            "Auto-record the generated service with configured discovery targets."
         ),
     )
 
@@ -88,8 +87,9 @@ class GenerationListResponse(BaseModel):
         "1. **llm.txt** — LLM-optimized documentation\n"
         "2. **OpenAPI 3.1 spec** — Machine-readable API schema\n"
         "3. **agent.json** — Agent discovery manifest\n"
-        "4. **Oracle registration** — (optional) Push to agent directories\n\n"
-        "The instant go-to-market engine for any tool an agent builds."
+        "4. **Oracle registration** — (optional) record controlled discovery "
+        "target metadata\n\n"
+        "This packages generated tools for governed discovery publication."
     ),
 )
 async def generate_protocol(

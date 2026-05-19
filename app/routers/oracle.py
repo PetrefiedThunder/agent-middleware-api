@@ -1,10 +1,8 @@
 """
-Agent Oracle Infiltration Router
-----------------------------------
-Crawl agent directories, index external API capabilities,
-register our API for inbound traffic, and monitor visibility.
+Agent Oracle discovery provenance router.
 
-This is SEO for the agentic web. If agents can't find you, you don't exist.
+Index external API capabilities, record controlled discovery targets, and
+monitor operator-visible publication provenance.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
