@@ -62,7 +62,7 @@ async def test_agent_ops_war_room_demo_proves_control_plane_loop(
     )
 
     assert result["status"] == "pass"
-    assert result["agent"]["wallet_id"].startswith("wallet-")
+    assert result["agent"]["wallet_id"].startswith("agt-")
     assert result["permit"]["permit_id"].startswith("permit-")
     assert result["invoke"]["receipt"]["outcome"] == "success"
     assert result["replay"]["same_receipt"] is True

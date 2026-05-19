@@ -84,7 +84,9 @@ def _matching_echo_debits(ledger: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         entry
         for entry in ledger["entries"]
-        if entry["service_category"] == "agent_comms"
+        if entry["action"] == "debit"
+        and entry["amount"] < 0
+        and entry["service_category"] == "agent_comms"
         and ALLOWED_TOOL in entry.get("description", "")
     ]
 
@@ -165,16 +167,20 @@ async def run_war_room(
     bootstrap_headers = {"X-API-Key": bootstrap_api_key}
     result: dict[str, Any] = {"status": "running"}
 
-    _register_war_room_tools()
+    tools_registered = False
     try:
         _line(emit, "discover platform surfaces")
         agent_manifest = await _get_json(client, "/.well-known/agent.json")
         tools_manifest = await _get_json(client, "/mcp/tools.json")
         openapi = await _get_json(client, "/openapi.json")
         _require(
-            any(tool["name"] == ALLOWED_TOOL for tool in tools_manifest["tools"]),
-            "war-room-echo missing from MCP tools discovery",
+            isinstance(tools_manifest.get("tools"), list),
+            f"unexpected MCP tools manifest: {tools_manifest}",
         )
+
+        _line(emit, "register local war-room tools")
+        _register_war_room_tools()
+        tools_registered = True
 
         _line(emit, "create sponsor wallet")
         sponsor = await _post_json(
@@ -370,8 +376,7 @@ async def run_war_room(
             },
             "sponsor": {"wallet_id": sponsor["wallet_id"]},
             "agent": {
-                "wallet_id": f"wallet-{wallet_id}",
-                "runtime_wallet_id": wallet_id,
+                "wallet_id": wallet_id,
                 "key_id": key["key_id"],
             },
             "permit": {
@@ -413,7 +418,8 @@ async def run_war_room(
         _line(emit, "control-plane loop proved")
         return result
     finally:
-        _unregister_war_room_tools()
+        if tools_registered:
+            _unregister_war_room_tools()
 
 
 def _configure_local_environment(
