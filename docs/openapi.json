@@ -10944,6 +10944,26 @@
         }
       }
     },
+    "/.well-known/awi.json": {
+      "get": {
+        "tags": [
+          "Agent Discovery"
+        ],
+        "summary": "AWI Discovery Manifest",
+        "description": "Returns the draft AWI-over-MCP manifest with action vocabulary, representation types, endpoints, safety capabilities, and known limits.",
+        "operationId": "get_awi_json__well_known_awi_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/.well-known/mcp/tools.json": {
       "get": {
         "tags": [

@@ -39,6 +39,46 @@ class AWIRepresentationType(str, Enum):
     TEXT_EXTRACTION = "text_extraction"
 
 
+class AWIActionTier(str, Enum):
+    """How directly an action expresses AWI semantic intent."""
+
+    SEMANTIC = "semantic"
+    COMPATIBILITY = "compatibility"
+
+
+class AWIActionStatus(str, Enum):
+    """Maturity status for AWI action contracts."""
+
+    STABLE = "stable"
+    PROVISIONAL = "provisional"
+    DEPRECATED = "deprecated"
+
+
+class AWIActionRiskLevel(str, Enum):
+    """Risk level for policy and human-approval decisions."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass
+class AWIActionDefinition:
+    """Public AWI action vocabulary entry."""
+
+    action: str
+    category: str
+    description: str
+    parameters: dict[str, dict[str, Any]]
+    required_preconditions: list[str]
+    postconditions: list[str]
+    estimated_cost: float
+    tier: str
+    status: str
+    risk_level: str
+    sensitive_parameters: list[str]
+
+
 @dataclass
 class AWISession:
     """An AWI session."""

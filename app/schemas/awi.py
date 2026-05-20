@@ -68,6 +68,29 @@ class AWIStandardAction(str, Enum):
     GET_REPRESENTATION = "get_representation"
 
 
+class AWIActionTier(str, Enum):
+    """How directly an action expresses AWI semantic intent."""
+
+    SEMANTIC = "semantic"
+    COMPATIBILITY = "compatibility"
+
+
+class AWIActionStatus(str, Enum):
+    """Maturity status for AWI action contracts."""
+
+    STABLE = "stable"
+    PROVISIONAL = "provisional"
+    DEPRECATED = "deprecated"
+
+
+class AWIActionRiskLevel(str, Enum):
+    """Risk level for policy and human-approval decisions."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class AWISessionCreate(BaseModel):
     """Request to create an AWI session."""
 
