@@ -9444,6 +9444,53 @@
         }
       }
     },
+    "/v1/receipts/{receipt_id}/evidence": {
+      "get": {
+        "tags": [
+          "Trust Receipts"
+        ],
+        "summary": "Get Receipt Evidence",
+        "operationId": "get_receipt_evidence_v1_receipts__receipt_id__evidence_get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "receipt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Receipt Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptEvidenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/receipts/verify": {
       "post": {
         "tags": [
@@ -20466,6 +20513,119 @@
         ],
         "title": "RecallRequest",
         "description": "Recall memories for an agent."
+      },
+      "ReceiptEvidenceCheck": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ],
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "ReceiptEvidenceCheck"
+      },
+      "ReceiptEvidenceResponse": {
+        "properties": {
+          "receipt_id": {
+            "type": "string",
+            "title": "Receipt Id"
+          },
+          "valid": {
+            "type": "boolean",
+            "title": "Valid"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReceiptEvidenceCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ReceiptResponse"
+          },
+          "permit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PermitResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "audit_event": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event"
+          },
+          "audit_chain": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditChainVerifyResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ledger_entry": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Entry"
+          }
+        },
+        "type": "object",
+        "required": [
+          "receipt_id",
+          "valid",
+          "checks",
+          "receipt"
+        ],
+        "title": "ReceiptEvidenceResponse"
       },
       "ReceiptListResponse": {
         "properties": {
