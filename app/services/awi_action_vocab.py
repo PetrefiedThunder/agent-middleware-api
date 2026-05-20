@@ -9,6 +9,7 @@ Provides a unified vocabulary of web actions that abstract away DOM manipulation
 - Actions can be composed into sequences for complex workflows
 """
 
+import re
 import uuid
 from typing import Any
 
@@ -19,6 +20,12 @@ from ..schemas.awi import (
     AWIActionTier,
     AWIStandardAction,
 )
+
+
+def _normalize_sensitive_key(value: str) -> str:
+    """Normalize parameter keys so redaction catches common casing variants."""
+    snake_case = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return snake_case.replace("-", "_").lower()
 
 
 class AWIActionDefinition:
@@ -159,6 +166,7 @@ class AWIActionVocabulary:
                         "type": "string",
                         "required": False,
                         "deprecated": True,
+                        "sensitive": True,
                     },
                     "password": {
                         "type": "string",
@@ -173,7 +181,7 @@ class AWIActionVocabulary:
                 estimated_cost=0.002,
                 status=AWIActionStatus.PROVISIONAL,
                 risk_level=AWIActionRiskLevel.HIGH,
-                sensitive_parameters=["password"],
+                sensitive_parameters=["username", "password"],
             ),
             AWIActionDefinition(
                 action=AWIStandardAction.LOGOUT,
@@ -340,12 +348,17 @@ class AWIActionVocabulary:
             "token",
         }
         if action_def:
-            sensitive.update(name.lower() for name in action_def.sensitive_parameters)
+            sensitive.update(
+                _normalize_sensitive_key(name)
+                for name in action_def.sensitive_parameters
+            )
 
         def redact(value: Any) -> Any:
             if isinstance(value, dict):
                 return {
-                    key: "[REDACTED]" if key.lower() in sensitive else redact(item)
+                    key: "[REDACTED]"
+                    if _normalize_sensitive_key(key) in sensitive
+                    else redact(item)
                     for key, item in value.items()
                 }
             if isinstance(value, list):

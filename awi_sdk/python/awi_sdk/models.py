@@ -73,10 +73,16 @@ class AWIActionDefinition:
     required_preconditions: list[str]
     postconditions: list[str]
     estimated_cost: float
-    tier: str
-    status: str
-    risk_level: str
+    tier: AWIActionTier | str
+    status: AWIActionStatus | str
+    risk_level: AWIActionRiskLevel | str
     sensitive_parameters: list[str]
+
+    def __post_init__(self) -> None:
+        """Coerce metadata literals into SDK enums for invalid-value detection."""
+        self.tier = AWIActionTier(self.tier)
+        self.status = AWIActionStatus(self.status)
+        self.risk_level = AWIActionRiskLevel(self.risk_level)
 
 
 @dataclass

@@ -493,18 +493,28 @@ class AWISessionManager:
                 intervention.steer_instructions
             )
 
-        await record_audit_event(
-            event="awi.human_intervention",
-            wallet_id=session.wallet_id,
-            tool="awi",
-            endpoint="/v1/awi/intervene",
-            auth_source=getattr(auth, "source", None),
-            key_id=getattr(auth, "key_id", None),
-            request_id=session.session_id,
-            ok=ok,
-            error=error,
-            metadata=metadata,
-        )
+        try:
+            await record_audit_event(
+                event="awi.human_intervention",
+                wallet_id=session.wallet_id,
+                tool="awi",
+                endpoint="/v1/awi/intervene",
+                auth_source=getattr(auth, "source", None),
+                key_id=getattr(auth, "key_id", None),
+                request_id=session.session_id,
+                ok=ok,
+                error=error,
+                metadata=metadata,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to audit AWI human intervention",
+                extra={
+                    "event": "awi.human_intervention",
+                    "session_id": session.session_id,
+                    "wallet_id": session.wallet_id,
+                },
+            )
 
     async def destroy_session(self, session_id: str) -> bool:
         """Destroy an AWI session."""

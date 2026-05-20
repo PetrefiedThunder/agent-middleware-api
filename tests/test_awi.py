@@ -34,7 +34,7 @@ from app.services.awi_representation import get_awi_representation
 from app.services.awi_task_queue import AWITaskQueue
 from app.services.awi_session import AWISessionManager
 from app.services.audit_log import list_audit_events
-from scripts.awi_representation_benchmark import run_benchmark
+from scripts.awi_representation_benchmark import _validate, run_benchmark
 
 HEADERS = {"X-API-Key": "test-key"}
 
@@ -74,13 +74,32 @@ class TestAWIActionVocabulary:
         assert login is not None
         assert login.status == AWIActionStatus.PROVISIONAL
         assert login.risk_level == AWIActionRiskLevel.HIGH
-        assert login.sensitive_parameters == ["password"]
+        assert login.sensitive_parameters == ["username", "password"]
         assert click is not None
         assert click.tier == AWIActionTier.COMPATIBILITY
         assert scroll is not None
         assert scroll.tier == AWIActionTier.COMPATIBILITY
         assert checkout is not None
         assert checkout.risk_level == AWIActionRiskLevel.HIGH
+
+    def test_redaction_normalizes_common_key_variants(self):
+        """Redaction catches snake, camel, and hyphenated sensitive keys."""
+        vocab = get_awi_vocabulary()
+
+        redacted = vocab.redact_parameters(
+            AWIStandardAction.CHECKOUT,
+            {
+                "paymentMethod": "card-token",
+                "nested": {
+                    "access-token": "access-secret",
+                    "safe": "visible",
+                },
+            },
+        )
+
+        assert redacted["paymentMethod"] == "[REDACTED]"
+        assert redacted["nested"]["access-token"] == "[REDACTED]"
+        assert redacted["nested"]["safe"] == "visible"
 
     def test_list_by_category(self):
         """Test listing actions by category."""
@@ -214,6 +233,15 @@ class TestAWIRepresentation:
         assert {row["representation_type"] for row in first["results"]} == {
             item.value for item in AWIRepresentationType
         }
+
+    @pytest.mark.anyio
+    async def test_local_representation_benchmark_rejects_duplicate_rows(self):
+        """Benchmark validation rejects duplicate or missing representation rows."""
+        report = await run_benchmark()
+        report["results"][1] = dict(report["results"][0])
+
+        with pytest.raises(SystemExit, match="duplicates"):
+            _validate(report)
 
 
 class TestAWITaskQueue:
@@ -391,10 +419,19 @@ class TestAWISessionManager:
         stored_session = await manager.get_session(session.session_id)
 
         assert result.status == "success"
+        assert result.parameters["username"] == "[REDACTED]"
         assert result.parameters["password"] == "[REDACTED]"
         assert secret not in json.dumps(result.model_dump(mode="json"))
+        assert "agent@example.com" not in json.dumps(result.model_dump(mode="json"))
         assert stored_session is not None
         assert secret not in json.dumps(stored_session.model_dump(mode="json"))
+        assert "agent@example.com" not in json.dumps(
+            stored_session.model_dump(mode="json")
+        )
+        assert (
+            stored_session.action_history[-1]["parameters"]["username"]
+            == "[REDACTED]"
+        )
         assert (
             stored_session.action_history[-1]["parameters"]["password"]
             == "[REDACTED]"
@@ -552,6 +589,35 @@ class TestAWISessionManager:
             stored_session.model_dump(mode="json")
         )
 
+    @pytest.mark.anyio
+    async def test_human_intervention_succeeds_when_audit_write_fails(
+        self, monkeypatch
+    ):
+        """Audit backend failure does not undo an already-authorized intervention."""
+
+        async def fail_audit(**kwargs):
+            raise RuntimeError("audit unavailable")
+
+        monkeypatch.setattr(awi_session_module, "record_audit_event", fail_audit)
+        manager = AWISessionManager()
+        session = await manager.create_session(
+            AWISessionCreate(target_url="https://example.com")
+        )
+
+        result = await manager.human_intervention(
+            AWIHumanIntervention(
+                session_id=session.session_id,
+                action="pause",
+                reason="operator pause",
+            )
+        )
+        stored_session = await manager.get_session(session.session_id)
+
+        assert result == {"success": True, "status": "paused"}
+        assert stored_session is not None
+        assert stored_session.status == AWISessionStatus.PAUSED
+        assert stored_session.paused_by_human is True
+
 
 class TestAWIRouter:
     """Test AWI router endpoints."""
@@ -647,7 +713,7 @@ class TestAWIRouter:
             )
             assert login["status"] == "provisional"
             assert login["risk_level"] == "high"
-            assert login["sensitive_parameters"] == ["password"]
+            assert login["sensitive_parameters"] == ["username", "password"]
             assert click["tier"] == "compatibility"
 
     @pytest.mark.anyio
@@ -665,10 +731,15 @@ class TestAWIRouter:
             assert data["profile"] == "awi-over-mcp"
             assert data["endpoints"]["execute"] == "/v1/awi/execute"
             assert data["safety_capabilities"]["sensitive_parameter_redaction"] is True
+            openapi = app.openapi()
+            manifest_schema = openapi["paths"]["/.well-known/awi.json"]["get"][
+                "responses"
+            ]["200"]["content"]["application/json"]["schema"]
             assert set(actions) == {action.value for action in AWIStandardAction}
             assert set(data["representation_types"]) == {
                 item.value for item in AWIRepresentationType
             }
+            assert manifest_schema == {"$ref": "#/components/schemas/AWIDiscoveryManifest"}
             assert actions["login"]["status"] == "provisional"
             assert actions["click_button"]["tier"] == "compatibility"
 

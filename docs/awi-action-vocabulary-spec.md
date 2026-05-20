@@ -45,8 +45,8 @@ This draft does not define:
 
 ## Implementation Status
 
-The action names, categories, parameters, preconditions, postconditions, and
-estimated costs in this draft mirror the current reference implementation.
+The action names, categories, parameters, preconditions, and postconditions in
+this draft mirror the current reference implementation.
 
 The safety language is a draft requirement for implementations, not a guarantee
 that `app/services/awi_action_vocab.py` enforces the behavior by itself. In this
@@ -92,6 +92,67 @@ Fields:
 | `representation_request` | no | Optional representation to return after execution. |
 | `dry_run` | no | If true, validate and preview without intended side effects. |
 
+## Action Response Shape
+
+The reference implementation returns a structured response from
+`POST /v1/awi/execute`.
+
+Successful execution:
+
+```json
+{
+  "execution_id": "awi-exec-id",
+  "session_id": "awi-session-id",
+  "action": "search_and_sort",
+  "status": "success",
+  "parameters": {
+    "query": "laptops"
+  },
+  "result": {
+    "success": true,
+    "results_count": 12
+  },
+  "representation": null,
+  "duration_ms": 14
+}
+```
+
+Validation or execution failure:
+
+```json
+{
+  "execution_id": "awi-exec-id",
+  "session_id": "awi-session-id",
+  "action": "login",
+  "status": "error",
+  "parameters": {
+    "username": "[REDACTED]",
+    "password": "[REDACTED]"
+  },
+  "error": "Missing required login parameters: credential_handle or username+password"
+}
+```
+
+Response fields:
+
+| Field | Meaning |
+| --- | --- |
+| `execution_id` | Unique execution identifier. |
+| `session_id` | Stateful AWI session identifier. |
+| `action` | Action attempted. |
+| `status` | Execution status such as `success`, `error`, `paused`, `passkey_required`, or `max_steps_reached`. |
+| `parameters` | Request parameters after sensitive-parameter redaction. |
+| `result` | Action-specific result payload when execution runs. |
+| `error` | Clear failure reason when `status` is not successful. |
+| `new_state` | Optional state snapshot after execution. |
+| `representation` | Optional representation generated when `representation_request` is set. |
+| `duration_ms` | Runtime duration in milliseconds when execution runs. |
+| `cost_estimate` | Present for dry-run previews when supported. |
+
+Implementations should return a clear error status when validation fails or a
+precondition is unmet. HTTP status codes may still be `200` when the request was
+syntactically valid and the action-level status carries the execution outcome.
+
 ## Representation Types
 
 The current representation vocabulary is:
@@ -134,6 +195,24 @@ The reference implementation exposes these metadata fields for each action:
 
 Default actions are `semantic`, `stable`, and `low` risk unless stated
 otherwise below.
+
+## Preconditions and Postconditions
+
+Preconditions and postconditions are declarative predicates over session state.
+They may be represented as boolean session flags, computed predicates, or
+site-provided capability metadata, but they are not caller-controlled bypasses.
+
+The executor is responsible for checking preconditions before side effects. If a
+precondition is unmet, the executor should reject the action with a clear
+diagnostic or request a remedy such as navigation, login, or human approval.
+Callers may use preconditions for planning, but caller assertions do not satisfy
+the contract by themselves.
+
+Postconditions describe the expected state after successful execution. If a
+postcondition is not achieved, the executor should return a failure status and
+diagnostic information rather than silently treating the action as successful.
+For high-risk actions such as `checkout`, and runtime-sensitive `fill_form`
+requests, authorization and safety decisions should be surfaced in the response.
 
 ## Action Definitions
 
@@ -250,7 +329,12 @@ Postconditions:
 
 Safety requirement: if fields contain regulated, personal, credential, or
 payment data, implementations should treat the request as high risk even though
-the action name is general.
+the action name is general. `risk_level: medium` is baseline metadata only.
+Executors should inspect `fields`, site/form metadata, and caller-provided field
+sensitivity hints, then elevate runtime risk to `high` for sensitive field names
+or values such as `password`, `pass`, `pwd`, `ssn`, `social_security`,
+`credit_card`, `cc_num`, `card_number`, `cvv`, `cvc`, `routing`, `account`,
+`dob`, `date_of_birth`, or financial-context email fields.
 
 ### `login`
 
@@ -264,6 +348,7 @@ Risk level: `high`
 
 Sensitive parameters:
 
+- `username`: string
 - `password`: string
 
 Accepted credential shapes:
@@ -287,7 +372,8 @@ Postconditions:
 Safety requirement: credentials must not be logged in plaintext, included in
 receipts, or exposed in durable state. `credential_handle` is the preferred
 shape; direct `username` and `password` parameters are retained only for v0.1
-compatibility and must be redacted before storage or response.
+compatibility and must be redacted before storage or response because usernames
+are often email addresses or other personally identifying values.
 
 ### `logout`
 

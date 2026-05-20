@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..core.config import get_settings
-from ..schemas.awi import AWIRepresentationType
+from ..schemas.awi import AWIDiscoveryManifest, AWIRepresentationType
 from ..services.awi_action_vocab import get_awi_vocabulary
 
 router = APIRouter(prefix="", tags=["Agent Discovery"])
@@ -227,6 +227,7 @@ async def get_agent_json(request: Request):
 
 @router.get(
     "/.well-known/awi.json",
+    response_model=AWIDiscoveryManifest,
     summary="AWI Discovery Manifest",
     description=(
         "Returns the draft AWI-over-MCP manifest with action vocabulary, "

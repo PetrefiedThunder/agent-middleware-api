@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -128,11 +129,18 @@ async def run_benchmark() -> dict[str, Any]:
 
 def _validate(report: dict[str, Any]) -> None:
     results = report["results"]
-    observed = {item["representation_type"] for item in results}
+    counts = Counter(item["representation_type"] for item in results)
+    observed = set(counts)
     expected = {item.value for item in AWIRepresentationType}
     missing = sorted(expected - observed)
-    if missing:
-        raise SystemExit(f"missing representation benchmark rows: {missing}")
+    unexpected = sorted(observed - expected)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    if len(results) != len(expected) or missing or unexpected or duplicates:
+        raise SystemExit(
+            "invalid representation benchmark rows: "
+            f"expected_count={len(expected)} actual_count={len(results)} "
+            f"missing={missing} unexpected={unexpected} duplicates={duplicates}"
+        )
     for item in results:
         if item["size_bytes"] <= 0:
             raise SystemExit(f"non-positive size for {item['representation_type']}")

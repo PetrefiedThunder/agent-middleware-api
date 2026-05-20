@@ -10957,7 +10957,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AWIDiscoveryManifest"
+                }
               }
             }
           }
@@ -11289,6 +11291,180 @@
         "title": "AWIActionCategory",
         "description": "Categories of standardized AWI actions."
       },
+      "AWIActionDefinitionResponse": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AWIStandardAction"
+          },
+          "category": {
+            "$ref": "#/components/schemas/AWIActionCategory"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Parameters"
+          },
+          "required_preconditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Preconditions"
+          },
+          "postconditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Postconditions"
+          },
+          "estimated_cost": {
+            "type": "number",
+            "title": "Estimated Cost"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/AWIActionTier"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AWIActionStatus"
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/AWIActionRiskLevel"
+          },
+          "sensitive_parameters": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sensitive Parameters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "category",
+          "description",
+          "parameters",
+          "required_preconditions",
+          "postconditions",
+          "estimated_cost",
+          "tier",
+          "status",
+          "risk_level"
+        ],
+        "title": "AWIActionDefinitionResponse",
+        "description": "Public action vocabulary entry exposed by AWI discovery surfaces."
+      },
+      "AWIActionRiskLevel": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "AWIActionRiskLevel",
+        "description": "Risk level for policy and human-approval decisions."
+      },
+      "AWIActionStatus": {
+        "type": "string",
+        "enum": [
+          "stable",
+          "provisional",
+          "deprecated"
+        ],
+        "title": "AWIActionStatus",
+        "description": "Maturity status for AWI action contracts."
+      },
+      "AWIActionTier": {
+        "type": "string",
+        "enum": [
+          "semantic",
+          "compatibility"
+        ],
+        "title": "AWIActionTier",
+        "description": "How directly an action expresses AWI semantic intent."
+      },
+      "AWIDiscoveryManifest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version"
+          },
+          "awi_version": {
+            "type": "string",
+            "title": "Awi Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "profile": {
+            "type": "string",
+            "title": "Profile"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/AWIManifestTransport"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "endpoints": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Endpoints"
+          },
+          "representation_types": {
+            "items": {
+              "$ref": "#/components/schemas/AWIRepresentationType"
+            },
+            "type": "array",
+            "title": "Representation Types"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AWIActionDefinitionResponse"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "safety_capabilities": {
+            "$ref": "#/components/schemas/AWIManifestSafetyCapabilities"
+          },
+          "known_limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Known Limitations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schema_version",
+          "awi_version",
+          "status",
+          "profile",
+          "transport",
+          "description",
+          "endpoints",
+          "representation_types",
+          "actions",
+          "safety_capabilities",
+          "known_limitations"
+        ],
+        "title": "AWIDiscoveryManifest",
+        "description": "Draft AWI-over-MCP discovery manifest."
+      },
       "AWIEndpoint": {
         "properties": {
           "path": {
@@ -11512,6 +11688,72 @@
         ],
         "title": "AWIHumanIntervention",
         "description": "Request human intervention in an AWI session."
+      },
+      "AWIManifestSafetyCapabilities": {
+        "properties": {
+          "wallet_scoped_authorization": {
+            "type": "boolean",
+            "title": "Wallet Scoped Authorization"
+          },
+          "human_intervention": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Human Intervention"
+          },
+          "passkey_high_risk_actions": {
+            "type": "boolean",
+            "title": "Passkey High Risk Actions"
+          },
+          "signed_permits": {
+            "type": "boolean",
+            "title": "Signed Permits"
+          },
+          "tamper_evident_audit_chain": {
+            "type": "boolean",
+            "title": "Tamper Evident Audit Chain"
+          },
+          "sensitive_parameter_redaction": {
+            "type": "boolean",
+            "title": "Sensitive Parameter Redaction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "wallet_scoped_authorization",
+          "human_intervention",
+          "passkey_high_risk_actions",
+          "signed_permits",
+          "tamper_evident_audit_chain",
+          "sensitive_parameter_redaction"
+        ],
+        "title": "AWIManifestSafetyCapabilities",
+        "description": "Safety capabilities advertised by the AWI discovery manifest."
+      },
+      "AWIManifestTransport": {
+        "properties": {
+          "primary": {
+            "type": "string",
+            "title": "Primary"
+          },
+          "mcp_compatible": {
+            "type": "boolean",
+            "title": "Mcp Compatible"
+          },
+          "mcp_manifest": {
+            "type": "string",
+            "title": "Mcp Manifest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "primary",
+          "mcp_compatible",
+          "mcp_manifest"
+        ],
+        "title": "AWIManifestTransport",
+        "description": "Transport metadata for the AWI discovery manifest."
       },
       "AWIRepresentationRequest": {
         "properties": {
