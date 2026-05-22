@@ -49,6 +49,7 @@ from .metering import (
     DEFAULT_PRICING,
     AgentMoney,
     InsufficientFundsError,
+    KYCVerificationRequiredError,
     WalletNotFoundError,
     get_agent_money,
 )
@@ -125,6 +126,7 @@ __all__ = [
     "get_agent_money",
     "DEFAULT_PRICING",
     "InsufficientFundsError",
+    "KYCVerificationRequiredError",
     "WalletNotFoundError",
     # evidence
     "authorize_receipt_access",

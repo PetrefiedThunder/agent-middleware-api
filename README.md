@@ -16,7 +16,7 @@
 
 **Agent Middleware API is a protocol-neutral trust plane for autonomous agent actions.** It lets agents discover tools, receive bounded authority, invoke tools through governed adapters, meter spend, generate signed receipts, and produce tamper-evident audit trails.
 
-### Core platform vs. example workloads
+## Core platform vs. example workloads
 
 The product is the trust plane. Everything else is a workload that exercises it.
 
