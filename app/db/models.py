@@ -635,6 +635,9 @@ class ControlPlaneAuditEventModel(SQLModel, table=True):
 
     event_id: str = Field(primary_key=True, max_length=50)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    # Per-wallet monotonic sequence: a stable ordering key for the hash chain so
+    # equal/clock-skewed created_at values can't reorder the chain on read.
+    seq: int = Field(default=0, index=True)
     event: str = Field(max_length=128, index=True)
     wallet_id: Optional[str] = Field(default=None, max_length=64, index=True)
     tool: Optional[str] = Field(default=None, max_length=128, index=True)
@@ -708,6 +711,9 @@ class PermitModel(SQLModel, table=True):
     key_id: str = Field(max_length=64, foreign_key="signing_keys.key_id", index=True)
     issued_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     revoked_at: Optional[datetime] = Field(default=None)
+    # Last time budget was reserved/released; used to distinguish a live
+    # in-flight reservation from one orphaned by a crash during reconciliation.
+    updated_at: Optional[datetime] = Field(default=None, index=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

@@ -153,6 +153,18 @@ async def lifespan(app: FastAPI):
                             telemetry_events_removed=removed,
                         )
 
+                # Repair permit budget reservations orphaned by a crash between
+                # reserve and the receipt write (only touches idle permits).
+                if settings.DATABASE_URL:
+                    from .services.permits import get_permit_service
+
+                    corrected = await get_permit_service().reconcile_budgets()
+                    if corrected:
+                        logger.info(
+                            "cleanup_completed",
+                            permit_budgets_reconciled=corrected,
+                        )
+
             except asyncio.CancelledError:
                 logger.info("cleanup_task_stopped")
                 break

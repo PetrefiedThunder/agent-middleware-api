@@ -19,6 +19,36 @@ async def client():
 
 
 @pytest.mark.anyio
+async def test_audit_chain_orders_by_monotonic_sequence(client, clean_database):
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+
+    # Rapid same-wallet events can share a created_at timestamp; the chain must
+    # still order deterministically and verify.
+    for n in range(12):
+        await record_audit_event(event="trust.seq", wallet_id=wallet_id, metadata={"n": n})
+
+    verify_resp = await client.post(
+        "/v1/audit/verify-chain",
+        json={"wallet_id": wallet_id},
+        headers=provisioned["agent_headers"],
+    )
+    assert verify_resp.status_code == 200
+    assert verify_resp.json()["valid"] is True
+    assert verify_resp.json()["checked_events"] == 12
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(ControlPlaneAuditEventModel.seq)
+            .where(ControlPlaneAuditEventModel.wallet_id == wallet_id)
+            .order_by(ControlPlaneAuditEventModel.seq)
+        )
+        seqs = [row[0] for row in result.all()]
+    assert seqs == list(range(1, 13))
+
+
+@pytest.mark.anyio
 async def test_audit_chain_verifies_and_detects_tampering(client, clean_database):
     provisioned = await provision_agent_wallet(client)
     wallet_id = provisioned["agent_wallet_id"]

@@ -553,7 +553,8 @@ async def _execute_registered_tool(
         wallet_id=wallet_id,
         tool_name=tool_name,
         service_category=category.value,
-        estimated_cost=estimated_cost,
+        estimated_cost=registered_cost,
+        daily_spend_used=await money.get_daily_spend(wallet_id),
         simulation=simulation,
     )
     policy_metadata = {

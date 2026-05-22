@@ -55,6 +55,65 @@ async def test_signed_permit_verifies_for_wallet_tool_and_budget(
 
 
 @pytest.mark.anyio
+async def test_reconcile_budgets_repairs_orphaned_reservation(client, clean_database):
+    provisioned = await provision_agent_wallet(client)
+    permit = await create_tool_permit(
+        client,
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        tool_name="trust-echo",
+    )
+
+    factory = get_session_factory()
+    # Simulate a crash that reserved budget but never produced a success
+    # receipt, and make the permit look idle (old updated_at).
+    async with factory() as session:
+        model = await session.get(PermitModel, permit["permit_id"])
+        model.spent_credits = Decimal("9")
+        model.updated_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        session.add(model)
+        await session.commit()
+
+    corrected = await get_permit_service().reconcile_budgets(idle_seconds=900)
+    assert corrected == 1
+
+    async with factory() as session:
+        model = await session.get(PermitModel, permit["permit_id"])
+        # No successful receipts exist, so the orphaned reservation is cleared.
+        assert model.spent_credits == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_reconcile_budgets_leaves_live_reservation_untouched(
+    client,
+    clean_database,
+):
+    provisioned = await provision_agent_wallet(client)
+    permit = await create_tool_permit(
+        client,
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        tool_name="trust-echo",
+    )
+
+    factory = get_session_factory()
+    # A reservation made just now (recent updated_at) is in-flight, not orphaned.
+    async with factory() as session:
+        model = await session.get(PermitModel, permit["permit_id"])
+        model.spent_credits = Decimal("9")
+        model.updated_at = datetime.now(timezone.utc)
+        session.add(model)
+        await session.commit()
+
+    corrected = await get_permit_service().reconcile_budgets(idle_seconds=900)
+    assert corrected == 0
+
+    async with factory() as session:
+        model = await session.get(PermitModel, permit["permit_id"])
+        assert model.spent_credits == Decimal("9")
+
+
+@pytest.mark.anyio
 async def test_verify_does_not_leak_permit_to_unauthorized_caller(
     client,
     clean_database,

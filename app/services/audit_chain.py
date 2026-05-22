@@ -52,11 +52,17 @@ async def sign_audit_model(model: ControlPlaneAuditEventModel) -> None:
         result = await session.execute(
             select(ControlPlaneAuditEventModel)
             .where(ControlPlaneAuditEventModel.wallet_id == model.wallet_id)
-            .order_by(desc(ControlPlaneAuditEventModel.created_at))
+            .order_by(
+                desc(ControlPlaneAuditEventModel.seq),
+                desc(ControlPlaneAuditEventModel.created_at),
+            )
             .limit(1)
         )
         previous = result.scalar_one_or_none()
     previous_hash = previous.chain_hash if previous else None
+    # Monotonic per-wallet ordering key. seq is deliberately NOT part of the
+    # signed payload, so events signed before this column existed still verify.
+    model.seq = (previous.seq + 1) if previous else 1
     payload = audit_payload(
         event_id=model.event_id,
         created_at=model.created_at,
@@ -136,7 +142,8 @@ async def verify_audit_chain(
         return AuditChainVerification(True, checked, first_event_id, last_event_id)
 
     stmt = select(ControlPlaneAuditEventModel).order_by(
-        asc(ControlPlaneAuditEventModel.created_at)
+        asc(ControlPlaneAuditEventModel.seq),
+        asc(ControlPlaneAuditEventModel.created_at),
     )
     if wallet_id:
         stmt = stmt.where(ControlPlaneAuditEventModel.wallet_id == wallet_id)
