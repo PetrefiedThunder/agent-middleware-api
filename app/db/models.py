@@ -661,6 +661,22 @@ class ControlPlaneAuditEventModel(SQLModel, table=True):
     )
 
 
+class AuditChainHeadModel(SQLModel, table=True):
+    """Per-wallet head pointer for the audit hash chain.
+
+    A single row per wallet, locked FOR UPDATE during an append, serializes
+    concurrent writers so they cannot read the same predecessor and fork the
+    chain. ``wallet_key`` is the wallet id, or "" for wallet-less events.
+    """
+
+    __tablename__ = "audit_chain_heads"
+
+    wallet_key: str = Field(primary_key=True, max_length=64)
+    last_chain_hash: Optional[str] = Field(default=None, max_length=64)
+    last_seq: int = Field(default=0)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class SigningKeyModel(SQLModel, table=True):
     """Public signing-key metadata for permits, receipts, and audit events."""
 
