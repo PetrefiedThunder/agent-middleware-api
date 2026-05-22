@@ -141,7 +141,11 @@ async def append_chained_audit_event(model: ControlPlaneAuditEventModel) -> None
     # it is pure crypto (no nested DB write / lock).
     key = await get_signing_key_service().ensure_active_key()
     factory = get_session_factory()
-    attempts = 25
+    # Optimistic-concurrency retry budget. Audit events are integrity records
+    # and must not be dropped, so the budget is generous; backoff is a small
+    # flat jitter (not growing) so contended writers reconverge quickly without
+    # inflating tail latency on slow/CPU-bound runners.
+    attempts = 64
     for attempt in range(attempts):
         session = factory()
         try:
@@ -191,7 +195,7 @@ async def append_chained_audit_event(model: ControlPlaneAuditEventModel) -> None
         except (_HeadConflict, IntegrityError, OperationalError):
             if attempt == attempts - 1:
                 raise
-            await asyncio.sleep(random.uniform(0.005, 0.03) * (attempt + 1))
+            await asyncio.sleep(random.uniform(0.002, 0.02))
         finally:
             await session.close()
     raise RuntimeError("audit_chain_head_contention")

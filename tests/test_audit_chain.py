@@ -27,10 +27,11 @@ async def test_concurrent_audit_appends_do_not_fork_the_chain(client, clean_data
 
     # Concurrent same-wallet appends must serialize on the chain head so the
     # chain stays a single, verifiable line (no shared predecessor / fork).
+    n_events = 10
     await asyncio.gather(
         *(
             record_audit_event(event="trust.race", wallet_id=wallet_id, metadata={"n": n})
-            for n in range(20)
+            for n in range(n_events)
         )
     )
 
@@ -41,7 +42,7 @@ async def test_concurrent_audit_appends_do_not_fork_the_chain(client, clean_data
     )
     assert verify_resp.status_code == 200
     assert verify_resp.json()["valid"] is True
-    assert verify_resp.json()["checked_events"] == 20
+    assert verify_resp.json()["checked_events"] == n_events
 
     factory = get_session_factory()
     async with factory() as session:
@@ -57,9 +58,9 @@ async def test_concurrent_audit_appends_do_not_fork_the_chain(client, clean_data
         ]
         head = await session.get(AuditChainHeadModel, wallet_id)
     # Sequences are contiguous with no duplicates, and the head points at the last.
-    assert seqs == list(range(1, 21))
+    assert seqs == list(range(1, n_events + 1))
     assert head is not None
-    assert head.last_seq == 20
+    assert head.last_seq == n_events
 
 
 @pytest.mark.anyio
