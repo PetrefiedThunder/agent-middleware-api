@@ -26,11 +26,18 @@ from .adapters import (
 from .audit_chain import (
     AuditChainVerification,
     audit_payload,
+    count_audit_events,
+    list_audit_events,
     record_audit_event,
     sign_audit_model,
+    summarize_audit_events,
     verify_audit_chain,
 )
-from .evidence import build_evidence_bundle, build_receipt_evidence
+from .evidence import (
+    authorize_receipt_access,
+    build_evidence_bundle,
+    build_receipt_evidence,
+)
 from .idempotency import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
@@ -39,6 +46,7 @@ from .idempotency import (
     get_idempotency_service,
 )
 from .metering import (
+    DEFAULT_PRICING,
     AgentMoney,
     InsufficientFundsError,
     WalletNotFoundError,
@@ -49,6 +57,7 @@ from .permits import (
     PermitService,
     PermitValidation,
     get_permit_service,
+    permit_model_to_response,
 )
 from .policy import (
     PolicyDecision,
@@ -59,6 +68,13 @@ from .policy import (
     record_governed_action,
 )
 from .receipts import ReceiptError, ReceiptService, get_receipt_service
+from .signing import (
+    SigningKeyError,
+    SigningKeyService,
+    canonical_json,
+    get_signing_key_service,
+    sha256_hex,
+)
 
 __all__ = [
     # adapters
@@ -71,10 +87,17 @@ __all__ = [
     "PermitValidation",
     "PermitError",
     "get_permit_service",
+    "permit_model_to_response",
     # receipts
     "ReceiptService",
     "ReceiptError",
     "get_receipt_service",
+    # signing (cryptographic root)
+    "SigningKeyService",
+    "SigningKeyError",
+    "get_signing_key_service",
+    "canonical_json",
+    "sha256_hex",
     # idempotency
     "IdempotencyService",
     "IdempotencyReplay",
@@ -87,6 +110,9 @@ __all__ = [
     "audit_payload",
     "AuditChainVerification",
     "record_audit_event",
+    "list_audit_events",
+    "count_audit_events",
+    "summarize_audit_events",
     # policy
     "evaluate_tool_invocation",
     "evaluate_governed_action",
@@ -97,9 +123,11 @@ __all__ = [
     # metering
     "AgentMoney",
     "get_agent_money",
+    "DEFAULT_PRICING",
     "InsufficientFundsError",
     "WalletNotFoundError",
     # evidence
+    "authorize_receipt_access",
     "build_receipt_evidence",
     "build_evidence_bundle",
 ]

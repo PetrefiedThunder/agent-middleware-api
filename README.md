@@ -35,11 +35,15 @@ The frozen product spine is:
 permits -> governed invocation -> idempotency -> wallet ledger (metering) -> receipts -> audit verification -> discovery
 ```
 
-`app/trust/` is the package boundary for that spine: `permits`, `receipts`,
-`audit_chain`, `idempotency`, `policy`, `metering`, `evidence`, and the
-protocol-neutral `adapters` (`GovernedInvocationAdapter`). MCP is the first
-adapter (`McpGovernedAdapter`); other protocols (AWI, browser, WebMCP) can be
-added by implementing the same interface.
+`app/trust/` is the package boundary for that spine: `signing`, `permits`,
+`receipts`, `audit_chain`, `idempotency`, `policy`, `metering`, `evidence`, and
+the protocol-neutral `adapters` (`GovernedInvocationAdapter`). The core trust
+routers consume the spine through this facade, and an architectural test
+(`tests/test_trust_boundary.py`) enforces that the core depends only inward —
+never on routers or example workloads. MCP is the first adapter
+(`McpGovernedAdapter`) and the live `/mcp` request path runs through it; other
+protocols (AWI, browser, WebMCP) can be added by implementing the same
+interface.
 
 **Product:** Agent Middleware API is narrowing around an MCP governance and metering layer for agent tool calls. The current spine is wallet-scoped auth, billing, MCP invocation, signed permits, signed receipts, replay protection, and audit.
 

@@ -10,9 +10,8 @@ from app.schemas.trust import (
     ReceiptVerifyRequest,
     ReceiptVerifyResponse,
 )
-from app.services.permits import get_permit_service
-from app.services.receipts import get_receipt_service
-from app.trust.evidence import build_receipt_evidence
+from app.trust import get_permit_service, get_receipt_service
+from app.trust.evidence import authorize_receipt_access, build_receipt_evidence
 
 router = APIRouter(prefix="/v1/receipts", tags=["Trust Receipts"])
 
@@ -41,21 +40,6 @@ async def _authorize_receipt_list(
         auth.require_wallet_access(wallet_id)
         return
     auth.require_bootstrap_admin()
-
-
-async def _authorize_receipt_access(
-    *,
-    auth: AuthContext,
-    receipt: ReceiptResponse,
-) -> None:
-    if auth.is_bootstrap_admin:
-        return
-    if auth.wallet_id == receipt.wallet_id:
-        return
-    permit = await get_permit_service().get_permit(receipt.permit_id)
-    if permit and auth.wallet_id in {permit.issuer_wallet_id, permit.subject_wallet_id}:
-        return
-    auth.require_wallet_access(receipt.wallet_id)
 
 
 @router.get("", response_model=ReceiptListResponse)
@@ -126,7 +110,7 @@ async def get_receipt(
     receipt = await get_receipt_service().get_receipt(receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="receipt_not_found")
-    await _authorize_receipt_access(auth=auth, receipt=receipt)
+    await authorize_receipt_access(auth=auth, receipt=receipt)
     return receipt
 
 
@@ -138,7 +122,7 @@ async def get_receipt_evidence(
     receipt = await get_receipt_service().get_receipt(receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="receipt_not_found")
-    await _authorize_receipt_access(auth=auth, receipt=receipt)
+    await authorize_receipt_access(auth=auth, receipt=receipt)
     return await build_receipt_evidence(receipt=receipt, auth=auth)
 
 
@@ -151,7 +135,7 @@ async def verify_receipt(
         request.receipt_id
     )
     if receipt:
-        await _authorize_receipt_access(auth=auth, receipt=receipt)
+        await authorize_receipt_access(auth=auth, receipt=receipt)
     else:
         auth.require_bootstrap_admin()
     return ReceiptVerifyResponse(valid=valid, reason=reason, receipt=receipt)

@@ -16,6 +16,7 @@ import app.services.idempotency as idempotency
 import app.services.permits as permits
 import app.services.policies as policies
 import app.services.receipts as receipts
+import app.services.signing_keys as signing_keys
 import app.trust as trust
 
 
@@ -62,6 +63,14 @@ def test_metering_facade_matches_service():
     assert trust.get_agent_money is agent_money.get_agent_money
     assert trust.InsufficientFundsError is agent_money.InsufficientFundsError
     assert trust.WalletNotFoundError is agent_money.WalletNotFoundError
+
+
+def test_signing_facade_matches_service():
+    assert trust.SigningKeyService is signing_keys.SigningKeyService
+    assert trust.get_signing_key_service is signing_keys.get_signing_key_service
+    assert trust.SigningKeyError is signing_keys.SigningKeyError
+    assert trust.canonical_json is signing_keys.canonical_json
+    assert trust.sha256_hex is signing_keys.sha256_hex
 
 
 def test_adapter_seam_is_exposed():

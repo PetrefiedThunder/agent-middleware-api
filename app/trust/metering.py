@@ -7,6 +7,7 @@ Re-exports the canonical wallet/ledger engine from
 from __future__ import annotations
 
 from app.services.agent_money import (
+    DEFAULT_PRICING,
     AgentMoney,
     InsufficientFundsError,
     KYCVerificationRequiredError,
@@ -15,6 +16,7 @@ from app.services.agent_money import (
 )
 
 __all__ = [
+    "DEFAULT_PRICING",
     "AgentMoney",
     "InsufficientFundsError",
     "KYCVerificationRequiredError",

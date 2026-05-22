@@ -172,6 +172,30 @@ async def _refund_exists(
         return result.scalar_one_or_none() is not None
 
 
+async def authorize_receipt_access(
+    *,
+    auth: AuthContext,
+    receipt: ReceiptResponse,
+) -> None:
+    """Authorize read access to a receipt and its evidence.
+
+    Bootstrap admins and the receipt's own wallet always pass; otherwise the
+    caller must be the permit's issuer or subject wallet, or hold explicit
+    access to the receipt's wallet.
+    """
+    if auth.is_bootstrap_admin:
+        return
+    if auth.wallet_id == receipt.wallet_id:
+        return
+    permit = await get_permit_service().get_permit(receipt.permit_id)
+    if permit and auth.wallet_id in {
+        permit.issuer_wallet_id,
+        permit.subject_wallet_id,
+    }:
+        return
+    auth.require_wallet_access(receipt.wallet_id)
+
+
 async def build_receipt_evidence(
     *,
     receipt: ReceiptResponse,
@@ -248,6 +272,7 @@ async def build_receipt_evidence(
         checks.append(
             _check("audit_event_linkage", False, reason="audit_event_id_missing")
         )
+        checks.append(_skipped("request_hash", "audit_event_id_missing"))
     else:
         audit_event = await _get_audit_event_model(
             audit_event_id=receipt.audit_event_id,
@@ -257,10 +282,12 @@ async def build_receipt_evidence(
             checks.append(
                 _check("audit_event_linkage", False, reason="audit_event_not_found")
             )
+            checks.append(_skipped("request_hash", "audit_event_not_found"))
         else:
             audit_event_response = _audit_event_response(audit_event)
             audit_event_payload = audit_event_response.model_dump(mode="json")
             metadata = audit_event_response.metadata
+            request_hash_ok = metadata.get("request_hash") == receipt.request_hash
             linkage_failures = []
             if audit_event.wallet_id != receipt.wallet_id:
                 linkage_failures.append("audit_wallet_mismatch")
@@ -268,7 +295,7 @@ async def build_receipt_evidence(
                 linkage_failures.append("audit_tool_mismatch")
             if metadata.get("permit_id") != receipt.permit_id:
                 linkage_failures.append("audit_permit_mismatch")
-            if metadata.get("request_hash") != receipt.request_hash:
+            if not request_hash_ok:
                 linkage_failures.append("audit_request_hash_mismatch")
             if receipt.ledger_entry_id and (
                 metadata.get("ledger_entry_id") != receipt.ledger_entry_id
@@ -280,6 +307,19 @@ async def build_receipt_evidence(
                     not linkage_failures,
                     reason=";".join(linkage_failures) if linkage_failures else None,
                     details={"audit_event_id": receipt.audit_event_id},
+                )
+            )
+            # First-class request-hash check so the flat evidence bundle and the
+            # detailed checks list never disagree about request integrity.
+            checks.append(
+                _check(
+                    "request_hash",
+                    request_hash_ok,
+                    reason="audit_request_hash_mismatch",
+                    details={
+                        "receipt_request_hash": receipt.request_hash,
+                        "audit_request_hash": metadata.get("request_hash"),
+                    },
                 )
             )
 
@@ -376,20 +416,11 @@ def build_evidence_bundle(evidence: ReceiptEvidenceResponse) -> EvidenceBundleRe
     """Map the detailed evidence into the flat buyer-facing artifact."""
     checks_by_name = {check.name: check for check in evidence.checks}
 
-    receipt = evidence.receipt
-    audit_meta = (evidence.audit_event or {}).get("metadata") or {}
-    if evidence.audit_event is None:
-        request_hash = "skipped"
-    elif audit_meta.get("request_hash") == receipt.request_hash:
-        request_hash = "ok"
-    else:
-        request_hash = "request_hash_mismatch"
-
     verification = {
         "receipt_signature": _verification_status(checks_by_name, "receipt_signature"),
         "permit_signature": _verification_status(checks_by_name, "permit_signature"),
         "audit_chain": _verification_status(checks_by_name, "audit_chain"),
-        "request_hash": request_hash,
+        "request_hash": _verification_status(checks_by_name, "request_hash"),
     }
 
     return EvidenceBundleResponse(
@@ -404,6 +435,7 @@ def build_evidence_bundle(evidence: ReceiptEvidenceResponse) -> EvidenceBundleRe
 
 
 __all__ = [
+    "authorize_receipt_access",
     "build_receipt_evidence",
     "build_evidence_bundle",
 ]

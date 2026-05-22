@@ -88,7 +88,6 @@ class McpGovernedAdapter(GovernedInvocationAdapter):
         auth: AuthContext = context["auth"]
         money: AgentMoney = context["money"]
         idempotency_key: str | None = context.get("idempotency_key")
-        request_payload: dict[str, Any] | None = context.get("request_payload")
 
         params = raw.get("params", raw)
         mcp_context = params.get("mcpContext", {}) or {}
@@ -104,41 +103,34 @@ class McpGovernedAdapter(GovernedInvocationAdapter):
             transport=context.get("transport", "adapter"),
             endpoint=context.get("endpoint", "/mcp/messages"),
             request_id=context.get("request_id"),
-            request_payload=request_payload if request_payload is not None else raw,
+            request_payload=context.get("request_payload"),
         )
 
     async def invoke(self, request: GovernedRequest) -> GovernedResult:
+        """Run the governed pipeline.
+
+        Governance failures (denials, insufficient funds, tool errors) are
+        raised as the pipeline's typed exceptions and propagate to the caller,
+        which owns the protocol-specific error envelope. This keeps a single
+        source of truth for both the happy path and the error semantics.
+        """
         # Lazy import: the MCP router pulls in many services at import time, and
         # this keeps the trust package import-light and free of cycles.
-        from app.routers.mcp import (
-            GovernedToolError,
-            ToolPermissionDenied,
-            _execute_registered_tool,
-        )
+        from app.routers.mcp import _execute_registered_tool
 
-        try:
-            raw = await _execute_registered_tool(
-                tool_name=request.tool_name,
-                arguments=request.arguments,
-                wallet_id=request.wallet_id,
-                auth=request.auth,
-                money=request.money,
-                transport=request.transport,
-                endpoint=request.endpoint,
-                request_id=request.request_id,
-                permit_id=request.permit_id,
-                idempotency_key=request.idempotency_key,
-                request_payload=request.request_payload,
-            )
-        except (ToolPermissionDenied, GovernedToolError) as exc:
-            return GovernedResult(
-                protocol=self.protocol,
-                raw={},
-                is_error=True,
-                receipt=exc.receipt,
-                outcome="denied" if isinstance(exc, ToolPermissionDenied) else "failed",
-                error={"message": str(exc), "receipt": exc.receipt},
-            )
+        raw = await _execute_registered_tool(
+            tool_name=request.tool_name,
+            arguments=request.arguments,
+            wallet_id=request.wallet_id,
+            auth=request.auth,
+            money=request.money,
+            transport=request.transport,
+            endpoint=request.endpoint,
+            request_id=request.request_id,
+            permit_id=request.permit_id,
+            idempotency_key=request.idempotency_key,
+            request_payload=request.request_payload,
+        )
 
         receipt = raw.get("receipt") if isinstance(raw, dict) else None
         return GovernedResult(
@@ -151,8 +143,6 @@ class McpGovernedAdapter(GovernedInvocationAdapter):
         )
 
     async def normalize_response(self, result: GovernedResult) -> dict[str, Any]:
-        if result.is_error and result.error is not None:
-            return {"error": result.error}
         return result.raw
 
 

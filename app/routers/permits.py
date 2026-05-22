@@ -14,17 +14,15 @@ from app.schemas.trust import (
     PermitVerifyResponse,
     ReceiptListResponse,
 )
-from app.services.idempotency import (
+from app.trust import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
-    get_idempotency_service,
-)
-from app.services.permits import (
     PermitError,
+    get_idempotency_service,
     get_permit_service,
+    get_receipt_service,
     permit_model_to_response,
 )
-from app.services.receipts import get_receipt_service
 
 router = APIRouter(prefix="/v1/permits", tags=["Trust Permits"])
 

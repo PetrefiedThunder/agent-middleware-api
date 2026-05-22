@@ -3,10 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import AuthContext, get_auth_context
-from app.routers.receipts import _authorize_receipt_access
 from app.schemas.trust import EvidenceBundleResponse
-from app.services.receipts import get_receipt_service
-from app.trust.evidence import build_evidence_bundle, build_receipt_evidence
+from app.trust import get_receipt_service
+from app.trust.evidence import (
+    authorize_receipt_access,
+    build_evidence_bundle,
+    build_receipt_evidence,
+)
 
 router = APIRouter(prefix="/v1/evidence", tags=["Trust / Evidence"])
 
@@ -29,6 +32,6 @@ async def get_evidence_bundle(
     receipt = await get_receipt_service().get_receipt(receipt_id)
     if not receipt:
         raise HTTPException(status_code=404, detail="receipt_not_found")
-    await _authorize_receipt_access(auth=auth, receipt=receipt)
+    await authorize_receipt_access(auth=auth, receipt=receipt)
     evidence = await build_receipt_evidence(receipt=receipt, auth=auth)
     return build_evidence_bundle(evidence)
