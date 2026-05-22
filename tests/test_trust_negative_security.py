@@ -122,6 +122,45 @@ async def test_expired_permit_is_denied_without_charge(client, clean_database):
 
 
 @pytest.mark.anyio
+async def test_revoked_permit_is_denied_without_charge(client, clean_database):
+    provisioned = await provision_agent_wallet(client)
+    tool_name = "revoked-permit-tool"
+    _register_tool(tool_name)
+    try:
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name=tool_name,
+        )
+        revoke = await client.post(
+            f"/v1/permits/{permit['permit_id']}/revoke",
+            headers={"X-API-Key": "test-key"},
+        )
+        assert revoke.status_code == 200
+
+        resp = await client.post(
+            "/mcp/messages",
+            json=_mcp_call(
+                provisioned["agent_wallet_id"],
+                permit["permit_id"],
+                tool_name,
+                "revoked-invoke-1",
+            ),
+            headers=provisioned["agent_headers"],
+        )
+        assert resp.status_code == 200
+        error = resp.json()["error"]
+        assert error["message"] == "permit_revoked"
+        # A signed denial receipt is still issued, with no ledger charge.
+        assert error["data"]["receipt"]["outcome"] == "denied"
+        assert error["data"]["receipt"]["ledger_entry_id"] is None
+        assert await _ledger_debits(client, provisioned, tool_name) == []
+    finally:
+        get_service_registry().unregister_local(tool_name)
+
+
+@pytest.mark.anyio
 async def test_budget_exceeded_permit_is_denied_without_charge(client, clean_database):
     provisioned = await provision_agent_wallet(client)
     tool_name = "budget-tool"

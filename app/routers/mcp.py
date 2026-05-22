@@ -541,7 +541,13 @@ async def _execute_registered_tool(
         from ..core.runtime_mode import is_simulation
 
         simulation = is_simulation(category.value)
-    except Exception:
+    except Exception as exc:
+        # Default to real-effects (simulation=False) but surface the
+        # misconfiguration instead of swallowing it silently.
+        logger.warning(
+            "runtime_mode_check_failed",
+            extra={"category": category.value, "error": str(exc)},
+        )
         simulation = False
     policy = await evaluate_wallet_policy(
         wallet_id=wallet_id,
