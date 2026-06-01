@@ -17,7 +17,7 @@ aiocoap>=0.4.17          # CoAP protocol support
 httpx>=0.28.1           # Async HTTP client for git API calls
 
 # --- Media Engine ---
-python-multipart>=0.0.29 # File upload support
+python-multipart>=0.0.30 # File upload support
 
 # --- Utilities ---
 python-dotenv>=1.2.2    # .env file loading
