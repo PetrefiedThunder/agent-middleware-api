@@ -23,9 +23,11 @@ __author__ = "Agent-Native Middleware"
 
 from .client import B2AClient, InsufficientFundsError
 from .decorators import billable, combined, monitored
+from .edge_client import B2AEdgeClient
 
 __all__ = [
     "B2AClient",
+    "B2AEdgeClient",
     "InsufficientFundsError",
     "monitored",
     "billable",
