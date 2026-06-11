@@ -48,6 +48,9 @@ Then walk the partner through the live flow:
 9. Replay the same request and show the same receipt ID with no second debit.
 10. Attempt a different tool under the same permit and show out-of-scope
     denial.
+11. Attempt the same allowed tool with no permit at all and show the
+    `permit_required` denial, proving the trust plane fails closed when
+    `ALLOW_LEGACY_UNPERMITTED_MCP=false`.
 
 ## What To Listen For
 
