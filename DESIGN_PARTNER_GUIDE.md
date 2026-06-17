@@ -33,8 +33,8 @@ If the partner wants the operator narrative instead of the compact proof, run:
 make agent-ops-war-room
 ```
 
-If the partner is a security audience and wants to see the boundary hold under
-attack rather than just on the happy path, run the adversarial battery:
+If the partner is from a security team and wants to see the boundary hold
+under attack rather than just on the happy path, run the adversarial battery:
 
 ```bash
 make red-team-trust-plane

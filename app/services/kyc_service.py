@@ -314,10 +314,11 @@ class KYCService:
                 logger.error(f"Verification not found for session {session_id}")
                 return
 
+            verified_at = utc_now()
             verification.status = "verified"
-            verification.last_verified_at = utc_now()
+            verification.last_verified_at = verified_at
             if not verification.first_verified_at:
-                verification.first_verified_at = utc_now()
+                verification.first_verified_at = verified_at
             verification.rejection_reason = None
 
             result = await session.execute(
@@ -329,7 +330,7 @@ class KYCService:
 
             if wallet:
                 wallet.kyc_status = "verified"
-                wallet.kyc_verified_at = utc_now()
+                wallet.kyc_verified_at = verified_at
                 if wallet.status == "pending_kyc":
                     wallet.status = "active"
                 session.add(wallet)

@@ -39,7 +39,12 @@ class B2AEdgeClient:
         self.timeout = timeout
         self._client = httpx.AsyncClient(timeout=timeout)
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Bare auth headers for requests with no body (GET)."""
+        return {"X-API-Key": self.api_key} if self.api_key else {}
+
     def _headers(self) -> dict[str, str]:
+        """Auth + JSON headers for requests with a body (POST/PUT/PATCH)."""
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
@@ -49,7 +54,7 @@ class B2AEdgeClient:
         """Fetch available MCP tools from the server."""
         response = await self._client.get(
             f"{self.api_url}/mcp/tools.json",
-            headers=self._headers(),
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json().get("tools", [])
@@ -121,7 +126,7 @@ class B2AEdgeClient:
             raise ValueError("wallet_id required for balance check")
         response = await self._client.get(
             f"{self.api_url}/v1/billing/wallets/{self.wallet_id}",
-            headers=self._headers(),
+            headers=self._auth_headers(),
         )
         response.raise_for_status()
         return response.json().get("balance", 0.0)
@@ -130,7 +135,7 @@ class B2AEdgeClient:
         """Close the HTTP client."""
         await self._client.aclose()
 
-    async def __aenter__(self) -> "B2AEdgeClient":
+    async def __aenter__(self) -> B2AEdgeClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:

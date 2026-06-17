@@ -262,6 +262,34 @@ async def _allowed_tool_debits(
     ]
 
 
+async def _any_demo_tool_debits(
+    client: AsyncClient, wallet_id: str, headers: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Return every ledger entry referencing any demo tool on the given wallet.
+
+    The narrow ALLOWED_TOOL+victim_wallet filter elsewhere is only sufficient
+    for the positive control. The red-team battery also targets BLOCKED_TOOL
+    and uses the attacker wallet for the stolen-permit case, so the no-debit
+    invariant has to be checked across every wallet/tool combination the
+    attacks actually touched.
+    """
+    ledger = await get_json(
+        client,
+        f"/v1/billing/ledger/{wallet_id}",
+        headers=headers,
+        expected_status=200,
+    )
+    return [
+        entry
+        for entry in ledger["entries"]
+        if entry["service_category"] == "agent_comms"
+        and (
+            ALLOWED_TOOL in entry.get("description", "")
+            or BLOCKED_TOOL in entry.get("description", "")
+        )
+    ]
+
+
 async def run_red_team(json_output: bool = False) -> dict[str, Any]:
     global PRINT_STEPS
 
@@ -401,13 +429,40 @@ async def run_red_team(json_output: bool = False) -> dict[str, Any]:
                     "error" in response,
                     f"{name}: expected a JSON-RPC denial, got {response}",
                 )
-                reason = response["error"]["message"]
+                error = response["error"]
+                reason = error["message"]
                 require(
                     reason == expected_reason,
                     f"{name}: expected reason {expected_reason!r}, got {reason!r}",
                 )
+                # Denials that go through the permit-validation path produce a
+                # signed denial receipt. When one is present, it must carry
+                # outcome=denied and no ledger linkage — that is the per-call
+                # guarantee that complements the cross-wallet ledger sweep
+                # below.
+                receipt = (error.get("data") or {}).get("receipt")
+                receipt_id = None
+                if receipt is not None:
+                    require(
+                        receipt.get("outcome") == "denied",
+                        f"{name}: denial receipt outcome was {receipt.get('outcome')!r}",
+                    )
+                    require(
+                        receipt.get("ledger_entry_id") is None,
+                        f"{name}: denial receipt carried ledger_entry_id "
+                        f"{receipt.get('ledger_entry_id')!r}",
+                    )
+                    receipt_id = receipt.get("receipt_id")
                 step(f"  denied: {name} -> {reason}")
-                attacks.append({"attack": name, "reason": reason})
+                attacks.append(
+                    {
+                        "attack": name,
+                        "reason": reason,
+                        "receipt_id": receipt_id,
+                        "wallet_id": wallet_id,
+                        "tool": tool,
+                    }
+                )
 
             step("running the adversarial battery")
 
@@ -579,13 +634,29 @@ async def run_red_team(json_output: bool = False) -> dict[str, Any]:
                 idem="rt-signature-invalid",
             )
 
-            step("confirming no attack produced a ledger debit")
-            debits_after_attacks = await _allowed_tool_debits(
+            step("confirming no attack produced a ledger debit on any touched wallet")
+            # Sweep every wallet the battery touched, for every demo tool. The
+            # earlier per-call receipt checks already prove each denial that
+            # carried a receipt has no ledger linkage; this cross-wallet sweep
+            # additionally catches a regression that wrote a debit without a
+            # receipt or under an unexpected tool/wallet pair (e.g. a leak in
+            # the wallet_mismatch path that hit the attacker wallet, or a leak
+            # in the tool_not_allowed path that hit BLOCKED_TOOL).
+            victim_debits_after_attacks = await _any_demo_tool_debits(
                 client, victim_wallet_id, victim_headers
             )
+            attacker_debits_after_attacks = await _any_demo_tool_debits(
+                client, attacker_wallet_id, attacker_headers
+            )
             require(
-                debits_after_attacks == [],
-                f"an attack produced a ledger debit: {debits_after_attacks}",
+                victim_debits_after_attacks == [],
+                f"an attack produced a victim ledger debit: "
+                f"{victim_debits_after_attacks}",
+            )
+            require(
+                attacker_debits_after_attacks == [],
+                f"an attack produced an attacker ledger debit: "
+                f"{attacker_debits_after_attacks}",
             )
 
             step("positive control: the one valid call succeeds and charges once")
@@ -636,13 +707,16 @@ async def run_red_team(json_output: bool = False) -> dict[str, Any]:
                 f"expected 10 denied attacks, recorded {len(attacks)}",
             )
 
+            attacks_with_receipts = sum(1 for a in attacks if a["receipt_id"])
             summary = {
                 "victim_wallet_id": victim_wallet_id,
                 "attacker_wallet_id": attacker_wallet_id,
                 "valid_permit_id": valid_permit_id,
                 "attacks_denied": len(attacks),
+                "attacks_with_signed_denial_receipts": attacks_with_receipts,
                 "denial_reasons": [a["reason"] for a in attacks],
-                "ledger_debits_after_attacks": len(debits_after_attacks),
+                "victim_debits_after_attacks": len(victim_debits_after_attacks),
+                "attacker_debits_after_attacks": len(attacker_debits_after_attacks),
                 "success_receipt_id": success_receipt["receipt_id"],
                 "ledger_debits_total": len(final_debits),
                 "audit_chain_valid": audit_check["valid"],
