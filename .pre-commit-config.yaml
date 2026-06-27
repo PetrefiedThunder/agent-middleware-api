@@ -16,7 +16,10 @@ repos:
     hooks:
       - id: mypy
         name: mypy (project env)
-        entry: uv run mypy --config-file=mypy.ini app/
+        # `--with mypy` makes the hook self-contained: uv installs mypy for the
+        # run if it isn't already in the project env, so a clean checkout can't
+        # fail on a missing mypy executable.
+        entry: uv run --with mypy mypy --config-file=mypy.ini app/
         language: system
         types: [python]
         pass_filenames: false
