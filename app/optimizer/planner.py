@@ -183,11 +183,11 @@ def optimize_action_set(
                     for i in range(len(admissible))
                     if x[i].value() and x[i].value() > 0.5
                 ]
+                constraint_rejected = _individual_constraint_rejections(
+                    admissible, selected, state, risk_budget
+                )
+                all_rejected = rejected + constraint_rejected
                 if selected:
-                    constraint_rejected = _individual_constraint_rejections(
-                        admissible, selected, state, risk_budget
-                    )
-                    all_rejected = rejected + constraint_rejected
                     return _pack_response(
                         "Optimal",
                         selected,
@@ -197,12 +197,15 @@ def optimize_action_set(
                         lambdas,
                         _policy_reasons(all_rejected),
                     )
-                # CBC reported "Optimal" but selected nothing. When admissible
-                # candidates with positive value fit the budget, that's a
-                # degenerate/broken solver result (seen with some prebuilt CBC
-                # binaries, e.g. on macOS/arm64). Fall through to the greedy
-                # heuristic, which recovers a valid selection — or confirms that
-                # an empty answer is genuinely correct (all scores <= 0).
+                return _pack_response(
+                    "Infeasible",
+                    [],
+                    all_rejected,
+                    state,
+                    risk_budget,
+                    lambdas,
+                    _policy_reasons(all_rejected),
+                )
         except Exception:
             pass
 
