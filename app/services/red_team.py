@@ -767,11 +767,6 @@ class ScanStore:
                     setattr(existing, field, getattr(new_row, field))
 
             # Replace vulnerabilities for idempotent re-save.
-            await session.execute(
-                select(SecurityVulnerabilityModel).where(
-                    cast(ColumnElement[bool], SecurityVulnerabilityModel.scan_id == report.scan_id)
-                )
-            )
             from sqlalchemy import delete as sa_delete
 
             await session.execute(

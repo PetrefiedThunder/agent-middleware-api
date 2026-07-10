@@ -9305,7 +9305,8 @@
                 "$ref": "#/components/schemas/PreflightRequest",
                 "default": {
                   "base_url": "",
-                  "stripe_secret_key": ""
+                  "stripe_secret_key": "",
+                  "campaign_source_url": ""
                 }
               }
             }
@@ -19524,6 +19525,12 @@
             "type": "string",
             "title": "Stripe Secret Key",
             "description": "Stripe secret key to validate (sk_live_... for production).",
+            "default": ""
+          },
+          "campaign_source_url": {
+            "type": "string",
+            "title": "Campaign Source Url",
+            "description": "Campaign content source URL to validate (e.g., a real launch video URL).",
             "default": ""
           }
         },

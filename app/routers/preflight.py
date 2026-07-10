@@ -36,6 +36,10 @@ class PreflightRequest(BaseModel):
         default="",
         description="Stripe secret key to validate (sk_live_... for production).",
     )
+    campaign_source_url: str = Field(
+        default="",
+        description="Campaign content source URL to validate (e.g., a real launch video URL).",
+    )
 
 
 class PreflightCheckResult(BaseModel):
@@ -85,6 +89,8 @@ async def run_preflight(request: PreflightRequest = PreflightRequest()):
         config_overrides["base_url"] = request.base_url
     if request.stripe_secret_key:
         config_overrides["stripe_secret_key"] = request.stripe_secret_key
+    if request.campaign_source_url:
+        config_overrides["campaign_source_url"] = request.campaign_source_url
 
     report = await engine.run(config_overrides)
 

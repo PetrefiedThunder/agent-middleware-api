@@ -424,7 +424,9 @@ class PreflightEngine:
         """Validate that campaign source URLs are not placeholder values."""
         results = []
 
-        source_url = "https://yourdomain.com/content/b2a-launch-video"
+        source_url = config.get(
+            "campaign_source_url", "https://yourdomain.com/content/b2a-launch-video"
+        )
 
         if _is_placeholder_domain(source_url):
             results.append(CheckResult(
