@@ -796,6 +796,10 @@ class IdempotencyRecordModel(SQLModel, table=True):
     status_code: int = Field(default=200)
     created_at: datetime = Field(default_factory=utc_now, index=True)
     expires_at: Optional[datetime] = Field(default=None)
+    # Set right after a governed invoke charges a wallet, before the
+    # receipt/audit/complete finalization sequence runs. Lets a reconciliation
+    # sweep tell "never charged" apart from "charged but never finalized".
+    ledger_entry_id: Optional[str] = Field(default=None, max_length=64, index=True)
 
 
 class PolicyBundleModel(SQLModel, table=True):
