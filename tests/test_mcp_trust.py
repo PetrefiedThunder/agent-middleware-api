@@ -783,3 +783,111 @@ async def test_reconcile_stuck_records_flags_charge_with_no_receipt_for_review(
             )
     finally:
         registry.unregister_local("crash-before-receipt-tool")
+
+
+@pytest.mark.anyio
+async def test_reconcile_stuck_records_preserves_failed_outcome(
+    client, clean_database
+):
+    """A crash can leave a stuck idempotency record whose matching receipt
+    records a FAILURE (e.g. the tool raised, the charge was refunded, and
+    _finalize_governed_denial crashed before idem.complete()). Reconciliation
+    must replay that as the failure it was, not a fabricated 200 success."""
+    provisioned = await provision_agent_wallet(client)
+    registry = get_service_registry()
+
+    def exploding_tool() -> dict:
+        raise RuntimeError("tool exploded before finalize crash")
+
+    registry.register_local(
+        service_id="crash-in-denial-tool",
+        name="Crash In Denial Finalize Tool",
+        description="Governed trust reconciliation outcome-fidelity test tool",
+        category=ServiceCategory.AGENT_COMMS,
+        func=exploding_tool,
+        credits_per_unit=2.0,
+        unit_name="call",
+    )
+
+    idem = get_idempotency_service()
+    original_complete = type(idem).complete
+
+    async def complete_only_fails_for_this_key(self, *, idempotency_key, **kwargs):
+        if idempotency_key == "crash-in-denial-invoke-1":
+            raise RuntimeError("process died before idempotency-complete")
+        return await original_complete(self, idempotency_key=idempotency_key, **kwargs)
+
+    try:
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name="crash-in-denial-tool",
+            idem_key="crash-in-denial-permit-create-1",
+        )
+        idempotency_key = "crash-in-denial-invoke-1"
+        body = {
+            "jsonrpc": "2.0",
+            "id": "crash-in-denial-call",
+            "method": "tools/call",
+            "params": {
+                "name": "crash-in-denial-tool",
+                "arguments": {},
+                "mcpContext": {
+                    "wallet_id": provisioned["agent_wallet_id"],
+                    "permit_id": permit["permit_id"],
+                    "idempotency_key": idempotency_key,
+                },
+            },
+        }
+        with patch.object(
+            type(idem), "complete", complete_only_fails_for_this_key
+        ):
+            resp = await client.post(
+                "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+            )
+        assert resp.status_code == 200
+        assert resp.json()["error"]["code"] == -32603
+
+        await _age_idempotency_record(
+            provisioned["agent_wallet_id"], idempotency_key
+        )
+
+        repaired, needs_review = await idem.reconcile_stuck_records(idle_seconds=900)
+        assert repaired == 1
+        assert needs_review == 0
+
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(IdempotencyRecordModel).where(
+                    IdempotencyRecordModel.wallet_id
+                    == provisioned["agent_wallet_id"],
+                    IdempotencyRecordModel.endpoint == "/mcp/messages",
+                    IdempotencyRecordModel.idempotency_key == idempotency_key,
+                )
+            )
+            record = result.scalar_one()
+            import json as _json
+
+            reconciled = _json.loads(record.response_json)
+            # The bug: this used to always be a bare 200 success regardless
+            # of what the receipt actually recorded.
+            assert reconciled["outcome"] == "failed_refunded"
+            assert reconciled["isError"] is True
+            assert record.status_code == 500
+
+        # The wallet was refunded -- no net charge from the whole scenario.
+        ledger_resp = await client.get(
+            f"/v1/billing/ledger/{provisioned['agent_wallet_id']}",
+            headers=provisioned["agent_headers"],
+        )
+        entries = [
+            e
+            for e in ledger_resp.json()["entries"]
+            if e["service_category"] == "agent_comms"
+        ]
+        net = sum(e["amount"] for e in entries)
+        assert net == 0
+    finally:
+        registry.unregister_local("crash-in-denial-tool")

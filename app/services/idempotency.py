@@ -230,21 +230,39 @@ class IdempotencyService:
                     if receipt is None:
                         needs_review += 1
                         continue
+                    # The receipt's outcome is the ground truth -- a crash can
+                    # leave a failed_refunded/denied/insufficient_funds
+                    # receipt just as easily as a success one (e.g. a crash
+                    # inside _finalize_governed_denial between the receipt
+                    # write and idem.complete()). Reconciling it as a bare 200
+                    # success regardless of outcome would tell a replaying
+                    # client the call succeeded when it didn't.
+                    is_error = receipt.outcome != "success"
+                    status_code = {
+                        "success": 200,
+                        "insufficient_funds": 402,
+                        "denied": 403,
+                    }.get(receipt.outcome, 500)
                     recovered_response = {
                         "reconciled": True,
+                        "outcome": receipt.outcome,
+                        "isError": is_error,
                         "receipt_id": receipt.receipt_id,
                         "ledger_entry_id": record.ledger_entry_id,
                         "message": (
                             "The original response could not be replayed: "
                             "finalization crashed after the charge and "
-                            "receipt were already written. Inspect "
+                            f"receipt (outcome={receipt.outcome!r}) were "
+                            "already written. Inspect "
                             f"/v1/evidence/{receipt.receipt_id} for the "
                             "full record of what happened."
                         ),
                     }
+                    if is_error:
+                        recovered_response["error"] = receipt.outcome
                     record.response_reference = receipt.receipt_id
                     record.response_json = json.dumps(recovered_response)
-                    record.status_code = 200
+                    record.status_code = status_code
                     session.add(record)
                     repaired += 1
         return repaired, needs_review
