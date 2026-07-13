@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.time import utc_now
 from app.db.database import get_session_factory
 from app.db.models import IdempotencyRecordModel, ReceiptModel
 from app.services.signing_keys import sha256_hex
@@ -188,7 +189,11 @@ class IdempotencyService:
 
         Returns (repaired_count, needs_manual_review_count).
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=idle_seconds)
+        # created_at is a naive-UTC DateTime column (see app.core.time.utc_now);
+        # build the idle cutoff naive too so the SQL comparison isn't skewed by
+        # a tz-aware parameter being cast against the session timezone on
+        # Postgres.
+        cutoff = utc_now() - timedelta(seconds=idle_seconds)
         factory = get_session_factory()
         repaired = 0
         needs_review = 0

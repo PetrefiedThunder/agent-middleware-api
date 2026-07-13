@@ -10,6 +10,7 @@ from typing import Any, cast
 from sqlalchemy import func, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.time import utc_now
 from app.db.database import get_session_factory
 from app.db.models import PermitModel, WalletModel
 from app.schemas.trust import PermitCreateRequest, PermitResponse
@@ -300,7 +301,12 @@ class PermitService:
         """
         from app.db.models import ReceiptModel
 
-        now = datetime.now(timezone.utc)
+        # Persisted datetimes in this codebase are naive UTC (see
+        # app.core.time.utc_now); the reconcile columns (expires_at,
+        # updated_at, issued_at) are naive DateTime. Build the comparison
+        # bounds naive too, so the SQL comparison isn't skewed by a tz-aware
+        # parameter being cast against the session timezone on Postgres.
+        now = utc_now()
         cutoff = now - timedelta(seconds=idle_seconds)
         factory = get_session_factory()
         corrected = 0
@@ -354,7 +360,7 @@ class PermitService:
                     consumed_decimal = Decimal(str(consumed))
                     if permit.spent_credits != consumed_decimal:
                         permit.spent_credits = consumed_decimal
-                        permit.updated_at = datetime.now(timezone.utc)
+                        permit.updated_at = utc_now()
                         session.add(permit)
                         corrected += 1
             await session.commit()
