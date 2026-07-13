@@ -202,3 +202,25 @@ async def test_sandbox_env_not_accessible_across_tenants(client, clean_database)
             f"/v1/sandbox/behavioral/environments/{env_id}", headers=a["agent_headers"]
         )
     ).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_bootstrap_admin_key_matches_via_constant_time_compare(clean_database):
+    """A configured bootstrap key is accepted as admin; a key that merely
+    shares a prefix must not match.
+
+    Locks in the constant-time comparison against VALID_API_KEYS -- the match
+    result must be identical to the previous membership test."""
+    from fastapi import HTTPException
+
+    from app.core.auth import get_auth_context
+
+    admin = await get_auth_context("test-key")
+    assert admin.is_bootstrap_admin is True
+    assert admin.source == "env"
+
+    # A key that shares a prefix with the valid key must NOT match; it falls
+    # through to the DB registry and, absent a record, is rejected.
+    with pytest.raises(HTTPException) as excinfo:
+        await get_auth_context("test-key-but-longer")
+    assert excinfo.value.status_code == 403

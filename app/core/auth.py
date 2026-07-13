@@ -4,6 +4,7 @@ Agents pass their key via the X-API-Key header. No cookies, no sessions,
 no OAuth dance — just a key and a handshake.
 """
 
+import hmac
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Security, status
@@ -97,7 +98,11 @@ async def get_auth_context(
 
     valid_keys = [k.strip() for k in settings.VALID_API_KEYS.split(",") if k.strip()]
 
-    if stripped in valid_keys:
+    # Constant-time compare against every configured key so that a timing
+    # side channel can't be used to recover a bootstrap-admin key byte by
+    # byte. `any()` short-circuits on the first match but each individual
+    # comparison is itself constant-time, which is what matters here.
+    if any(hmac.compare_digest(stripped, key) for key in valid_keys):
         return AuthContext(
             source="env",
             raw_key=stripped,
