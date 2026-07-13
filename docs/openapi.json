@@ -3446,6 +3446,11 @@
         "summary": "Get environment state",
         "description": "Get the current state of a sandbox environment.",
         "operationId": "get_environment_v1_sandbox_behavioral_environments__env_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "env_id",
@@ -3485,6 +3490,11 @@
         "summary": "Destroy environment",
         "description": "Destroy a sandbox environment and release resources.",
         "operationId": "destroy_environment_v1_sandbox_behavioral_environments__env_id__delete",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "parameters": [
           {
             "name": "env_id",
@@ -10772,7 +10782,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
       }
     },
     "/.well-known/agent.json": {

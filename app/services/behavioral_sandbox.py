@@ -632,6 +632,17 @@ print(json.dumps(result))
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def get_environment_owner(self, env_id: str) -> tuple[bool, str | None]:
+        """Return ``(found, owner_wallet_id)`` for tenant-isolation checks.
+
+        Lets a router enforce that the caller owns an environment before
+        reading or destroying it, without exposing the internal env-data shape.
+        """
+        env_data = await self._load_environment(env_id)
+        if env_data is None:
+            return False, None
+        return True, env_data["env"].wallet_id
+
     async def get_environment_state(self, env_id: str) -> dict[str, Any]:
         """Get current state of a sandbox environment."""
         env_data = await self._load_environment(env_id)

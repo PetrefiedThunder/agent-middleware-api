@@ -29,11 +29,17 @@ class AuthContext:
     wallet_id: str | None = None
     is_bootstrap_admin: bool = False
 
-    def require_wallet_access(self, wallet_id: str) -> None:
-        """Allow bootstrap admins or the exact wallet owning a DB-backed key."""
+    def require_wallet_access(self, wallet_id: str | None) -> None:
+        """Allow bootstrap admins or the exact wallet owning a DB-backed key.
+
+        ``wallet_id`` may be ``None`` for a resource with no owning wallet (e.g.
+        a sandbox environment created by a bootstrap admin). A non-admin caller
+        always has a concrete ``self.wallet_id``, so an ownerless resource is
+        correctly denied to everyone but bootstrap admins.
+        """
         if self.is_bootstrap_admin:
             return
-        if self.wallet_id == wallet_id:
+        if self.wallet_id is not None and self.wallet_id == wallet_id:
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
