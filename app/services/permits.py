@@ -281,17 +281,27 @@ class PermitService:
     async def reconcile_budgets(self, *, idle_seconds: int = 900) -> int:
         """Repair budget reservations orphaned by a crash mid-invocation.
 
-        A governed call reserves budget before charging and releases it on every
-        handled failure, so the only way ``spent_credits`` can drift above the
-        budget actually consumed is a process death between reserve and the
-        receipt write. For each active permit idle for at least ``idle_seconds``
-        (so live in-flight reservations are never touched), reset
-        ``spent_credits`` to the sum of its successful receipts. Returns the
-        number of permits corrected.
+        A governed call reserves budget before charging, so a process death
+        between reserve and the receipt write leaves ``spent_credits`` above the
+        budget actually consumed. This resets such drift to the sum of the
+        permit's successful receipts.
+
+        Crucially, it only ever touches permits that can no longer admit a new
+        charge -- non-active (revoked) OR already past ``expires_at``. A live,
+        chargeable permit is never downward-reset here, because a governed call
+        that outlives ``idle_seconds`` looks identical to a crashed one from the
+        outside (no mid-call heartbeat), and resetting a still-live reservation
+        would let a concurrent request over-spend past ``max_credits``.
+        ``validate_for_action`` rejects both non-active and expired permits, so
+        reclaiming their budget can never enable an over-spend. A crashed
+        reservation on a still-active permit is left conservatively in place
+        (the agent can spend *less* than authorized, never more) and is
+        reclaimed once the permit expires. Returns the number corrected.
         """
         from app.db.models import ReceiptModel
 
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=idle_seconds)
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=idle_seconds)
         factory = get_session_factory()
         corrected = 0
         async with factory() as session:
@@ -300,7 +310,16 @@ class PermitService:
                     await session.execute(
                         select(PermitModel)
                         .where(
-                            cast(ColumnElement[bool], PermitModel.status == "active"),
+                            or_(
+                                cast(
+                                    ColumnElement[bool],
+                                    PermitModel.status != "active",
+                                ),
+                                cast(
+                                    ColumnElement[bool],
+                                    PermitModel.expires_at <= now,
+                                ),
+                            ),
                             cast(
                                 ColumnElement[bool],
                                 func.coalesce(

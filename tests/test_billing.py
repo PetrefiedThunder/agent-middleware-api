@@ -829,3 +829,42 @@ async def test_transfer_retry_with_same_idempotency_key_does_not_double_spend(
     # Exactly one transfer of 1000 applied.
     assert wallet_a.json()["balance"] == 4000.0
     assert wallet_b.json()["balance"] == 1100.0  # 100 initial + 1000 transferred once
+
+
+@pytest.mark.anyio
+async def test_rejected_charge_does_not_inflate_velocity_counters(
+    client, api_headers, clean_database
+):
+    """A charge rejected for insufficient funds must not leave the wallet's
+    hourly/daily spend counters inflated (which would trip false daily-limit
+    rejections and velocity auto-freeze despite zero real spend)."""
+    from decimal import Decimal as _D
+    from app.db.database import get_session_factory
+    from app.db.models import WalletModel
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={"sponsor_name": "Velo", "email": "velo@t.com", "initial_credits": 10000},
+        headers=api_headers,
+    )
+    agent = await client.post(
+        "/v1/billing/wallets/agent",
+        json={"sponsor_wallet_id": sponsor.json()["wallet_id"], "agent_id": "velo-a", "budget_credits": 5},
+        headers=api_headers,
+    )
+    wallet_id = agent.json()["wallet_id"]
+
+    # red_team costs 100 credits/unit; wallet has 5 -> insufficient funds.
+    for _ in range(3):
+        resp = await client.post(
+            f"/v1/billing/charge?wallet_id={wallet_id}&service=red_team&units=1",
+            headers=api_headers,
+        )
+        assert resp.status_code == 402
+
+    factory = get_session_factory()
+    async with factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        # All three rejected charges were reversed out of the counters.
+        assert wallet.daily_spent == _D("0")
+        assert wallet.hourly_spent == _D("0")
