@@ -40,7 +40,7 @@ jobs:
           pip install pytest pytest-asyncio anyio httpx
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short -m "not production_trust"
 
       - name: Run trust primitive invariant tests
         run: |

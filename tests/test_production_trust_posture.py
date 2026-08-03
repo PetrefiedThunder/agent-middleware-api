@@ -2,11 +2,15 @@
 
 Default conftest stays permissive for unit speed. This module (and the CI
 ``production_trust`` job) explicitly engages production trust flags.
+
+These tests must not leave process-wide settings/env polluted for later
+modules in the same pytest session.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -31,40 +35,73 @@ RAILWAY_JSON = REPO_ROOT / "railway.json"
 # loading a real signing key into the test process.
 _TEST_SIGNING_PRIVATE_KEY_B64 = "dGVzdC1zaWduaW5nLWtleS1ub3QtZm9yLXByb2Q="
 
+_PROD_TRUST_ENV = {
+    "TRUST_MODE_ENABLED": "true",
+    "ALLOW_LEGACY_UNPERMITTED_MCP": "false",
+    "ENABLE_PROOF_SURFACES": "false",
+    "ENVIRONMENT": "production",
+    "DEBUG": "false",
+    "WEBAUTHN_ALLOW_MOCK": "false",
+    "TRUST_SIGNING_PRIVATE_KEY_B64": _TEST_SIGNING_PRIVATE_KEY_B64,
+    "PUBLIC_URL": "https://api-service-production-433c.up.railway.app",
+}
 
-@pytest.fixture
-def production_trust_flags(monkeypatch):
-    """Engage the production trust flag set without flipping the whole suite."""
+
+def _bind_settings_aliases(cfg) -> dict:
     import app.main as main_mod
     import app.routers.discover as discover_mod
     import app.routers.well_known as well_known_mod
 
-    monkeypatch.setenv("TRUST_MODE_ENABLED", "true")
-    monkeypatch.setenv("ALLOW_LEGACY_UNPERMITTED_MCP", "false")
-    monkeypatch.setenv("ENABLE_PROOF_SURFACES", "false")
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("DEBUG", "false")
-    monkeypatch.setenv("WEBAUTHN_ALLOW_MOCK", "false")
-    monkeypatch.setenv("TRUST_SIGNING_PRIVATE_KEY_B64", _TEST_SIGNING_PRIVATE_KEY_B64)
-    monkeypatch.setenv(
-        "PUBLIC_URL", "https://api-service-production-433c.up.railway.app"
-    )
-    get_settings.cache_clear()
-    cfg = get_settings()
-    assert cfg.TRUST_MODE_ENABLED is True
-    assert cfg.ALLOW_LEGACY_UNPERMITTED_MCP is False
-    assert cfg.ENABLE_PROOF_SURFACES is False
-    monkeypatch.setattr(main_mod, "settings", cfg)
-    monkeypatch.setattr(discover_mod, "settings", cfg)
-    monkeypatch.setattr(well_known_mod, "settings", cfg)
-    sync_proof_surface_mcp_registration()
-    yield cfg
-    get_settings.cache_clear()
-    restored = get_settings()
-    monkeypatch.setattr(main_mod, "settings", restored)
-    monkeypatch.setattr(discover_mod, "settings", restored)
-    monkeypatch.setattr(well_known_mod, "settings", restored)
-    sync_proof_surface_mcp_registration()
+    previous = {
+        "main": main_mod.settings,
+        "discover": discover_mod.settings,
+        "well_known": well_known_mod.settings,
+    }
+    main_mod.settings = cfg
+    discover_mod.settings = cfg
+    well_known_mod.settings = cfg
+    return previous
+
+
+def _restore_settings_aliases(previous: dict) -> None:
+    import app.main as main_mod
+    import app.routers.discover as discover_mod
+    import app.routers.well_known as well_known_mod
+
+    main_mod.settings = previous["main"]
+    discover_mod.settings = previous["discover"]
+    well_known_mod.settings = previous["well_known"]
+
+
+@pytest.fixture
+def production_trust_flags():
+    """Engage the production trust flag set without flipping the whole suite."""
+    saved_env = {key: os.environ.get(key) for key in _PROD_TRUST_ENV}
+    previous_aliases: dict | None = None
+    try:
+        for key, value in _PROD_TRUST_ENV.items():
+            os.environ[key] = value
+        get_settings.cache_clear()
+        cfg = get_settings()
+        assert cfg.TRUST_MODE_ENABLED is True
+        assert cfg.ALLOW_LEGACY_UNPERMITTED_MCP is False
+        assert cfg.ENABLE_PROOF_SURFACES is False
+        previous_aliases = _bind_settings_aliases(cfg)
+        sync_proof_surface_mcp_registration()
+        yield cfg
+    finally:
+        for key, old in saved_env.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+        get_settings.cache_clear()
+        if previous_aliases is not None:
+            _restore_settings_aliases(previous_aliases)
+        # Rebind aliases to a fresh Settings matching restored env.
+        restored = get_settings()
+        _bind_settings_aliases(restored)
+        sync_proof_surface_mcp_registration()
 
 
 @pytest.fixture
