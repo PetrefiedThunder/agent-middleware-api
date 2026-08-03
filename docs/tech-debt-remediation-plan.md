@@ -228,6 +228,7 @@ Live trust mode already runs with `ENABLE_PROOF_SURFACES=false`. Phase 2 stops a
 - Image source of truth: **in-repo Dockerfile via `railway up`** (not GHCR `:latest`).
 - `railway.json` non-secret defaults: `STATE_BACKEND=postgres`, `PUBLIC_URL`, `ENABLE_PROOF_SURFACES=false`.
 - Live already had correct trust env; docs/CI/railway hygiene do **not** require a Railway redeploy unless operators want the new `ENABLE_PROOF_SURFACES=false` default synced into the service variable set.
+- Live verify (2026-08-03, no redeploy): `/health/dependencies` → `enable_proof_surfaces=false`, `fell_back_to_memory=false`.
 
 ### Stop if
 

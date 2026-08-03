@@ -56,8 +56,8 @@ Optional but recommended: `CORS_ORIGINS` locked to known frontends;
 Redis outage when set).
 
 Committed `railway.json` may list **non-secret** defaults only
-(`STATE_BACKEND`, `PUBLIC_URL`). It must not contain `VALID_API_KEYS` or
-signing material.
+(`STATE_BACKEND`, `PUBLIC_URL`, `ENABLE_PROOF_SURFACES`). It must not contain
+`VALID_API_KEYS` or signing material.
 
 ## After deploy — verify
 
