@@ -22,6 +22,7 @@ from uuid import uuid4
 from sqlalchemy import select, update
 from sqlmodel import col
 
+from app.core.time import utc_now
 from ..db.database import get_session_factory
 from ..db.models import APIKeyModel, KeyRotationLogModel, WalletModel
 from ..schemas.billing import (
@@ -134,7 +135,7 @@ class APIKeyService:
 
         full_key, key_hash, key_prefix = generate_api_key()
         key_id = f"key_{uuid4().hex[:12]}"
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         expires_at = None
 
         if expires_in_days:
@@ -261,7 +262,7 @@ class APIKeyService:
             if key.key_hash != key_hash:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = utc_now()
             expires_at = key.expires_at
             if expires_at and expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
