@@ -15,7 +15,7 @@ import hashlib
 import json
 import secrets
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Optional
 from uuid import uuid4
 
