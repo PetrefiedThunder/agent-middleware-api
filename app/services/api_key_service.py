@@ -264,8 +264,6 @@ class APIKeyService:
 
             now = utc_now()
             expires_at = key.expires_at
-            if expires_at and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
             if expires_at and expires_at < now:
                 return None
 
@@ -307,7 +305,7 @@ class APIKeyService:
             }
         """
         old_key_id = None
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         rotation_id = f"rot_{uuid4().hex[:12]}"
         rotation_type = (
             RotationType.MANUAL.value if triggered_by == "user"
@@ -435,7 +433,7 @@ class APIKeyService:
                 raise KeyNotFoundError(key_id)
 
             key.status = APIKeyStatus.REVOKED.value
-            key.revoked_at = datetime.now(timezone.utc)
+            key.revoked_at = utc_now()
             key.revoke_reason = reason
             session.add(key)
             await session.commit()
@@ -465,7 +463,7 @@ class APIKeyService:
                 "created_at": datetime,
             }
         """
-        now = datetime.now(timezone.utc)
+        now = utc_now()
 
         async with self._session_factory()() as session:
             wallet_result = await session.execute(

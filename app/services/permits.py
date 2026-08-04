@@ -235,9 +235,7 @@ class PermitService:
             if model.status != "active":
                 return PermitValidation(False, f"permit_{model.status}", model)
             expires_at = model.expires_at
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at <= datetime.now(timezone.utc):
+            if expires_at <= utc_now():
                 return PermitValidation(False, "permit_expired", model)
             if model.subject_wallet_id != wallet_id:
                 return PermitValidation(False, "permit_wallet_mismatch", model)
