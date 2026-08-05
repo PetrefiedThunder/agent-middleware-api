@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.time import utc_now
@@ -109,6 +109,26 @@ class IdempotencyService:
                 existing = result.scalar_one_or_none()
                 if existing is None:
                     raise
+                return _replay_from_record(existing, request_hash)
+            except OperationalError as exc:
+                # SQLite under heavy write contention can exhaust busy_timeout
+                # and fail the INSERT with "database is locked" instead of a
+                # clean unique-constraint error. For an idempotent begin that
+                # is the same situation as losing the race: another request on
+                # this key (or another writer) holds the database. Surface the
+                # in-progress/replay contract, never a raw 500. Postgres does
+                # not produce this message; anything else re-raises.
+                if "database is locked" not in str(exc):
+                    raise
+                await session.rollback()
+                result = await session.execute(
+                    select(IdempotencyRecordModel).where(
+                        *_idempotency_predicates(wallet_id, endpoint, idempotency_key)
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing is None:
+                    raise IdempotencyInProgressError("idempotency_in_progress")
                 return _replay_from_record(existing, request_hash)
             return None
 
