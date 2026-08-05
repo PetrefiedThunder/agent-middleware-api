@@ -177,7 +177,7 @@ async def _auth_from_jwt(token: str) -> AuthContext:
 
     jwt_svc = get_jwt_service()
     try:
-        payload = await jwt_svc.verify_access_token(token)
+        payload = jwt_svc.verify_access_token(token)
     except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
