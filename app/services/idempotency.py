@@ -138,6 +138,38 @@ class IdempotencyService:
             session.add(record)
             await session.commit()
 
+    async def abandon(
+        self,
+        *,
+        wallet_id: str,
+        endpoint: str,
+        idempotency_key: str,
+    ) -> None:
+        """Release an in-progress record so the caller may retry the key.
+
+        Used when a governed invoke stops on a retryable, side-effect-free
+        condition (human approval still pending, approval backend
+        unreachable): completing the record would replay that transient state
+        forever, and leaving it in progress would reject the retry with
+        ``idempotency_in_progress``. Only an uncharged, unfinished record is
+        deleted — a completed response or a ``ledger_entry_id`` checkpoint
+        means money moved, and the record must survive for replay/repair.
+        """
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                select(IdempotencyRecordModel).where(
+                    *_idempotency_predicates(wallet_id, endpoint, idempotency_key)
+                )
+            )
+            record = result.scalar_one_or_none()
+            if not record:
+                return
+            if record.response_json is not None or record.ledger_entry_id:
+                return
+            await session.delete(record)
+            await session.commit()
+
     async def mark_charged(
         self,
         *,

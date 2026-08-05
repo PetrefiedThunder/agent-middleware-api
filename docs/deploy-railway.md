@@ -206,5 +206,6 @@ agents should use `PUBLIC_URL`.
 ## Related docs
 
 - Human operator checklist: [`human-onboarding.md`](human-onboarding.md)
+- Human approval gate (Sentinel) rollout: [`human-approval-gate.md`](human-approval-gate.md)
 - Env template: [`.env.example`](../.env.example)
 - Tech-debt phases: [`tech-debt-remediation-plan.md`](tech-debt-remediation-plan.md)

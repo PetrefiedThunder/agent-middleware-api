@@ -20746,6 +20746,11 @@
               }
             ],
             "title": "Nonce"
+          },
+          "requires_human_approval": {
+            "type": "boolean",
+            "title": "Requires Human Approval",
+            "default": false
           }
         },
         "type": "object",
@@ -20865,6 +20870,11 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "requires_human_approval": {
+            "type": "boolean",
+            "title": "Requires Human Approval",
+            "default": false
           },
           "signature": {
             "type": "string",
@@ -22131,6 +22141,17 @@
               }
             ],
             "title": "Audit Event Id"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
           },
           "created_at": {
             "type": "string",
