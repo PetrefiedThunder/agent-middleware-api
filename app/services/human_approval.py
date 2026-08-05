@@ -114,15 +114,28 @@ def invoke_request_hash(tool_name: str, arguments: dict[str, Any]) -> str:
 
 
 def sentinel_idempotency_key(
-    wallet_id: str, permit_id: str, tool_name: str, idempotency_key: str
+    wallet_id: str,
+    permit_id: str,
+    tool_name: str,
+    idempotency_key: str,
+    request_hash: str,
 ) -> str:
     """Deterministic Sentinel Idempotency-Key for one governed invoke.
 
     Derived from the invoke identity — NOT from the per-attempt random
-    approval_id — so every retry and every concurrent worker for the same
-    invoke sends the *same* key. Sentinel dedups on (tenant, key), so this is
+    approval_id — so every retry and every concurrent worker for the *same*
+    invoke sends the same key. Sentinel dedups on (tenant, key), so this is
     what makes a network-lost create or a concurrent first invoke resolve to a
     single approval and page the human exactly once.
+
+    ``request_hash`` (the bound tool+arguments) is part of the key so a retry
+    with the same idempotency key but *different* arguments gets a different
+    key and a separate Sentinel approval the human reviews independently.
+    Without it, if Sentinel committed the first create but the response was
+    lost before the local binding row was written, a differing-args retry would
+    dedup onto the original approval and later bind the retry's hash to the
+    human's original decision — reopening the argument-swap bypass in that
+    transient-create window.
     """
     digest = sha256_hex(
         {
@@ -130,6 +143,7 @@ def sentinel_idempotency_key(
             "permit_id": permit_id,
             "tool": tool_name,
             "idempotency_key": idempotency_key,
+            "request_hash": request_hash,
         }
     )
     return f"mw-{digest[:48]}"
@@ -387,7 +401,9 @@ class HumanApprovalService:
                         HumanApprovalModel.expires_at > utc_now(),
                     ),
                 )
-                .values(status=APPROVAL_STATUS_CONSUMED, decided_at=utc_now())
+                # Preserve decided_at (the human decision time) — only the
+                # status transitions to consumed.
+                .values(status=APPROVAL_STATUS_CONSUMED)
             )
             await session.commit()
             return cast(Any, result).rowcount == 1
@@ -496,6 +512,15 @@ class HumanApprovalService:
         if model.simulated and production_like:
             raise HumanApprovalError("human_approval_not_configured")
         if model.request_hash != req_hash:
+            if model.request_hash is None:
+                # Pre-024 approvals have no bound hash; they fail closed here.
+                # Distinct log so a migration-era denial isn't mistaken for a
+                # real argument-swap attempt (drain pending approvals before
+                # deploying 024 to avoid this).
+                logger.warning(
+                    "human_approval_unbound_pre_migration approval_id=%s",
+                    model.approval_id,
+                )
             raise HumanApprovalError(APPROVAL_REASON_MISMATCH)
 
     async def _finalize(
@@ -576,6 +601,7 @@ class HumanApprovalService:
                     model.permit_id,
                     model.tool,
                     model.idempotency_key,
+                    model.request_hash or "",
                 ),
             )
         except httpx.HTTPStatusError as exc:

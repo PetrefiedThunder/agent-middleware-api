@@ -126,4 +126,10 @@ def test_024_repairs_sqlite_boolean_backfill(tmp_path, monkeypatch):
             )
         ).scalar_one()
     assert fixed is False, "024 must normalize the backfilled text 'false' to False"
+
+    # 024's other change: the request_hash binding column exists.
+    approval_columns = {
+        col["name"] for col in inspect(engine).get_columns("human_approvals")
+    }
+    assert "request_hash" in approval_columns
     engine.dispose()

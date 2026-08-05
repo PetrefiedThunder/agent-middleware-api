@@ -669,7 +669,9 @@ async def _approve_pending(client, provisioned, fake, body):
     pending = await client.post(
         "/mcp/messages", json=body, headers=provisioned["agent_headers"]
     )
-    data = pending.json()["error"]["data"]
+    error = pending.json()["error"]
+    assert error["message"] == "human_approval_pending", pending.text
+    data = error["data"]
     fake.status = "approved"
     return data
 
@@ -760,8 +762,9 @@ async def test_stored_simulated_approval_denied_in_production(
     provisioned = await provision_agent_wallet(client)
     permit = await _approval_permit(client, provisioned, idem_key="promote-permit-1")
 
-    # Mint the simulated approval row in local/dev without executing (stop at
-    # the service so no consume happens).
+    # Mint the simulated approval row in local/dev by calling the service
+    # directly, so no tool executes and nothing is charged. The service still
+    # consumes the row; the returned check reports the pre-consume decision.
     check = await fresh_service.ensure_approval(
         wallet_id=provisioned["agent_wallet_id"],
         permit_id=permit["permit_id"],
@@ -800,14 +803,20 @@ async def test_non_json_sentinel_response_is_retryable_not_stranded(
 
     _sentinel_env(monkeypatch, simulated=False)
 
-    class HtmlSentinel:
-        async def create_approval(self, **kwargs):
-            from app.services.human_approval import _decode_json
+    # Drive a REAL SentinelClient through httpx.MockTransport so the test
+    # exercises create_approval's actual response-decoding path (a change that
+    # reverted _decode_json to resp.json() would fail here).
+    from app.services.human_approval import SentinelClient
 
-            req = httpx.Request("POST", "https://sentinel.test/v1/approvals")
-            return _decode_json(httpx.Response(200, request=req, text="<html>502</html>"))
+    def _html(_request):
+        return httpx.Response(200, text="<html>502 Bad Gateway</html>")
 
-    monkeypatch.setattr(fresh_service, "_sentinel", lambda: HtmlSentinel())
+    html_client = SentinelClient("https://sentinel.test", "sk_test_" + "0" * 64)
+    html_client._client = httpx.AsyncClient(
+        base_url="https://sentinel.test",
+        transport=httpx.MockTransport(_html),
+    )
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: html_client)
 
     provisioned = await provision_agent_wallet(client)
     permit = await _approval_permit(client, provisioned, idem_key="html-permit-1")
@@ -842,12 +851,21 @@ async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
 ):
     """The provider Idempotency-Key must be stable across attempts for one
     invoke, so a lost-response retry dedups instead of paging twice."""
-    from app.services.human_approval import sentinel_idempotency_key
+    from app.services.human_approval import (
+        invoke_request_hash,
+        sentinel_idempotency_key,
+    )
 
-    k1 = sentinel_idempotency_key("w", "p", "t", "k")
-    k2 = sentinel_idempotency_key("w", "p", "t", "k")
-    k3 = sentinel_idempotency_key("w", "p", "t", "different")
-    assert k1 == k2 and k1 != k3 and k1.startswith("mw-")
+    hx = invoke_request_hash("t", {"a": 1})
+    hy = invoke_request_hash("t", {"a": 2})
+    k1 = sentinel_idempotency_key("w", "p", "t", "k", hx)
+    k2 = sentinel_idempotency_key("w", "p", "t", "k", hx)
+    k3 = sentinel_idempotency_key("w", "p", "t", "different", hx)
+    # Same idempotency key + DIFFERENT args must diverge, so a differing-args
+    # retry gets its own Sentinel approval instead of riding the human's
+    # original decision (the transient-create bypass).
+    k4 = sentinel_idempotency_key("w", "p", "t", "k", hy)
+    assert k1 == k2 and k1 != k3 and k1 != k4 and k1.startswith("mw-")
 
     _sentinel_env(monkeypatch, simulated=False)
     fake = FakeSentinel(status="pending")
@@ -860,7 +878,11 @@ async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
     await client.post("/mcp/messages", json=body, headers=provisioned["agent_headers"])
     sent_key = fake.created[0]["idempotency_key"]
     assert sent_key == sentinel_idempotency_key(
-        provisioned["agent_wallet_id"], permit["permit_id"], TOOL, "detkey-invoke-1"
+        provisioned["agent_wallet_id"],
+        permit["permit_id"],
+        TOOL,
+        "detkey-invoke-1",
+        invoke_request_hash(TOOL, {"message": "hello"}),
     )
     # Independent of the per-attempt random approval_id.
     assert "appr-" not in sent_key
@@ -967,3 +989,76 @@ async def test_refresh_decision_does_not_revive_consumed_approval(
     async with factory() as session:
         row = await session.get(HumanApprovalModel, "appr-revive")
         assert row.status == APPROVAL_STATUS_CONSUMED
+
+
+@pytest.mark.anyio
+async def test_transient_create_with_different_args_gets_separate_approval(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """Codex P1: if Sentinel commits a create but the response is lost before
+    the local binding is persisted, a retry with the SAME idempotency key but
+    DIFFERENT arguments must not dedup onto the human's original approval. The
+    request hash is part of the provider key, so the differing-args retry gets
+    its own approval — the human never reviews args they didn't approve."""
+
+    from app.services.human_approval import invoke_request_hash
+
+    _sentinel_env(monkeypatch, simulated=False)
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="transient-permit-1")
+
+    # A Sentinel stand-in that records the provider Idempotency-Key per create
+    # and (like real Sentinel) dedups on it.
+    class DedupSentinel:
+        def __init__(self):
+            self.by_key: dict[str, str] = {}
+            self.creates: list[tuple[str, dict]] = []
+
+        async def create_approval(self, **kwargs):
+            key = kwargs["idempotency_key"]
+            self.creates.append((key, kwargs["arguments"]))
+            action = self.by_key.setdefault(key, f"act_{len(self.by_key)}")
+            return {"action_id": action, "status": "pending"}
+
+        async def get_approval(self, action_id):
+            return {"action_id": action_id, "status": "pending"}
+
+    dedup = DedupSentinel()
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: dedup)
+
+    # Attempt 1 (args X): Sentinel commits the create, then the local persist
+    # fails — the lost-response / crash-before-binding window. No binding row is
+    # written, and the gate catch-all fails closed and releases the key.
+    calls = {"n": 0}
+    real_persist = fresh_service._persist
+
+    async def flaky_persist(model):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("lost response after sentinel create")
+        return await real_persist(model)
+
+    monkeypatch.setattr(fresh_service, "_persist", flaky_persist)
+
+    body_x = _invoke_body(provisioned, permit, "transient-1")
+    body_x["params"]["arguments"] = {"text": "X the human reviews"}
+    r1 = await client.post(
+        "/mcp/messages", json=body_x, headers=provisioned["agent_headers"]
+    )
+    assert r1.json()["error"]["code"] == -32005
+
+    # Attempt 2: SAME idempotency key, args Y. Persist now succeeds.
+    body_y = _invoke_body(provisioned, permit, "transient-1")
+    body_y["params"]["arguments"] = {"text": "Y never reviewed"}
+    r2 = await client.post(
+        "/mcp/messages", json=body_y, headers=provisioned["agent_headers"]
+    )
+    assert r2.json()["error"]["message"] == "human_approval_pending"
+
+    # The two attempts sent DIFFERENT provider keys and got DIFFERENT approvals,
+    # so Y is never bound to X's human decision.
+    keys = {k for k, _ in dedup.creates}
+    assert len(keys) == 2, dedup.creates
+    x_hash = invoke_request_hash(TOOL, {"text": "X the human reviews"})
+    y_hash = invoke_request_hash(TOOL, {"text": "Y never reviewed"})
+    assert x_hash != y_hash

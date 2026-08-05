@@ -39,12 +39,23 @@ def upgrade() -> None:
 
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
-        # Existing rows backfilled by 023 hold the text 'false'; coerce any
-        # value that is not already the integer 0/1 back to 0 (false).
+        # Existing rows backfilled by 023 hold the text 'false'. Repair only
+        # the known text booleans, in the correct direction, so an unexpected
+        # value is never silently downgraded to "approval not required" (that
+        # would remove a control rather than restore one). 023's server_default
+        # can only produce 'false', but the 'true' side is handled defensively.
         op.execute(
             sa.text(
                 "UPDATE permits SET requires_human_approval = 0 "
-                "WHERE requires_human_approval NOT IN (0, 1)"
+                "WHERE typeof(requires_human_approval) = 'text' "
+                "AND lower(requires_human_approval) IN ('false', 'f', '0', 'no')"
+            )
+        )
+        op.execute(
+            sa.text(
+                "UPDATE permits SET requires_human_approval = 1 "
+                "WHERE typeof(requires_human_approval) = 'text' "
+                "AND lower(requires_human_approval) IN ('true', 't', '1', 'yes')"
             )
         )
 
