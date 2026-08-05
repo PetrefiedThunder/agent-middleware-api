@@ -627,11 +627,41 @@ class HumanApprovalService:
 
         self._apply_decision(model, payload)
         if model.status != APPROVAL_STATUS_PENDING:
-            # A decision that lands after local expiry is too late: the
-            # expiry check above already ran, so reaching here means the
-            # decision arrived in time.
-            await self._persist(model)
+            # Record the decision with a conditional update guarded on
+            # status='pending'. A blind write would rewrite every column and
+            # could revive a row a concurrent retry already advanced to
+            # 'consumed' back to 'approved', letting its consume win a second
+            # time (one human approval, two charges). The atomic _consume
+            # reads the authoritative DB state regardless of this no-op.
+            await self._persist_decision(model)
         return self._check(model)
+
+    async def _persist_decision(self, model: HumanApprovalModel) -> bool:
+        """Persist a pending→approved/rejected decision without clobbering a
+        row a concurrent request already advanced (approved/consumed)."""
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                update(HumanApprovalModel)
+                .where(
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.approval_id == model.approval_id,
+                    ),
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.status == APPROVAL_STATUS_PENDING,
+                    ),
+                )
+                .values(
+                    status=model.status,
+                    decided_by=model.decided_by,
+                    reason=model.reason,
+                    decided_at=model.decided_at,
+                )
+            )
+            await session.commit()
+            return bool(cast(Any, result).rowcount)
 
 
 _service: HumanApprovalService | None = None

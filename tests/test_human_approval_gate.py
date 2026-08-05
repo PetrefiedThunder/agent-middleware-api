@@ -912,3 +912,58 @@ async def test_consume_is_single_winner(clean_database, fresh_service, monkeypat
     assert await fresh_service._consume("appr-consume-live") is True
     assert await fresh_service._consume("appr-consume-live") is False  # already spent
     assert await fresh_service._consume("appr-consume-expired") is False  # window gone
+
+
+@pytest.mark.anyio
+async def test_refresh_decision_does_not_revive_consumed_approval(
+    clean_database, fresh_service, monkeypatch, client
+):
+    """A slow concurrent retry that polls Sentinel and persists an approved
+    decision must not revive a row another request already consumed — that
+    would let its atomic consume win a second time (one approval, two charges).
+    Regression for the Cursor Bugbot finding on #199."""
+    from datetime import datetime
+
+    from app.db.models import HumanApprovalModel
+    from app.services.human_approval import (
+        APPROVAL_STATUS_APPROVED,
+        APPROVAL_STATUS_CONSUMED,
+    )
+
+    _sentinel_env(monkeypatch, simulated=False)
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="revive-permit-1")
+
+    common = dict(
+        approval_id="appr-revive",
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        tool=TOOL,
+        idempotency_key="revive",
+        request_hash="x",
+        sentinel_action_id="act_revive",
+        requested_at=datetime(2026, 1, 1),
+        expires_at=datetime(2999, 1, 1),
+    )
+
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(HumanApprovalModel(status=APPROVAL_STATUS_APPROVED, **common))
+        await session.commit()
+
+    # R1 consumes the single-use approval.
+    assert await fresh_service._consume("appr-revive") is True
+
+    # R2 arrives with a stale in-memory 'approved' decision and tries to
+    # persist it. The conditional write (guarded on status='pending') is a
+    # no-op against the now-consumed row.
+    stale = HumanApprovalModel(
+        status=APPROVAL_STATUS_APPROVED, decided_by="late", reason="late", **common
+    )
+    assert await fresh_service._persist_decision(stale) is False
+
+    # The row stays consumed and cannot be consumed again.
+    assert await fresh_service._consume("appr-revive") is False
+    async with factory() as session:
+        row = await session.get(HumanApprovalModel, "appr-revive")
+        assert row.status == APPROVAL_STATUS_CONSUMED
