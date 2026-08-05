@@ -819,7 +819,11 @@ class HumanApprovalModel(SQLModel, table=True):
     permit_id: str = Field(max_length=64, foreign_key="permits.permit_id", index=True)
     tool: str = Field(max_length=128)
     idempotency_key: str = Field(max_length=128)
-    # pending | approved | rejected | expired
+    # sha256 of the (tool, arguments) the human reviewed. Binds the approval to
+    # the exact call, so a retry reusing the idempotency key with different
+    # arguments cannot ride this approval.
+    request_hash: Optional[str] = Field(default=None, max_length=64)
+    # pending | approved | rejected | expired | consumed
     status: str = Field(default="pending", max_length=16, index=True)
     simulated: bool = Field(default=False)
     # Sentinel action id (act_<hex>); None for simulated approvals.

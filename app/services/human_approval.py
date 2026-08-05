@@ -40,7 +40,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.exc import IntegrityError
 
@@ -50,6 +50,7 @@ from app.core.time import utc_now
 from app.core.trust_mode import is_production_like_environment
 from app.db.database import get_session_factory
 from app.db.models import HumanApprovalModel
+from app.services.signing_keys import sha256_hex
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,12 @@ APPROVAL_STATUS_PENDING = "pending"
 APPROVAL_STATUS_APPROVED = "approved"
 APPROVAL_STATUS_REJECTED = "rejected"
 APPROVAL_STATUS_EXPIRED = "expired"
+# Terminal single-use state: an approved approval that has already authorized
+# one governed invoke. Reached only via the atomic consume in the gate, so a
+# second invoke (e.g. the other transport, or a stale retry) cannot re-spend it.
+APPROVAL_STATUS_CONSUMED = "consumed"
+# Raised when a reloaded approval no longer matches the invoke being attempted.
+APPROVAL_REASON_MISMATCH = "human_approval_request_mismatch"
 
 # Sentinel bounds: timeout_seconds 1..86400, /wait timeout 1..300.
 _SENTINEL_TIMEOUT_MIN = 1
@@ -85,13 +92,47 @@ class HumanApprovalUnavailableError(Exception):
 class ApprovalCheck:
     """Outcome of one gate evaluation for a governed invoke."""
 
-    status: str  # pending | approved | rejected | expired
+    status: str  # pending | approved | rejected | expired | consumed
     approval_id: str
     sentinel_action_id: str | None
     simulated: bool
     decided_by: str | None
     reason: str | None
     expires_at: Any  # datetime; naive UTC
+
+
+def invoke_request_hash(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Bind an approval to the exact call the human reviewed.
+
+    The human approves a specific ``(tool, arguments)`` pair in Sentinel; the
+    stored approval carries this hash so a later invoke that reuses the same
+    idempotency key but different arguments cannot ride the approval. Uses the
+    same canonical-JSON hash as the signing layer so ordering/formatting can't
+    be used to forge a match.
+    """
+    return sha256_hex({"tool": tool_name, "arguments": arguments})
+
+
+def sentinel_idempotency_key(
+    wallet_id: str, permit_id: str, tool_name: str, idempotency_key: str
+) -> str:
+    """Deterministic Sentinel Idempotency-Key for one governed invoke.
+
+    Derived from the invoke identity — NOT from the per-attempt random
+    approval_id — so every retry and every concurrent worker for the same
+    invoke sends the *same* key. Sentinel dedups on (tenant, key), so this is
+    what makes a network-lost create or a concurrent first invoke resolve to a
+    single approval and page the human exactly once.
+    """
+    digest = sha256_hex(
+        {
+            "wallet_id": wallet_id,
+            "permit_id": permit_id,
+            "tool": tool_name,
+            "idempotency_key": idempotency_key,
+        }
+    )
+    return f"mw-{digest[:48]}"
 
 
 def human_approval_configured() -> bool:
@@ -120,6 +161,24 @@ def human_approval_available() -> tuple[bool, str | None]:
     if not human_approval_configured():
         return False, "human_approval_not_configured"
     return True, None
+
+
+def _decode_json(resp: httpx.Response) -> dict[str, Any]:
+    """Parse a Sentinel 2xx body, treating a non-JSON payload as an outage.
+
+    A gateway/LB can return a 200 with an HTML error page; ``resp.json()``
+    then raises ``ValueError`` (``json.JSONDecodeError``), which is NOT an
+    ``httpx.HTTPError``. Left unconverted it would escape the gate's
+    error handling and strand the caller's idempotency record in-progress
+    forever. Map it to the retryable unavailable path instead.
+    """
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise HumanApprovalUnavailableError() from exc
+    if not isinstance(body, dict):
+        raise HumanApprovalUnavailableError()
+    return body
 
 
 class SentinelClient:
@@ -166,12 +225,12 @@ class SentinelClient:
             body["approvers"] = approvers
         resp = await self.client.post("/v1/approvals", json=body, headers=headers)
         resp.raise_for_status()
-        return resp.json()
+        return _decode_json(resp)
 
     async def get_approval(self, action_id: str) -> dict[str, Any]:
         resp = await self.client.get(f"/v1/approvals/{action_id}")
         resp.raise_for_status()
-        return resp.json()
+        return _decode_json(resp)
 
     async def wait_approval(self, action_id: str, timeout: float) -> dict[str, Any]:
         # Sentinel clamps /wait to 1..300s and returns the still-pending
@@ -184,7 +243,7 @@ class SentinelClient:
             timeout=bounded + _HTTP_TIMEOUT_SECONDS,
         )
         resp.raise_for_status()
-        return resp.json()
+        return _decode_json(resp)
 
 
 class HumanApprovalService:
@@ -270,6 +329,69 @@ class HumanApprovalService:
             await session.commit()
             await session.refresh(model)
 
+    async def _expire_if_stale(self, model: HumanApprovalModel) -> bool:
+        """Best-effort label a still-pending, past-window approval as expired.
+
+        Conditional on ``status='pending'`` so it can never clobber an
+        ``approved`` or ``consumed`` row. The atomic consume is the real
+        arbiter (it also requires ``expires_at > now``); this only keeps the
+        stored status honest for observers.
+        """
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                update(HumanApprovalModel)
+                .where(
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.approval_id == model.approval_id,
+                    ),
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.status == APPROVAL_STATUS_PENDING,
+                    ),
+                )
+                .values(
+                    status=APPROVAL_STATUS_EXPIRED,
+                    reason="approval_window_elapsed",
+                    decided_at=utc_now(),
+                )
+            )
+            await session.commit()
+            return bool(cast(Any, result).rowcount)
+
+    async def _consume(self, approval_id: str) -> bool:
+        """Atomically spend an approved, unexpired approval — single use.
+
+        The one place a governed invoke is authorized to move money. The
+        ``WHERE status='approved' AND expires_at > now`` clause makes this the
+        single serialization point for three races at once: the same key over
+        both transports, two concurrent retries, and approved-vs-expired at the
+        window boundary. Exactly one caller wins; everyone else is denied.
+        """
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await session.execute(
+                update(HumanApprovalModel)
+                .where(
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.approval_id == approval_id,
+                    ),
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.status == APPROVAL_STATUS_APPROVED,
+                    ),
+                    cast(
+                        ColumnElement[bool],
+                        HumanApprovalModel.expires_at > utc_now(),
+                    ),
+                )
+                .values(status=APPROVAL_STATUS_CONSUMED, decided_at=utc_now())
+            )
+            await session.commit()
+            return cast(Any, result).rowcount == 1
+
     async def ensure_approval(
         self,
         *,
@@ -284,17 +406,19 @@ class HumanApprovalService:
 
         Creates the approval (locally, and in Sentinel in real mode) on first
         sight of this (wallet, permit, tool, idempotency_key); re-checks the
-        stored one on retries. Local expiry is enforced before any remote
-        poll, because Sentinel never expires approvals server-side.
+        stored one on retries. On an APPROVED decision the approval is
+        atomically consumed here, so the returned ``approved`` check authorizes
+        exactly one invoke.
 
-        Raises ``HumanApprovalError`` for terminal misconfiguration and
-        ``HumanApprovalUnavailableError`` when Sentinel cannot be reached.
+        Raises ``HumanApprovalError`` for terminal misconfiguration/mismatch
+        and ``HumanApprovalUnavailableError`` when Sentinel cannot be reached.
         """
         settings = get_settings()
         simulated = is_simulation("human_approval")
         production_like = is_production_like_environment(settings.ENVIRONMENT)
+        req_hash = invoke_request_hash(tool_name, arguments)
 
-        # A simulated approval must never authorize a production invoke.
+        # Fresh-create config guards (current environment).
         if simulated and production_like:
             raise HumanApprovalError("human_approval_not_configured")
         if not simulated and not human_approval_configured():
@@ -307,7 +431,9 @@ class HumanApprovalService:
             idempotency_key=idempotency_key,
         )
         if model is not None:
-            return await self._refresh(model)
+            self._reauthorize(model, req_hash=req_hash, production_like=production_like)
+            check = await self._refresh(model)
+            return await self._finalize(model, check)
 
         now = utc_now()
         expires_at = now + timedelta(seconds=self._timeout_seconds())
@@ -319,6 +445,7 @@ class HumanApprovalService:
             idempotency_key=idempotency_key,
             status=APPROVAL_STATUS_PENDING,
             simulated=simulated,
+            request_hash=req_hash,
             requested_at=now,
             expires_at=expires_at,
         )
@@ -330,8 +457,9 @@ class HumanApprovalService:
             model.decided_by = "simulation"
             model.reason = "simulated_auto_approval"
             model.decided_at = now
-            await self._persist_new(model)
-            return self._check(model)
+            model = await self._persist_new(model)
+            self._reauthorize(model, req_hash=req_hash, production_like=production_like)
+            return await self._finalize(model, self._check(model))
 
         remote = await self._create_remote(model, arguments, estimated_credits)
         self._apply_decision(model, remote)
@@ -348,16 +476,70 @@ class HumanApprovalService:
                     # The approval exists; a failed wait is not fatal.
                     logger.warning("sentinel_wait_failed: %s", exc)
 
-        await self._persist_new(model)
-        return self._check(model)
+        model = await self._persist_new(model)
+        # The winner of a concurrent race may carry different binding/simulated
+        # state; re-validate against the authoritative row before consuming.
+        self._reauthorize(model, req_hash=req_hash, production_like=production_like)
+        return await self._finalize(model, self._check(model))
 
-    async def _persist_new(self, model: HumanApprovalModel) -> None:
+    @staticmethod
+    def _reauthorize(
+        model: HumanApprovalModel, *, req_hash: str, production_like: bool
+    ) -> None:
+        """Re-check a (possibly reloaded) approval against this invoke + env.
+
+        Both guards matter on the reload path, which the fresh-create guards
+        never see: a dev-minted *simulated* approval must not authorize an
+        invoke once the environment is production-like, and an approval must
+        bind to the exact ``(tool, arguments)`` the human reviewed.
+        """
+        if model.simulated and production_like:
+            raise HumanApprovalError("human_approval_not_configured")
+        if model.request_hash != req_hash:
+            raise HumanApprovalError(APPROVAL_REASON_MISMATCH)
+
+    async def _finalize(
+        self, model: HumanApprovalModel, check: ApprovalCheck
+    ) -> ApprovalCheck:
+        """Consume an approved decision so it authorizes exactly one invoke."""
+        if check.status != APPROVAL_STATUS_APPROVED:
+            return check
+        if await self._consume(model.approval_id):
+            return check  # this invoke holds the single-use authorization
+        # Lost the single-use race: report why so the router denies correctly.
+        latest = await self._load(
+            wallet_id=model.wallet_id,
+            permit_id=model.permit_id,
+            tool_name=model.tool,
+            idempotency_key=model.idempotency_key,
+        )
+        if latest is None or latest.status == APPROVAL_STATUS_APPROVED:
+            # approved-but-unconsumable means the window elapsed (consume
+            # requires expires_at > now).
+            status: str = APPROVAL_STATUS_EXPIRED
+        else:
+            status = latest.status
+        return ApprovalCheck(
+            status=status,
+            approval_id=model.approval_id,
+            sentinel_action_id=model.sentinel_action_id,
+            simulated=model.simulated,
+            decided_by=model.decided_by,
+            reason=model.reason,
+            expires_at=model.expires_at,
+        )
+
+    async def _persist_new(self, model: HumanApprovalModel) -> HumanApprovalModel:
+        """Insert a new approval; on a concurrent-insert race return the winner.
+
+        The winner is the authoritative row — with a deterministic Sentinel
+        Idempotency-Key both racers created (or replayed) the same Sentinel
+        approval, so falling back to the persisted row is consistent.
+        """
         try:
             await self._persist(model)
+            return model
         except IntegrityError:
-            # Concurrent first-invoke race: another worker inserted the row.
-            # Sentinel-side duplication is prevented by the Idempotency-Key on
-            # create. Fall back to the winner's row.
             existing = await self._load(
                 wallet_id=model.wallet_id,
                 permit_id=model.permit_id,
@@ -366,8 +548,7 @@ class HumanApprovalService:
             )
             if existing is None:  # pragma: no cover - repair path
                 raise
-            model.approval_id = existing.approval_id
-            model.status = existing.status
+            return existing
 
     async def _create_remote(
         self,
@@ -390,7 +571,12 @@ class HumanApprovalService:
                 risk_level=settings.SENTINEL_RISK_LEVEL or "high",
                 approvers=self._approvers(),
                 timeout_seconds=self._timeout_seconds(),
-                idempotency_key=f"mw-{model.approval_id}",
+                idempotency_key=sentinel_idempotency_key(
+                    model.wallet_id,
+                    model.permit_id,
+                    model.tool,
+                    model.idempotency_key,
+                ),
             )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
@@ -420,10 +606,12 @@ class HumanApprovalService:
             return self._check(model)
 
         if utc_now() >= model.expires_at:
+            # Sentinel never expires approvals server-side, so enforce the
+            # window locally before spending a poll. Conditional update won't
+            # clobber a concurrently-approved/consumed row.
+            await self._expire_if_stale(model)
             model.status = APPROVAL_STATUS_EXPIRED
             model.reason = "approval_window_elapsed"
-            model.decided_at = utc_now()
-            await self._persist(model)
             return self._check(model)
 
         if model.simulated:  # pragma: no cover - simulated rows decide at create

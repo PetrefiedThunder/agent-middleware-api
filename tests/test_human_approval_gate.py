@@ -204,7 +204,8 @@ async def test_simulated_approval_auto_approves_and_is_marked(
             )
         ).scalar_one()
         assert row.simulated is True
-        assert row.status == "approved"
+        # Single-use: the approval is consumed once it authorizes the invoke.
+        assert row.status == "consumed"
         assert row.decided_by == "simulation"
 
     # Audit metadata records the approval and its simulated nature.
@@ -656,3 +657,258 @@ def test_sim_flag_is_registered_with_runtime_mode():
     assert (
         simulation_settings_field("human_approval") == "SIMULATION_MODE_HUMAN_APPROVAL"
     )
+
+
+# ---------------------------------------------------------------------------
+# Hardening regressions (adversarial review of the original gate commit)
+# ---------------------------------------------------------------------------
+
+
+async def _approve_pending(client, provisioned, fake, body):
+    """Drive one invoke to pending, approve it in Sentinel, return the id."""
+    pending = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    data = pending.json()["error"]["data"]
+    fake.status = "approved"
+    return data
+
+
+@pytest.mark.anyio
+async def test_argument_swap_after_approval_is_denied(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """The human approves args X; a retry of the same key with args Y must not
+    ride that approval. This is the core guarantee of the gate."""
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="swap-permit-1")
+
+    benign = _invoke_body(provisioned, permit, "swap-invoke-1")
+    benign["params"]["arguments"] = {"text": "benign — the human sees this"}
+    await _approve_pending(client, provisioned, fake, benign)
+
+    # Same idempotency key, DIFFERENT arguments — must be denied before any
+    # charge or execution (the exact bypass reproduced against a live Sentinel).
+    malicious = _invoke_body(provisioned, permit, "swap-invoke-1")
+    malicious["params"]["arguments"] = {"text": "MALICIOUS — never approved"}
+    resp = await client.post(
+        "/mcp/messages", json=malicious, headers=provisioned["agent_headers"]
+    )
+    error = resp.json()["error"]
+    assert error["code"] == -32003
+    assert error["message"] == "human_approval_request_mismatch"
+    assert error["data"]["receipt"]["outcome"] == "denied"
+    assert error["data"]["receipt"]["credits_charged"] == "0"
+    assert await _ledger_debits(client, provisioned["agent_wallet_id"]) == 0
+
+
+@pytest.mark.anyio
+async def test_one_approval_cannot_charge_twice_across_transports(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """A single human decision authorizes exactly one invoke, even though the
+    same (wallet, permit, tool, key) reaches the pipeline from both the
+    JSON-RPC and REST endpoints (which use different idempotency endpoints)."""
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="xport-permit-1")
+    body = _invoke_body(provisioned, permit, "xport-invoke-1")
+
+    await _approve_pending(client, provisioned, fake, body)
+
+    # First consumption over JSON-RPC succeeds.
+    first = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    assert first.json()["result"]["receipt"]["outcome"] == "success"
+    assert await _ledger_debits(client, provisioned["agent_wallet_id"]) == 1
+
+    # Same key over the REST transport must not re-spend the approval.
+    rest = await client.post(
+        f"/mcp/tools/{TOOL}/invoke",
+        json={
+            "name": TOOL,
+            "arguments": {"message": "hello"},
+            "mcp_context": {
+                "wallet_id": provisioned["agent_wallet_id"],
+                "permit_id": permit["permit_id"],
+                "idempotency_key": "xport-invoke-1",
+            },
+        },
+        headers=provisioned["agent_headers"],
+    )
+    assert rest.status_code == 403
+    assert rest.json()["detail"]["error"] == "human_approval_consumed"
+    assert await _ledger_debits(client, provisioned["agent_wallet_id"]) == 1
+
+
+@pytest.mark.anyio
+async def test_stored_simulated_approval_denied_in_production(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """A simulated auto-approval minted in dev must never authorize a real
+    invoke after the same database is promoted to a production-like env."""
+    settings = _sentinel_env(monkeypatch, simulated=True, configured=False)
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="promote-permit-1")
+
+    # Mint the simulated approval row in local/dev without executing (stop at
+    # the service so no consume happens).
+    check = await fresh_service.ensure_approval(
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        tool_name=TOOL,
+        idempotency_key="promote-invoke-1",
+        arguments={"message": "hello"},
+        estimated_credits=Decimal("2"),
+    )
+    assert check.status == "approved" and check.simulated is True
+
+    # Promote: production-like env, real Sentinel config.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "SIMULATION_MODE_HUMAN_APPROVAL", False)
+    monkeypatch.setattr(settings, "SENTINEL_API_URL", "https://sentinel.test")
+    monkeypatch.setattr(settings, "SENTINEL_API_KEY", "sk_live_" + "0" * 64)
+
+    with pytest.raises(HumanApprovalError) as excinfo:
+        await fresh_service.ensure_approval(
+            wallet_id=provisioned["agent_wallet_id"],
+            permit_id=permit["permit_id"],
+            tool_name=TOOL,
+            idempotency_key="promote-invoke-1",
+            arguments={"message": "hello"},
+            estimated_credits=Decimal("2"),
+        )
+    assert excinfo.value.reason == "human_approval_not_configured"
+
+
+@pytest.mark.anyio
+async def test_non_json_sentinel_response_is_retryable_not_stranded(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """A 200 with a non-JSON body (proxy error page) must surface as a
+    retryable outage, not strand the caller's idempotency key."""
+    import httpx
+
+    _sentinel_env(monkeypatch, simulated=False)
+
+    class HtmlSentinel:
+        async def create_approval(self, **kwargs):
+            from app.services.human_approval import _decode_json
+
+            req = httpx.Request("POST", "https://sentinel.test/v1/approvals")
+            return _decode_json(httpx.Response(200, request=req, text="<html>502</html>"))
+
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: HtmlSentinel())
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="html-permit-1")
+    body = _invoke_body(provisioned, permit, "html-invoke-1")
+
+    resp = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    error = resp.json()["error"]
+    assert error["code"] == -32005
+    assert error["message"] == "human_approval_unavailable"
+
+    # Key not poisoned: once Sentinel is healthy the same key proceeds. The
+    # first healthy contact creates the approval (pending); a retry then polls
+    # it to approved and executes.
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+    recovered = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    assert recovered.json()["error"]["message"] == "human_approval_pending"
+    fake.status = "approved"
+    ok = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    assert ok.json()["result"]["receipt"]["outcome"] == "success"
+
+
+@pytest.mark.anyio
+async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """The provider Idempotency-Key must be stable across attempts for one
+    invoke, so a lost-response retry dedups instead of paging twice."""
+    from app.services.human_approval import sentinel_idempotency_key
+
+    k1 = sentinel_idempotency_key("w", "p", "t", "k")
+    k2 = sentinel_idempotency_key("w", "p", "t", "k")
+    k3 = sentinel_idempotency_key("w", "p", "t", "different")
+    assert k1 == k2 and k1 != k3 and k1.startswith("mw-")
+
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="detkey-permit-1")
+    body = _invoke_body(provisioned, permit, "detkey-invoke-1")
+
+    await client.post("/mcp/messages", json=body, headers=provisioned["agent_headers"])
+    sent_key = fake.created[0]["idempotency_key"]
+    assert sent_key == sentinel_idempotency_key(
+        provisioned["agent_wallet_id"], permit["permit_id"], TOOL, "detkey-invoke-1"
+    )
+    # Independent of the per-attempt random approval_id.
+    assert "appr-" not in sent_key
+
+
+@pytest.mark.anyio
+async def test_consume_is_single_winner(clean_database, fresh_service, monkeypatch, client):
+    """Unit: an approved, unexpired approval consumes exactly once; an expired
+    one never consumes."""
+    from datetime import datetime
+
+    from app.db.models import HumanApprovalModel
+    from app.services.human_approval import APPROVAL_STATUS_APPROVED
+
+    _sentinel_env(monkeypatch, simulated=False)
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="consume-permit-1")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        session.add(
+            HumanApprovalModel(
+                approval_id="appr-consume-live",
+                wallet_id=provisioned["agent_wallet_id"],
+                permit_id=permit["permit_id"],
+                tool=TOOL,
+                idempotency_key="consume-live",
+                status=APPROVAL_STATUS_APPROVED,
+                request_hash="x",
+                requested_at=datetime(2026, 1, 1),
+                expires_at=datetime(2999, 1, 1),
+            )
+        )
+        session.add(
+            HumanApprovalModel(
+                approval_id="appr-consume-expired",
+                wallet_id=provisioned["agent_wallet_id"],
+                permit_id=permit["permit_id"],
+                tool=TOOL,
+                idempotency_key="consume-expired",
+                status=APPROVAL_STATUS_APPROVED,
+                request_hash="x",
+                requested_at=datetime(2000, 1, 1),
+                expires_at=datetime(2000, 1, 2),
+            )
+        )
+        await session.commit()
+
+    assert await fresh_service._consume("appr-consume-live") is True
+    assert await fresh_service._consume("appr-consume-live") is False  # already spent
+    assert await fresh_service._consume("appr-consume-expired") is False  # window gone
