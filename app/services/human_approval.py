@@ -101,16 +101,27 @@ class ApprovalCheck:
     expires_at: Any  # datetime; naive UTC
 
 
-def invoke_request_hash(tool_name: str, arguments: dict[str, Any]) -> str:
+def invoke_request_hash(
+    tool_name: str,
+    arguments: dict[str, Any],
+    estimated_credits: Any,
+) -> str:
     """Bind an approval to the exact call the human reviewed.
 
-    The human approves a specific ``(tool, arguments)`` pair in Sentinel; the
-    stored approval carries this hash so a later invoke that reuses the same
-    idempotency key but different arguments cannot ride the approval. Uses the
-    same canonical-JSON hash as the signing layer so ordering/formatting can't
-    be used to forge a match.
+    The human approves a specific ``(tool, arguments, estimated_credits)``
+    request in Sentinel; the stored approval carries this hash so a later
+    invoke that reuses the same idempotency key with different arguments or a
+    different current price cannot ride the approval. Uses the same
+    canonical-JSON hash as the signing layer so ordering/formatting can't be
+    used to forge a match.
     """
-    return sha256_hex({"tool": tool_name, "arguments": arguments})
+    return sha256_hex(
+        {
+            "tool": tool_name,
+            "arguments": arguments,
+            "estimated_credits": estimated_credits,
+        }
+    )
 
 
 def sentinel_idempotency_key(
@@ -128,14 +139,13 @@ def sentinel_idempotency_key(
     what makes a network-lost create or a concurrent first invoke resolve to a
     single approval and page the human exactly once.
 
-    ``request_hash`` (the bound tool+arguments) is part of the key so a retry
-    with the same idempotency key but *different* arguments gets a different
-    key and a separate Sentinel approval the human reviews independently.
-    Without it, if Sentinel committed the first create but the response was
-    lost before the local binding row was written, a differing-args retry would
-    dedup onto the original approval and later bind the retry's hash to the
-    human's original decision — reopening the argument-swap bypass in that
-    transient-create window.
+    ``request_hash`` (the bound tool, arguments, and estimated credits) is part
+    of the key so a retry with the same idempotency key but different reviewed
+    details gets a different key and a separate Sentinel approval. Without it,
+    if Sentinel committed the first create but the response was lost before
+    the local binding row was written, a changed-arguments or changed-price
+    retry would dedup onto the original approval and later bind the retry's
+    hash to the human's original decision.
     """
     digest = sha256_hex(
         {
@@ -326,9 +336,7 @@ class HumanApprovalService:
             return result.scalar_one_or_none()
 
     @staticmethod
-    def _apply_decision(
-        model: HumanApprovalModel, payload: dict[str, Any]
-    ) -> None:
+    def _apply_decision(model: HumanApprovalModel, payload: dict[str, Any]) -> None:
         status = payload.get("status") or payload.get("decision") or ""
         if status in {APPROVAL_STATUS_APPROVED, APPROVAL_STATUS_REJECTED}:
             model.status = status
@@ -432,7 +440,7 @@ class HumanApprovalService:
         settings = get_settings()
         simulated = is_simulation("human_approval")
         production_like = is_production_like_environment(settings.ENVIRONMENT)
-        req_hash = invoke_request_hash(tool_name, arguments)
+        req_hash = invoke_request_hash(tool_name, arguments, estimated_credits)
 
         # Fresh-create config guards (current environment).
         if simulated and production_like:
@@ -507,7 +515,8 @@ class HumanApprovalService:
         Both guards matter on the reload path, which the fresh-create guards
         never see: a dev-minted *simulated* approval must not authorize an
         invoke once the environment is production-like, and an approval must
-        bind to the exact ``(tool, arguments)`` the human reviewed.
+        bind to the exact ``(tool, arguments, estimated_credits)`` request the
+        human reviewed.
         """
         if model.simulated and production_like:
             raise HumanApprovalError("human_approval_not_configured")

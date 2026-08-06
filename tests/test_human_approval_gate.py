@@ -123,6 +123,23 @@ class FakeSentinel:
         return await self.get_approval(action_id)
 
 
+class DedupSentinel:
+    """Sentinel stand-in that deduplicates creates by provider key."""
+
+    def __init__(self) -> None:
+        self.by_key: dict[str, str] = {}
+        self.creates: list[tuple[str, dict]] = []
+
+    async def create_approval(self, **kwargs):
+        key = kwargs["idempotency_key"]
+        self.creates.append((key, kwargs["arguments"]))
+        action = self.by_key.setdefault(key, f"act_{len(self.by_key)}")
+        return {"action_id": action, "status": "pending"}
+
+    async def get_approval(self, action_id):
+        return {"action_id": action_id, "status": "pending"}
+
+
 def _invoke_body(provisioned, permit, idem_key: str) -> dict:
     return {
         "jsonrpc": "2.0",
@@ -162,7 +179,9 @@ async def _approval_permit(client, provisioned, *, idem_key: str) -> dict:
 
 
 async def _ledger_debits(client, wallet_id: str) -> int:
-    resp = await client.get(f"/v1/billing/ledger/{wallet_id}", headers=BOOTSTRAP_HEADERS)
+    resp = await client.get(
+        f"/v1/billing/ledger/{wallet_id}", headers=BOOTSTRAP_HEADERS
+    )
     assert resp.status_code == 200
     return sum(1 for entry in resp.json()["entries"] if entry["action"] == "debit")
 
@@ -465,7 +484,9 @@ async def test_locally_expired_approval_denies(
     factory = get_session_factory()
     async with factory() as session:
         await session.execute(
-            text("UPDATE human_approvals SET expires_at = :past WHERE approval_id = :aid"),
+            text(
+                "UPDATE human_approvals SET expires_at = :past WHERE approval_id = :aid"
+            ),
             {"past": datetime(2000, 1, 1), "aid": approval_id},
         )
         await session.commit()
@@ -709,6 +730,38 @@ async def test_argument_swap_after_approval_is_denied(
 
 
 @pytest.mark.anyio
+async def test_price_change_after_approval_is_denied(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """The human approves one price; a same-key retry at a higher current
+    price must not spend that approval or charge the wallet."""
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(client, provisioned, idem_key="price-permit-1")
+    body = _invoke_body(provisioned, permit, "price-invoke-1")
+
+    await _approve_pending(client, provisioned, fake, body)
+    assert fake.created[0]["arguments"]["estimated_credits"] == "2.0"
+
+    service = get_service_registry().get_local(TOOL)
+    assert service is not None
+    service["credits_per_unit"] = 20.0
+
+    resp = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    error = resp.json()["error"]
+    assert error["code"] == -32003
+    assert error["message"] == "human_approval_request_mismatch"
+    assert error["data"]["receipt"]["outcome"] == "denied"
+    assert error["data"]["receipt"]["credits_charged"] == "0"
+    assert await _ledger_debits(client, provisioned["agent_wallet_id"]) == 0
+
+
+@pytest.mark.anyio
 async def test_one_approval_cannot_charge_twice_across_transports(
     client, clean_database, registered_tool, fresh_service, monkeypatch
 ):
@@ -856,8 +909,9 @@ async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
         sentinel_idempotency_key,
     )
 
-    hx = invoke_request_hash("t", {"a": 1})
-    hy = invoke_request_hash("t", {"a": 2})
+    hx = invoke_request_hash("t", {"a": 1}, Decimal("2"))
+    hy = invoke_request_hash("t", {"a": 2}, Decimal("2"))
+    hz = invoke_request_hash("t", {"a": 1}, Decimal("20"))
     k1 = sentinel_idempotency_key("w", "p", "t", "k", hx)
     k2 = sentinel_idempotency_key("w", "p", "t", "k", hx)
     k3 = sentinel_idempotency_key("w", "p", "t", "different", hx)
@@ -865,7 +919,9 @@ async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
     # retry gets its own Sentinel approval instead of riding the human's
     # original decision (the transient-create bypass).
     k4 = sentinel_idempotency_key("w", "p", "t", "k", hy)
-    assert k1 == k2 and k1 != k3 and k1 != k4 and k1.startswith("mw-")
+    # The same applies when the reviewed price changes with identical args.
+    k5 = sentinel_idempotency_key("w", "p", "t", "k", hz)
+    assert k1 == k2 and k1 not in {k3, k4, k5} and k1.startswith("mw-")
 
     _sentinel_env(monkeypatch, simulated=False)
     fake = FakeSentinel(status="pending")
@@ -882,14 +938,16 @@ async def test_sentinel_idempotency_key_is_deterministic_per_invoke(
         permit["permit_id"],
         TOOL,
         "detkey-invoke-1",
-        invoke_request_hash(TOOL, {"message": "hello"}),
+        invoke_request_hash(TOOL, {"message": "hello"}, Decimal("2")),
     )
     # Independent of the per-attempt random approval_id.
     assert "appr-" not in sent_key
 
 
 @pytest.mark.anyio
-async def test_consume_is_single_winner(clean_database, fresh_service, monkeypatch, client):
+async def test_consume_is_single_winner(
+    clean_database, fresh_service, monkeypatch, client
+):
     """Unit: an approved, unexpired approval consumes exactly once; an expired
     one never consumes."""
     from datetime import datetime
@@ -1007,22 +1065,6 @@ async def test_transient_create_with_different_args_gets_separate_approval(
     provisioned = await provision_agent_wallet(client)
     permit = await _approval_permit(client, provisioned, idem_key="transient-permit-1")
 
-    # A Sentinel stand-in that records the provider Idempotency-Key per create
-    # and (like real Sentinel) dedups on it.
-    class DedupSentinel:
-        def __init__(self):
-            self.by_key: dict[str, str] = {}
-            self.creates: list[tuple[str, dict]] = []
-
-        async def create_approval(self, **kwargs):
-            key = kwargs["idempotency_key"]
-            self.creates.append((key, kwargs["arguments"]))
-            action = self.by_key.setdefault(key, f"act_{len(self.by_key)}")
-            return {"action_id": action, "status": "pending"}
-
-        async def get_approval(self, action_id):
-            return {"action_id": action_id, "status": "pending"}
-
     dedup = DedupSentinel()
     monkeypatch.setattr(fresh_service, "_sentinel", lambda: dedup)
 
@@ -1059,6 +1101,54 @@ async def test_transient_create_with_different_args_gets_separate_approval(
     # so Y is never bound to X's human decision.
     keys = {k for k, _ in dedup.creates}
     assert len(keys) == 2, dedup.creates
-    x_hash = invoke_request_hash(TOOL, {"text": "X the human reviews"})
-    y_hash = invoke_request_hash(TOOL, {"text": "Y never reviewed"})
+    x_hash = invoke_request_hash(TOOL, {"text": "X the human reviews"}, Decimal("2"))
+    y_hash = invoke_request_hash(TOOL, {"text": "Y never reviewed"}, Decimal("2"))
     assert x_hash != y_hash
+
+
+@pytest.mark.anyio
+async def test_transient_create_with_different_price_gets_separate_approval(
+    client, clean_database, registered_tool, fresh_service, monkeypatch
+):
+    """If Sentinel commits a create before local persistence fails, a retry
+    at a different price must use a distinct provider key and approval."""
+    _sentinel_env(monkeypatch, simulated=False)
+    provisioned = await provision_agent_wallet(client)
+    permit = await _approval_permit(
+        client, provisioned, idem_key="transient-price-permit-1"
+    )
+
+    dedup = DedupSentinel()
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: dedup)
+
+    calls = {"n": 0}
+    real_persist = fresh_service._persist
+
+    async def flaky_persist(model):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("lost response after sentinel create")
+        return await real_persist(model)
+
+    monkeypatch.setattr(fresh_service, "_persist", flaky_persist)
+
+    body = _invoke_body(provisioned, permit, "transient-price-1")
+    first = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    assert first.json()["error"]["code"] == -32005
+
+    service = get_service_registry().get_local(TOOL)
+    assert service is not None
+    service["credits_per_unit"] = 20.0
+
+    second = await client.post(
+        "/mcp/messages", json=body, headers=provisioned["agent_headers"]
+    )
+    assert second.json()["error"]["message"] == "human_approval_pending"
+
+    assert [created[1]["estimated_credits"] for created in dedup.creates] == [
+        "2.0",
+        "20.0",
+    ]
+    assert len({created[0] for created in dedup.creates}) == 2, dedup.creates

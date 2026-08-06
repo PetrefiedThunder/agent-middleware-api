@@ -3,9 +3,10 @@ the SQLite boolean backfill from 023.
 
 Two changes:
 
-1. ``human_approvals.request_hash`` — sha256 of the ``(tool, arguments)`` the
-   human reviewed. Lets a reloaded approval reject an invoke that reused the
-   same idempotency key with different arguments.
+1. ``human_approvals.request_hash`` — sha256 of the
+   ``(tool, arguments, estimated_credits)`` request the human reviewed. Lets a
+   reloaded approval reject an invoke that reused the same idempotency key with
+   different arguments or a different current price.
 
 2. Repair ``permits.requires_human_approval`` on SQLite. Migration 023 added
    the column with ``server_default="false"`` — a plain string that SQLite
