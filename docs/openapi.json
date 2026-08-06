@@ -5942,6 +5942,9 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Dashboard not found"
           }
         }
       }
@@ -13343,10 +13346,15 @@
         "operationId": "root__get",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "JSON service index or HTML control deck",
             "content": {
               "application/json": {
                 "schema": {}
+              },
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           }
