@@ -121,16 +121,9 @@ async def refresh_access_token(
     # from a stolen key kept renewing for the refresh lifetime after that key
     # was revoked — revocation did not contain the compromise. Require the
     # wallet to still hold at least one active key before re-issuing.
-    from app.services.api_key_service import (
-        WalletNotFoundError,
-        get_api_key_service,
-    )
+    from app.services.api_key_service import get_api_key_service
 
-    try:
-        key_summary = await get_api_key_service().get_keys(payload.sub)
-    except WalletNotFoundError:
-        key_summary = {"total_active": 0}
-    if not key_summary.get("total_active"):
+    if not await get_api_key_service().has_live_key(payload.sub):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

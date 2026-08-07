@@ -236,6 +236,30 @@ class APIKeyService:
             "total_revoked": total_revoked,
         }
 
+    async def has_live_key(self, wallet_id: str) -> bool:
+        """True if the wallet holds at least one key that could authenticate now.
+
+        Deliberately mirrors ``validate_key``'s liveness rule — ACTIVE status
+        *and* not past ``expires_at`` — rather than reusing ``get_keys``'
+        ``total_active``, which counts status only. Nothing sweeps expired keys
+        to a non-active status, so a status-only check reports a wallet as
+        credentialed after every one of its keys has timed out, and any gate
+        built on it would outlive the credentials it is meant to track.
+        """
+        now = utc_now()
+        async with self._session_factory()() as session:
+            result = await session.execute(
+                select(APIKeyModel).where(
+                    col(APIKeyModel.wallet_id) == wallet_id,
+                    col(APIKeyModel.status) == APIKeyStatus.ACTIVE.value,
+                )
+            )
+            for key in result.scalars().all():
+                expires_at = key.expires_at
+                if not expires_at or expires_at >= now:
+                    return True
+        return False
+
     async def validate_key(self, api_key: str) -> Optional[APIKeyModel]:
         """
         Validate an API key and return the key model if valid.

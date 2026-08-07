@@ -117,6 +117,55 @@ async def test_refresh_denied_once_the_wallet_has_no_active_key(
 
 
 @pytest.mark.anyio
+async def test_refresh_denied_once_every_key_has_expired(
+    client, clean_database, signing_key
+):
+    """Time-expiry must contain too, not just explicit revocation.
+
+    An expired key keeps status="active" (nothing sweeps it), so a status-only
+    liveness check would let refresh outlive every credential the wallet has —
+    /v1/auth/token already rejects such a key.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.core.time import utc_now
+    from app.db.database import get_session_factory
+    from app.db.models import APIKeyModel
+
+    provisioned = await provision_agent_wallet(client)
+    api_key = provisioned["agent_headers"]["X-API-Key"]
+    tokens = await _mint_tokens(client, api_key)
+
+    # Expire every key for the wallet in place, leaving status "active".
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(APIKeyModel).where(
+                    APIKeyModel.wallet_id == provisioned["agent_wallet_id"]
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            row.expires_at = utc_now() - timedelta(minutes=5)
+            session.add(row)
+        await session.commit()
+        assert all(r.status == "active" for r in rows)
+
+    # The front door already rejects the expired key...
+    mint = await client.post("/v1/auth/token", json={"api_key": api_key})
+    assert mint.status_code == 401
+    # ...so refresh must not keep issuing tokens either.
+    resp = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "no_active_api_key"
+
+
+@pytest.mark.anyio
 async def test_revoked_key_cannot_mint_new_tokens(
     client, clean_database, signing_key
 ):
