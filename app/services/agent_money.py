@@ -720,6 +720,39 @@ class AgentMoney:
                 "status": "completed",
             }
 
+    async def is_wallet_or_descendant(
+        self, wallet_id: str, ancestor_wallet_id: str, *, max_depth: int = 32
+    ) -> bool:
+        """True if ``wallet_id`` is ``ancestor_wallet_id`` or below it in the
+        sponsor -> agent -> child hierarchy.
+
+        Used to authorize which wallet a permit may encumber: an issuer may name
+        itself or any wallet it funds as the permit subject, but not an
+        unrelated wallet. Walks the ``parent_wallet_id`` chain with a depth cap
+        so a malformed cycle cannot loop forever.
+        """
+        if wallet_id == ancestor_wallet_id:
+            return True
+        async with self._session_factory()() as session:
+            current = wallet_id
+            seen: set[str] = set()
+            for _ in range(max_depth):
+                if current in seen:
+                    return False
+                seen.add(current)
+                result = await session.execute(
+                    select(WalletModel.parent_wallet_id).where(
+                        cast(ColumnElement[bool], WalletModel.wallet_id == current)
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if not row:
+                    return False
+                if row == ancestor_wallet_id:
+                    return True
+                current = row
+        return False
+
     async def get_swarm_budget(self, parent_wallet_id: str) -> dict:
         """Get hierarchical budget summary for an agent's child swarm."""
         async with self._session_factory()() as session:
