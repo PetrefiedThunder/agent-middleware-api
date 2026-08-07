@@ -785,7 +785,7 @@ class AgentMoney:
                     return False
                 seen.add(current)
                 result = await session.execute(
-                    select(WalletModel.parent_wallet_id).where(
+                    select(cast(Any, WalletModel.parent_wallet_id)).where(
                         cast(ColumnElement[bool], WalletModel.wallet_id == current)
                     )
                 )
