@@ -260,6 +260,26 @@ class APIKeyService:
                     return True
         return False
 
+    async def is_key_live(self, key_id: str) -> bool:
+        """True if this specific key could authenticate right now.
+
+        Wallet-level liveness is too coarse for revocation containment: a wallet
+        holding several keys stays "live" after the compromised one is revoked,
+        and auto_rotate_on_suspicious_activity revokes the suspect key while
+        issuing a replacement, so the wallet is never keyless. Checking the
+        originating key directly is what makes revoking one credential actually
+        invalidate what that credential minted. An unknown key_id is not live.
+        """
+        async with self._session_factory()() as session:
+            result = await session.execute(
+                select(APIKeyModel).where(col(APIKeyModel.key_id) == key_id)
+            )
+            key = result.scalar_one_or_none()
+        if not key or key.status != APIKeyStatus.ACTIVE.value:
+            return False
+        expires_at = key.expires_at
+        return not expires_at or expires_at >= utc_now()
+
     async def validate_key(self, api_key: str) -> Optional[APIKeyModel]:
         """
         Validate an API key and return the key model if valid.

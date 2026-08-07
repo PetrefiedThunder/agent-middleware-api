@@ -166,6 +166,91 @@ async def test_refresh_denied_once_every_key_has_expired(
 
 
 @pytest.mark.anyio
+async def test_revoking_one_of_several_keys_kills_only_its_own_tokens(
+    client, clean_database, signing_key
+):
+    """Containment is per-key, not per-wallet.
+
+    A wallet-level liveness check is too coarse: with a sibling key still
+    active, a token minted from the compromised key would stay renewable. The
+    token is bound to the key that minted it, so revoking that key kills its
+    chain while the sibling's chain keeps working.
+    """
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+
+    second = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id, "key_name": "sibling"},
+        headers={"X-API-Key": "test-key"},
+    )
+    assert second.status_code == 201
+    sibling = second.json()
+
+    compromised_tokens = await _mint_tokens(
+        client, provisioned["agent_headers"]["X-API-Key"]
+    )
+    sibling_tokens = await _mint_tokens(client, sibling["api_key"])
+
+    # Revoke only the compromised key; the sibling stays active.
+    await get_api_key_service().revoke_key(
+        wallet_id=wallet_id,
+        key_id=provisioned["key_id"],
+        reason="compromised",
+    )
+
+    denied = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": compromised_tokens["refresh_token"]},
+    )
+    assert denied.status_code == 401
+    assert denied.json()["detail"]["error"] == "no_active_api_key"
+
+    allowed = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": sibling_tokens["refresh_token"]},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+@pytest.mark.anyio
+async def test_rotation_carries_the_key_binding_forward(
+    client, clean_database, signing_key
+):
+    """Refreshing must not launder a bound chain into an unbound one."""
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    tokens = await _mint_tokens(
+        client, provisioned["agent_headers"]["X-API-Key"]
+    )
+
+    rotated = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert rotated.status_code == 200
+    rotated_refresh = rotated.json()["refresh_token"]
+
+    # Revoke the originating key; a second key keeps the wallet "live", so only
+    # a preserved binding can deny the rotated token.
+    await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id, "key_name": "other"},
+        headers={"X-API-Key": "test-key"},
+    )
+    await get_api_key_service().revoke_key(
+        wallet_id=wallet_id,
+        key_id=provisioned["key_id"],
+        reason="compromised",
+    )
+
+    resp = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": rotated_refresh}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "no_active_api_key"
+
+
+@pytest.mark.anyio
 async def test_revoked_key_cannot_mint_new_tokens(
     client, clean_database, signing_key
 ):
