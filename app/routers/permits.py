@@ -6,8 +6,6 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.core.auth import AuthContext, get_auth_context
-from app.core.dependencies import get_agent_money
-from app.services.agent_money import AgentMoney
 from app.schemas.trust import (
     PermitCreateRequest,
     PermitListResponse,
@@ -17,9 +15,11 @@ from app.schemas.trust import (
     ReceiptListResponse,
 )
 from app.trust import (
+    AgentMoney,
     IdempotencyConflictError,
     IdempotencyInProgressError,
     PermitError,
+    get_agent_money,
     get_idempotency_service,
     get_permit_service,
     get_receipt_service,
