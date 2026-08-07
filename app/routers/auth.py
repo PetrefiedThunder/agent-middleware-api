@@ -115,6 +115,33 @@ async def refresh_access_token(
         record.revoked = True
         await session.commit()
 
+    # A JWT is derived authority: it exists only because an API key was
+    # presented at /token. Refreshing checked the signature and the revoked
+    # flag but never re-checked the underlying credential, so tokens minted
+    # from a stolen key kept renewing for the refresh lifetime after that key
+    # was revoked — revocation did not contain the compromise. Require the
+    # wallet to still hold at least one active key before re-issuing.
+    from app.services.api_key_service import (
+        WalletNotFoundError,
+        get_api_key_service,
+    )
+
+    try:
+        key_summary = await get_api_key_service().get_keys(payload.sub)
+    except WalletNotFoundError:
+        key_summary = {"total_active": 0}
+    if not key_summary.get("total_active"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "error": "no_active_api_key",
+                "message": (
+                    "The wallet has no active API key; refresh tokens derived "
+                    "from a revoked key cannot be renewed."
+                ),
+            },
+        )
+
     # Issue new tokens
     new_access = jwt_svc.create_access_token(
         wallet_id=payload.sub,

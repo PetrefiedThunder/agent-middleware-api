@@ -1,0 +1,158 @@
+"""Revoking an API key must also kill the JWTs derived from it.
+
+A JWT is derived authority: it exists only because an API key was presented at
+/v1/auth/token. Before these fixes, revocation did not contain a compromise —
+POST /v1/auth/refresh checked only the token signature and the stored revoked
+flag, so an attacker holding a refresh token minted from a stolen key kept
+issuing access tokens for the refresh lifetime after the key was revoked.
+"""
+
+from __future__ import annotations
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.core.config import get_settings
+from app.main import app
+from app.services.api_key_service import get_api_key_service
+from tests.test_trust_helpers import provision_agent_wallet
+
+# 32 raw bytes, strict base64 — same non-secret test material CI uses.
+TEST_SIGNING_KEY = "dGVzdC1zaWduaW5nLWtleS1tYXRlcmlhbC0zMmJ5dGU="
+
+
+@pytest.fixture
+def signing_key(monkeypatch):
+    monkeypatch.setenv("TRUST_SIGNING_PRIVATE_KEY_B64", TEST_SIGNING_KEY)
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.fixture
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+async def _mint_tokens(client, api_key: str) -> dict:
+    resp = await client.post("/v1/auth/token", json={"api_key": api_key})
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.anyio
+async def test_refresh_works_while_the_key_is_active(
+    client, clean_database, signing_key
+):
+    """Control: the happy path must keep working."""
+    provisioned = await provision_agent_wallet(client)
+    tokens = await _mint_tokens(
+        client, provisioned["agent_headers"]["X-API-Key"]
+    )
+
+    resp = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["access_token"]
+
+
+@pytest.mark.anyio
+async def test_emergency_revocation_kills_refresh_tokens(
+    client, clean_database, signing_key
+):
+    """Emergency revocation must revoke derived refresh tokens, not just keys."""
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    tokens = await _mint_tokens(
+        client, provisioned["agent_headers"]["X-API-Key"]
+    )
+
+    result = await get_api_key_service().emergency_revocation(
+        wallet_id=wallet_id,
+        reason="test_incident",
+        create_new_key=False,
+    )
+    assert result["revoked_refresh_tokens"] >= 1
+
+    resp = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] in (
+        "revoked_refresh_token",
+        "no_active_api_key",
+    )
+
+
+@pytest.mark.anyio
+async def test_refresh_denied_once_the_wallet_has_no_active_key(
+    client, clean_database, signing_key
+):
+    """Single-key revocation also contains: no live key, no renewal.
+
+    Uses revoke_key (not the emergency path) so this covers the ordinary
+    revocation route, which does not touch refresh tokens directly.
+    """
+    provisioned = await provision_agent_wallet(client)
+    tokens = await _mint_tokens(
+        client, provisioned["agent_headers"]["X-API-Key"]
+    )
+
+    await get_api_key_service().revoke_key(
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        reason="test_revoke",
+    )
+
+    resp = await client.post(
+        "/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "no_active_api_key"
+
+
+@pytest.mark.anyio
+async def test_revoked_key_cannot_mint_new_tokens(
+    client, clean_database, signing_key
+):
+    """The front door closes too: a revoked key cannot exchange for tokens."""
+    provisioned = await provision_agent_wallet(client)
+    api_key = provisioned["agent_headers"]["X-API-Key"]
+
+    await get_api_key_service().revoke_key(
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        reason="test_revoke",
+    )
+
+    resp = await client.post("/v1/auth/token", json={"api_key": api_key})
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_other_wallets_are_unaffected_by_a_revocation(
+    client, clean_database, signing_key
+):
+    """Containment must be scoped: revoking wallet A must not break wallet B."""
+    victim = await provision_agent_wallet(client)
+    bystander = await provision_agent_wallet(client)
+    bystander_tokens = await _mint_tokens(
+        client, bystander["agent_headers"]["X-API-Key"]
+    )
+
+    await get_api_key_service().emergency_revocation(
+        wallet_id=victim["agent_wallet_id"],
+        reason="test_incident",
+        create_new_key=False,
+    )
+
+    resp = await client.post(
+        "/v1/auth/refresh",
+        json={"refresh_token": bystander_tokens["refresh_token"]},
+    )
+    assert resp.status_code == 200, resp.text

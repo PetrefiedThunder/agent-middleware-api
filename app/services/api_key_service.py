@@ -24,7 +24,12 @@ from sqlmodel import col
 
 from app.core.time import utc_now
 from ..db.database import get_session_factory
-from ..db.models import APIKeyModel, KeyRotationLogModel, WalletModel
+from ..db.models import (
+    APIKeyModel,
+    KeyRotationLogModel,
+    RefreshTokenModel,
+    WalletModel,
+)
 from ..schemas.billing import (
     APIKeyStatus,
     RotationType,
@@ -488,6 +493,24 @@ class APIKeyService:
                 session.add(key)
                 revoked_key_ids.append(key.key_id)
 
+            # Revoking the API keys alone does not contain a compromise: a JWT
+            # minted from a stolen key before revocation keeps working, and
+            # POST /v1/auth/refresh re-issues access tokens from it for the
+            # refresh token's full lifetime without ever re-checking that the
+            # wallet still has a live key. Emergency revocation must therefore
+            # kill the derived credentials too, not just the keys they came from.
+            refresh_result = await session.execute(
+                select(RefreshTokenModel).where(
+                    col(RefreshTokenModel.wallet_id) == wallet_id,
+                    col(RefreshTokenModel.revoked).is_(False),
+                )
+            )
+            revoked_refresh_tokens = 0
+            for token in refresh_result.scalars().all():
+                token.revoked = True
+                session.add(token)
+                revoked_refresh_tokens += 1
+
             log_entry = KeyRotationLogModel(
                 log_id=f"rot_{uuid4().hex[:12]}",
                 key_id="all",
@@ -527,7 +550,8 @@ class APIKeyService:
 
         logger.critical(
             f"EMERGENCY revocation for wallet {wallet_id}: "
-            f"revoked {len(revoked_key_ids)} keys, reason={reason}"
+            f"revoked {len(revoked_key_ids)} keys and "
+            f"{revoked_refresh_tokens} refresh tokens, reason={reason}"
         )
 
         from ..services.notifications import get_notification_service
@@ -541,6 +565,7 @@ class APIKeyService:
         return {
             "wallet_id": wallet_id,
             "revoked_keys": revoked_key_ids,
+            "revoked_refresh_tokens": revoked_refresh_tokens,
             "new_key": new_key_data,
             "created_at": now,
         }
