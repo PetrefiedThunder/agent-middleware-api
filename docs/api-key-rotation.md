@@ -18,7 +18,7 @@ removes it from neither git history nor existing clones.
 
 | Date | Key | Exposure | Action |
 | --- | --- | --- | --- |
-| 2026-08-06 | `agent-middleware-secret-99` | Hardcoded in `scripts/stress_test_live.py`, reachable on public `main` (removed from HEAD in #201; still present in history) | 2026-08-07: `VALID_API_KEYS` fully replaced on Railway (old key no longer in the variable). Cutover requires a healthy redeploy — blocked at time of writing because the service's GitHub trigger builds the stale `master` branch, whose migration graph lacks `3988bd05deca`; the running replica still holds the pre-rotation env snapshot until a redeploy lands (see PR for details) |
+| 2026-08-06 | `agent-middleware-secret-99` | Hardcoded in `scripts/stress_test_live.py`, reachable on public `main` (removed from HEAD in #201; still present in history) | 2026-08-07: `VALID_API_KEYS` fully replaced on Railway and cutover completed via dashboard Redeploy of the last good deployment (variable-triggered rebuilds were crash-looping on the stale `master` trigger — see warning below). Verified with `rotate_api_keys.py verify`: retired key rejected (403), replacement accepted (200) |
 
 ## Rotation procedure (Railway)
 
