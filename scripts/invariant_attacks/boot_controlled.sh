@@ -3,8 +3,12 @@
 # kill -9 / restart it. Mirrors scripts/quickstart.py's env exactly, but binds
 # the state dir / port / signing seed to env vars for reproducibility.
 #
-#   TP_STATE_DIR  (default: <repo>/data/quickstart)   database + signing seed
-#   TP_PORT       (default: 8000)
+#   TP_STATE_DIR           (default: <repo>/data/quickstart)  database + seed
+#   TP_PORT                (default: 8000)
+#   RATE_LIMIT_PER_MINUTE  (optional) exported through to the server; raise it
+#                          for the concurrency stress tests (attack_combined.py)
+#                          so the limiter does not throttle the invariant under
+#                          test. Inherited from the environment, not set here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STATE="${TP_STATE_DIR:-$ROOT/data/quickstart}"
@@ -26,4 +30,7 @@ export ENABLE_DEV_KEY_SELF_PROVISION=true ENABLE_STANDARD_MCP_ENDPOINT=true
 export MCP_UPSTREAM_ENABLED=false
 export TRUST_SIGNING_KEY_ID=quickstart-local-ed25519
 export TRUST_SIGNING_PRIVATE_KEY_B64="$(cat "$SEED_FILE")"
-exec python -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT"
+# Run via uv so the server boots on a fresh clone without a pre-activated venv
+# (matches how the Makefile boots every other trust-plane process).
+exec uv run --with-requirements requirements.txt python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port "$PORT"
