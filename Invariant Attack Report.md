@@ -501,9 +501,11 @@ SQLite instance does not exercise at exact commit points.
 
 ## Second-environment reproduction — 2026-08-13
 
-The original campaign (2026-08-12) ran on a single host. To confirm the results
-are not environment-specific, the full harness was re-run from a clean checkout
-on a different machine (macOS, Python 3.12 via `uv`; PostgreSQL 16 in Docker).
+The original campaign (2026-08-12) ran on a single host. To check whether the
+results reproduce on a second, independent environment, the full harness was
+re-run from a clean checkout on a different machine (macOS, Python 3.12 via
+`uv`; PostgreSQL 16 in Docker). One additional environment is corroboration,
+not proof of environment-independence in general.
 **All six invariants reproduced their verdicts**, including attack 2 now holding
 on SQLite after the atomic-UPDATE fix.
 
@@ -522,7 +524,7 @@ on SQLite after the atomic-UPDATE fix.
 
 - `tests/test_mcp_postgres_multiprocess.py` (attack 5, two-process boundary kill) — **3/3 passed**
 - `tests/test_permit_postgres_concurrency.py` (attack 2 row-lock + exactly-once receipts/refunds/dispatch) — **11/11 passed**
-- `attack2_budget_postgres.py` (live HTTP race): cap 7/N 10 → 3 succeed, 7 budget-denied, 6.0 debited; cap 2/N 5 → 1/4/2.0; cap 6/N 8 → 3/5/6.0. **No overspend on any row**, matching the 2026-08-12 Postgres table exactly.
+- `attack2_budget_postgres.py` (live HTTP race): cap 7 / N 10 → 3 success / 7 budget-denied / 6.0 debited; cap 2 / N 5 → 1 success / 4 denied / 2.0 debited; cap 6 / N 8 → 3 success / 5 denied / 6.0 debited. **No overspend on any row**, matching the 2026-08-12 Postgres table exactly.
 
 **Harness portability fix.** `attack4_forgery.py` hardcoded an absolute repo path
 and interpreter from the authoring host, so it could not run on a second machine.

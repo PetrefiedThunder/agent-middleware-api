@@ -156,9 +156,12 @@ def main():
     checks = {
         "success_verifies": results["4a_success_genuine"]["exit"] == 0,
         "denial_verifies": results["4b_denial_genuine"]["exit"] == 0,
-        "all_tampers_rejected": all(
-            v.get("exit") == 1 for v in forge_results.values() if "skipped" not in v
-        ),
+        # Fail closed: every tamper case must have RUN and been rejected. A
+        # skipped case (pattern absent from signing_input) means that forgery
+        # variant was never exercised, so it must not count toward HELD — and an
+        # all-skipped set must not pass via all([]) == True.
+        "all_tampers_rejected": len(forge_results) == len(tampers)
+        and all(v.get("exit") == 1 for v in forge_results.values()),
         "unknown_key_undetermined_not_invalid": results["4d_genuine_vs_unknown_key"][
             "exit"
         ]
