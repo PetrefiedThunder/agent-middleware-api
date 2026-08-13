@@ -65,7 +65,7 @@ import attacklib as A
 SCRATCH = os.environ.get("TP_WORKDIR", os.getcwd())
 PIDFILE = os.environ.get("TP_PIDFILE", f"{SCRATCH}/server.pid")
 LOG = os.environ.get("TP_SERVER_LOG", f"{SCRATCH}/server.log")
-BOOT = os.environ.get("TP_BOOT", f"{SCRATCH}/boot_controlled.sh")
+BOOT = os.environ.get("TP_BOOT", f"{SCRATCH}/boot_controlled_uv.sh")
 PORT = os.environ.get("TP_PORT", "8000")
 
 BUDGET_CAP = 8  # cost 2/call -> 4 calls allowed under P_budget
@@ -188,6 +188,21 @@ def reconcile(wallet, attempted_keys, load_permit, budget_permit):
         r for r in success_receipts if r["ledger_entry_id"] not in debit_ids
     ]
 
+    # Every debit must be covered by EITHER a success receipt (proof of charge) OR
+    # a surviving idempotency record (the client sees idempotency_in_progress and
+    # the record blocks a second charge — a transient "charged, proof-pending"
+    # state). A debit with neither is a SILENT charged-without-proof loss.
+    idem_record_ids = set(idem.keys())
+    silent_orphan_debits = [
+        d
+        for d in debits
+        if d["entry_id"] not in receipt_success_ledger_ids
+        and d["operation_key"] not in idem_record_ids
+    ]
+    debits_without_success_receipt = [
+        d for d in debits if d["entry_id"] not in receipt_success_ledger_ids
+    ]
+
     # permit-scoped success accounting
     load_success = [r for r in success_receipts if r["permit_id"] == load_permit]
     budget_success = [r for r in success_receipts if r["permit_id"] == budget_permit]
@@ -209,6 +224,8 @@ def reconcile(wallet, attempted_keys, load_permit, budget_permit):
         "double_charged_keys": double_charged,
         "num_success_receipts": len(success_receipts),
         "receipt_without_charge_count": len(receipt_without_charge),
+        "debits_without_success_receipt": len(debits_without_success_receipt),
+        "silent_orphan_debit_count": len(silent_orphan_debits),
         "load_permit_successes": len(load_success),
         "budget_permit_successes": len(budget_success),
         "other_permit_successes": len(other_success),
@@ -221,6 +238,16 @@ def reconcile(wallet, attempted_keys, load_permit, budget_permit):
 
 
 def main():
+    # Reset the dogfood side-effect store so the governed tool can write. It caps
+    # at DOGFOOD_MAX_NOTES and returns failed_refunded when full, which would
+    # starve the run of the success receipts the forgery vector needs (the money
+    # invariants still hold under tool failure, but forgery cannot be exercised).
+    # Matches `make quickstart --reset`; the store is a local gitignored file.
+    try:
+        open(A.NOTES_PATH, "w").close()
+    except OSError:
+        pass
+
     victim = A.provision("atk7-victim")
     attacker = A.provision("atk7-attacker")
     revocable = A.provision("atk7-revocable")
@@ -251,20 +278,48 @@ def main():
         idem="atk7-p-scope",
     )["json"]["permit_id"]
 
-    # revoke the revocable key up front so its storm requests hit a dead credential
-    A.http(
+    # revoke the revocable key up front so its storm requests hit a dead
+    # credential. Assert the revoke actually took — otherwise the "revoked key"
+    # vector would be driving a LIVE credential and still report the invariant held.
+    revoke_resp = A.http(
         "DELETE",
         f"/v1/api-keys/{revocable['wallet_id']}/{revocable['key_id']}",
         api_key=revocable["api_key"],
     )
+    revocation_succeeded = revoke_resp.get("status") in (200, 204)
+
+    # Mint one guaranteed clean success receipt up front. The forgery vector
+    # prefers a receipt minted DURING the storm (captured after restart), but an
+    # adverse crash timing can leave every storm debit proof-pending with no
+    # success receipt yet written — this fallback ensures the anti-forgery
+    # property is still exercised rather than silently skipped.
+    pre = A.invoke(
+        victim["api_key"],
+        wallet,
+        p_load,
+        "atk7-preforge",
+        "preforge",
+        rpc_id="atk7-preforge",
+    )
+    pre_storm_rid = (A.receipt_of(pre) or {}).get("receipt_id")
 
     load_keys = [f"atk7-load-{i}" for i in range(LOAD_KEYS)]
     budget_keys = [f"atk7-budget-{i}" for i in range(BUDGET_KEYS)]
     dedup_keys = [f"atk7-dedup-{i}" for i in range(DEDUP_KEYS)]
-    attempted_keys = set(load_keys) | set(budget_keys) | set(dedup_keys)
+    # include the pre-storm forge key so its debit is counted in the key budget
+    attempted_keys = (
+        set(load_keys) | set(budget_keys) | set(dedup_keys) | {"atk7-preforge"}
+    )
 
     # collected live outcomes, tagged by vector
-    live = {"load": [], "budget": [], "scope": [], "cred": [], "dedup": []}
+    live = {
+        "load": [],
+        "budget": [],
+        "scope": [],
+        "cred": [],
+        "dedup": [],
+        "xtenant": [],
+    }
     live_lock = threading.Lock()
 
     def record(bucket, resp):
@@ -278,6 +333,20 @@ def main():
                     "ledger_entry_id": (A.receipt_of(resp) or {}).get(
                         "ledger_entry_id"
                     ),
+                }
+            )
+
+    def record_xtenant(resp):
+        # Cross-tenant permit issuance returns a plain HTTP permit response, not a
+        # governed invoke receipt — so it cannot be judged by outcome/receipt.
+        # A regression shows up as a 2xx that CREATED a permit (permit_id present).
+        j = resp.get("json") if isinstance(resp.get("json"), dict) else {}
+        with live_lock:
+            live["xtenant"].append(
+                {
+                    "status": resp.get("status"),
+                    "permit_created": bool(j.get("permit_id")),
+                    "reason": A.reason_of(resp),
                 }
             )
 
@@ -404,12 +473,13 @@ def main():
                 ),
             )
         )
-        # cross-tenant: attacker issues a permit against the victim's wallet
+        # cross-tenant: attacker issues a permit against the victim's wallet.
+        # Recorded in its own bucket + judged by "did a permit get created", since
+        # an issue_permit response carries no receipt for the cred check to see.
         jobs.append(
             (
-                "cred",
-                lambda i=i: record(
-                    "cred",
+                "xtenant",
+                lambda i=i: record_xtenant(
                     A.issue_permit(
                         attacker,
                         allowed_tools=["partner.notes.write"],
@@ -417,7 +487,7 @@ def main():
                         max_credits=100,
                         idem=f"atk7-xtenant-{i}",
                         subject_wallet_id=wallet,
-                    ),
+                    )
                 ),
             )
         )
@@ -488,6 +558,7 @@ def main():
                 pass
     stop.set()
     kt.join()
+    storm_jobs_executed = min(q_idx["i"], n)
 
     # wait for the old process to actually die, then restart
     t0 = time.time()
@@ -496,6 +567,14 @@ def main():
     crashed_debits = committed_debits(wallet)
     restart_server()
     time.sleep(0.6)
+
+    # Capture a receipt MINTED DURING THE STORM *before* replay can create new
+    # ones, so the forgery check operates on genuinely storm-time evidence.
+    storm_minted = A.db_rows(
+        "SELECT receipt_id FROM receipts WHERE wallet_id=? AND permit_id=? "
+        "AND outcome='success' ORDER BY created_at LIMIT 1",
+        (wallet, p_load),
+    )
 
     # REPLAY every load + budget key once, identical payload
     replay_hist = Counter()
@@ -516,15 +595,12 @@ def main():
 
     rec = reconcile(wallet, attempted_keys, p_load, p_budget)
 
-    # ---- forgery on a storm-minted receipt (vector 4) ----
+    # ---- forgery (vector 4): prefer a storm-minted receipt, fall back to the
+    # pre-storm clean receipt if adverse crash timing left none. ----
     forgery = {"ran": False}
-    minted = A.db_rows(
-        "SELECT receipt_id FROM receipts WHERE wallet_id=? AND permit_id=? AND outcome='success' "
-        "ORDER BY created_at LIMIT 1",
-        (wallet, p_load),
-    )
-    if minted:
-        rid = minted[0]["receipt_id"]
+    rid = storm_minted[0]["receipt_id"] if storm_minted else pre_storm_rid
+    receipt_source = "storm" if storm_minted else "pre_storm"
+    if rid:
         bundle = A.http(
             "GET", f"/v1/receipts/{rid}/portable", api_key=victim["api_key"]
         )
@@ -566,6 +642,7 @@ def main():
         forgery = {
             "ran": True,
             "receipt_id": rid,
+            "receipt_source": receipt_source,
             "genuine_verifies": good["exit"] == 0,
             "genuine_detail": good,
             "signing_input_sample": signing_input[:240],
@@ -588,20 +665,27 @@ def main():
         for r in live["cred"]
         if r["outcome"] == "success" or (r["has_receipt"] and r["ledger_entry_id"])
     ]
-    budget_row = rec["budget_permit_row"] or {}
-    budget_spent = float(budget_row.get("spent_credits", 0))
-    budget_max = float(budget_row.get("max_credits", BUDGET_CAP))
+    budget_row = rec["budget_permit_row"]
+    # A missing P_budget row would make the cap check pass vacuously — require it.
+    budget_row_present = budget_row is not None
+    budget_spent = float((budget_row or {}).get("spent_credits", 0))
+    budget_max = float((budget_row or {}).get("max_credits", BUDGET_CAP))
+    xtenant_created = [r for r in live["xtenant"] if r["permit_created"]]
 
     checks = {
         "crash_happened": killed["at_debits"] is not None,
+        "revocation_succeeded": revocation_succeeded,
         "no_double_charge_total": rec["num_debits"] <= rec["distinct_attempted_keys"],
         "no_double_charge_per_key": not rec["double_charged_keys"],
         "no_receipt_without_charge": rec["receipt_without_charge_count"] == 0,
-        "budget_spent_within_cap": budget_spent <= budget_max,
+        "no_silent_orphan_debit": rec["silent_orphan_debit_count"] == 0,
+        "budget_row_present": budget_row_present,
+        "budget_spent_within_cap": budget_row_present and budget_spent <= budget_max,
         "budget_successes_within_cap": rec["budget_permit_successes"] * COST
         <= BUDGET_CAP,
         "no_scope_success": len(live_scope_success) == 0,
         "no_credential_success": len(live_cred_success) == 0,
+        "no_cross_tenant_permit_created": len(xtenant_created) == 0,
         "no_success_on_other_permits": rec["other_permit_successes"] == 0,
         "forgery_ran": forgery.get("ran", False),
         "forgery_genuine_verifies": forgery.get("genuine_verifies", False),
@@ -624,7 +708,8 @@ def main():
             "dedup_keys": DEDUP_KEYS,
             "dedup_fanout": DEDUP_FANOUT,
             "kill_threshold_debits": THRESHOLD,
-            "total_storm_jobs": n,
+            "storm_jobs_enqueued": n,
+            "storm_jobs_executed": storm_jobs_executed,
         },
         "crash": {
             "killed_at_committed_debits": killed["at_debits"],
@@ -634,7 +719,10 @@ def main():
         "reconciliation": rec,
         "forgery": forgery,
         "live_outcome_counts": {
-            k: Counter(r["outcome"] or r["reason"] or f"http{r['status']}" for r in v)
+            k: Counter(
+                r.get("outcome") or r.get("reason") or f"http{r.get('status')}"
+                for r in v
+            )
             for k, v in live.items()
         },
         "checks": checks,

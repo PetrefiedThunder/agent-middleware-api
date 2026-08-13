@@ -90,17 +90,23 @@ instant committed debits cross a threshold; after restart every load/budget key
 is replayed, then the money invariants are checked against the ledger, and a
 receipt **minted during the storm** is tamper-checked offline.
 
-It needs the same controllable boot as attack 5. The rate limiter is raised so
-the invariant under test — not the throttle — is what the storm exercises:
+It boots via `boot_controlled_uv.sh` (uv-based, so it runs on a fresh clone
+without an activated venv). Because `uv run` keeps uvicorn as a child, the
+launcher must be a **session leader** so the killer can `killpg` the whole group
+— hence the `start_new_session` launch below (`setsid` does not exist on macOS).
+The rate limiter is raised so the invariant under test — not the throttle — is
+what the storm exercises:
 
 ```bash
 export TP_STATE_DIR=/tmp/tp-combined TP_PIDFILE=$TP_STATE_DIR/server.pid
-export TP_BOOT=$PWD/boot_controlled.sh TP_DB_PATH=$TP_STATE_DIR/api.db
+export TP_BOOT=$PWD/boot_controlled_uv.sh TP_DB_PATH=$TP_STATE_DIR/api.db
 export TP_PORT=8000 RATE_LIMIT_PER_MINUTE=1000000
 mkdir -p "$TP_STATE_DIR"
-# boot once (session leader, so the killer can kill the whole process group):
-setsid "$TP_BOOT" >"$TP_STATE_DIR/server.log" 2>&1 & echo $! > "$TP_PIDFILE"
-# (macOS has no setsid — use: python3 -c 'import subprocess,os;p=subprocess.Popen(["bash",os.environ["TP_BOOT"]],start_new_session=True);open(os.environ["TP_PIDFILE"],"w").write(str(p.pid))')
+# boot once as a session leader, writing the group-leader PID to the pidfile:
+python3 -c 'import subprocess,os; p=subprocess.Popen(["bash",os.environ["TP_BOOT"]],\
+  start_new_session=True, stdout=open(os.environ["TP_STATE_DIR"]+"/server.log","ab"),\
+  stderr=subprocess.STDOUT); open(os.environ["TP_PIDFILE"],"w").write(str(p.pid))'
+# wait for http://127.0.0.1:8000/health to be 200, then:
 python attack_combined.py     # -> verdict HELD, crash_happened true
 ```
 

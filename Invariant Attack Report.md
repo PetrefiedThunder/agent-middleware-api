@@ -558,29 +558,38 @@ double-charge corpus), `P_budget` (cap 8, cost 2 → 4 calls allowed, the oversp
 target) and `P_scope` (allows only `some.other.tool`). Attacker wallet B and a
 pre-revoked wallet R drive the credential vectors against V. 214 storm jobs, 24
 concurrent workers, kill threshold = 12 committed debits. Engine: SQLite under a
-controllable boot (`boot_controlled.sh`); the rate limiter is raised so the
-invariant — not the throttle — is what the storm exercises.
+controllable boot (`boot_controlled_uv.sh`, killed by process group); the rate
+limiter is raised so the invariant — not the throttle — is what the storm
+exercises.
 
-**Observed (stable across four runs).** The kill landed mid-storm at 12 committed
-debits, with load successes, budget denials, scope denials, credential denials
-and connection-resets all interleaved in the same window. After restart + replay
-of all 132 keys:
+**Observed (HELD on all four fresh-boot runs; 17/17 checks each).** The kill
+landed mid-storm at 12 committed debits, with load successes, budget denials,
+scope denials, credential denials and connection-resets all interleaved in the
+same window (a representative run executed ~58 of 214 enqueued jobs before the
+kill). After restart + replay of every load/budget key:
 
 | Invariant | Result |
 |-----------|--------|
-| No double charge | 121 debits ≤ 136 distinct keys attempted; **0** keys debited twice |
-| Budget contained | `P_budget.spent_credits` = 8 = cap; **never exceeded** (3 success charges + 1 crash-reserved) |
+| No double charge | committed debits ≤ distinct keys attempted; **0** keys debited twice |
+| Budget contained | `P_budget.spent_credits` ≤ cap on every run; **never exceeded** |
 | Charge ⇔ receipt | **0** success receipts without a ledger debit |
+| No silent charged-without-proof | every debit is covered by a success receipt **or** a surviving idempotency record; **0** silent orphans |
 | No scope escape | **0** `P_scope` successes (all denied or connection-reset) |
-| No credential escape | **0** successes from garbage / missing / confused-deputy / cross-tenant / revoked |
-| Forgery under load | storm-minted receipt VERIFIED genuine; every tampered field INVALID; unknown key UNDETERMINED |
+| No credential escape | **0** successes from garbage / missing / confused-deputy / revoked |
+| No cross-tenant permit | attacker's `subject_wallet_id`-swap issuance was denied (`subject_wallet_access_denied`); **0** permits created — asserted directly, since an issuance carries no receipt |
+| Forgery under load | a storm-minted receipt VERIFIED genuine; every tampered field INVALID; unknown key UNDETERMINED |
 
-The replay returns 121 signed receipts and 11 `idempotency_in_progress` — the
-latter are pre-crash attempts whose surviving idempotency record blocks
-re-execution, so no key is charged twice. The run also reproduces attack 5's
-honestly-scoped transient: a few debits sit `charged, proof-pending` immediately
-after the crash until reconcile repairs or flags them — never a double charge and
-never a success receipt without a charge.
+The replay returns signed receipts for completed keys plus a batch of
+`idempotency_in_progress` — the latter are pre-crash attempts whose surviving
+idempotency record blocks re-execution, so no key is charged twice. The run also
+reproduces attack 5's honestly-scoped transient: some debits sit `charged,
+proof-pending` immediately after the crash until reconcile repairs or flags them
+— never a double charge, never a success receipt without a charge, and never a
+*silent* orphan (each pending debit still maps to a record the client sees as
+in-progress). The harness resets the dogfood side-effect store at start so the
+governed tool can write; when the tool is starved (notes file full) it returns
+`failed_refunded` and the money invariants still hold — charge then refund, no
+net loss — which several runs incidentally confirmed.
 
 Reproduce: see "Six-vector simultaneous attack" in
 [`scripts/invariant_attacks/README.md`](scripts/invariant_attacks/README.md).
