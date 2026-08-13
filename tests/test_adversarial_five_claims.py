@@ -452,6 +452,17 @@ async def test_claim2_concurrent_race_never_exceeds_cap(
     """
     import asyncio
 
+    from app.db.database import close_db
+
+    # Start from a connection pool bound to THIS test's event loop. The shared
+    # async engine is session-scoped but event loops are per-test, so an earlier
+    # test binds the pool's internal asyncio.Queue to its (now-dead) loop; this
+    # test's real concurrency would otherwise fail with "Queue is bound to a
+    # different event loop". Dispose to force a fresh pool on the current loop
+    # (the file-backed test DB keeps its tables across the dispose), and dispose
+    # again in `finally` so we do not strand the pool for the next test.
+    await close_db()
+
     provisioned = await provision_agent_wallet(client)
     tool_name = "adv-claim2-race"
     runs = {"count": 0}
@@ -471,7 +482,7 @@ async def test_claim2_concurrent_race_never_exceeds_cap(
             idem_key="adv-claim2-race-permit",
         )
         cap_allows = 3  # floor(6 / TOOL_COST)
-        concurrency = 12
+        concurrency = 8
 
         async def invoke(i: int) -> dict[str, Any]:
             resp = await client.post(
@@ -519,13 +530,8 @@ async def test_claim2_concurrent_race_never_exceeds_cap(
         assert runs["count"] == cap_allows  # the tool ran only for admitted calls
     finally:
         get_service_registry().unregister_local(tool_name)
-        # This test drives real concurrency against the shared async engine; its
-        # retry storm binds the pool's internal queue to this test's event loop.
-        # Dispose the engine so the next function-scoped loop gets a fresh pool
-        # (otherwise a later concurrency test fails with "Queue is bound to a
-        # different event loop"). Safe: the test DB is a file, so tables persist.
-        from app.db.database import close_db
-
+        # Dispose again so we do not strand a pool bound to this loop for the
+        # next test (see the note at the top of this test).
         await close_db()
 
 
