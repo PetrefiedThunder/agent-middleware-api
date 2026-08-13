@@ -519,6 +519,14 @@ async def test_claim2_concurrent_race_never_exceeds_cap(
         assert runs["count"] == cap_allows  # the tool ran only for admitted calls
     finally:
         get_service_registry().unregister_local(tool_name)
+        # This test drives real concurrency against the shared async engine; its
+        # retry storm binds the pool's internal queue to this test's event loop.
+        # Dispose the engine so the next function-scoped loop gets a fresh pool
+        # (otherwise a later concurrency test fails with "Queue is bound to a
+        # different event loop"). Safe: the test DB is a file, so tables persist.
+        from app.db.database import close_db
+
+        await close_db()
 
 
 # --------------------------------------------------------------------------- #
