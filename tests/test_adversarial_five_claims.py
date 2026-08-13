@@ -505,15 +505,23 @@ async def test_claim2_concurrent_race_never_exceeds_cap(
         # that hits "database is locked" is translated to idempotency_in_progress
         # — NOT a charge and NOT a budget denial. That is lock timing, not an
         # overspend, so it must not red the gate; classify it as transient.
-        succeeded, budget_denied, transient = [], [], []
+        succeeded, budget_denied, transient, unexpected = [], [], [], []
         for r in results:
-            if r.get("result", {}).get("receipt", {}).get("outcome") == "success":
+            outcome = r.get("result", {}).get("receipt", {}).get("outcome")
+            msg = (r.get("error") or {}).get("message", "")
+            if outcome == "success":
                 succeeded.append(r)
-            elif r.get("error", {}).get("message") == "permit_budget_exceeded":
+            elif msg == "permit_budget_exceeded":
                 budget_denied.append(r)
-            else:
+            elif msg == "idempotency_in_progress" or "locked" in msg.lower():
                 transient.append(r)
+            else:
+                unexpected.append(r)
 
+        # Only a lock-translated in-progress is tolerated; anything else (an auth
+        # failure, a malformed payload, an unrelated JSON-RPC error) fails here
+        # rather than being silently absorbed into the count.
+        assert not unexpected, unexpected
         # Every response is accounted for (no 200 slips through unasserted).
         assert len(succeeded) + len(budget_denied) + len(transient) == concurrency
 
