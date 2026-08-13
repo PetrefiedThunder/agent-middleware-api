@@ -570,10 +570,11 @@ def main():
 
     # Capture a receipt MINTED DURING THE STORM *before* replay can create new
     # ones, so the forgery check operates on genuinely storm-time evidence.
+    # Exclude the pre-storm fallback receipt so "receipt_source: storm" is true.
     storm_minted = A.db_rows(
         "SELECT receipt_id FROM receipts WHERE wallet_id=? AND permit_id=? "
-        "AND outcome='success' ORDER BY created_at LIMIT 1",
-        (wallet, p_load),
+        "AND outcome='success' AND receipt_id != ? ORDER BY created_at DESC LIMIT 1",
+        (wallet, p_load, pre_storm_rid or ""),
     )
 
     # REPLAY every load + budget key once, identical payload
@@ -594,6 +595,26 @@ def main():
         ] += 1
 
     rec = reconcile(wallet, attempted_keys, p_load, p_budget)
+
+    # Persisted-state check for denied vectors: a credential/cross-tenant request
+    # can COMMIT server-side before the SIGKILL resets its connection, so the
+    # live response (status=None) would miss it. Judge from the DB instead:
+    #  - no permit was persisted with the attacker as issuer over the victim wallet
+    #  - no success receipt on the victim wallet was signed by an intruder key
+    #    (attacker's confused-deputy key or the revoked key)
+    xtenant_permits_persisted = A.db_rows(
+        "SELECT permit_id FROM permits WHERE issuer_wallet_id=? AND subject_wallet_id=?",
+        (attacker["wallet_id"], wallet),
+    )
+    intruder_key_ids = {attacker["key_id"], revocable["key_id"]}
+    intruder_success = [
+        r
+        for r in A.db_rows(
+            "SELECT receipt_id, key_id FROM receipts WHERE wallet_id=? AND outcome='success'",
+            (wallet,),
+        )
+        if r["key_id"] in intruder_key_ids
+    ]
 
     # ---- forgery (vector 4): prefer a storm-minted receipt, fall back to the
     # pre-storm clean receipt if adverse crash timing left none. ----
@@ -686,6 +707,10 @@ def main():
         "no_scope_success": len(live_scope_success) == 0,
         "no_credential_success": len(live_cred_success) == 0,
         "no_cross_tenant_permit_created": len(xtenant_created) == 0,
+        # persisted-state checks: catch a denied vector that committed but whose
+        # response was lost to the crash
+        "no_cross_tenant_permit_persisted": len(xtenant_permits_persisted) == 0,
+        "no_intruder_success_persisted": len(intruder_success) == 0,
         "no_success_on_other_permits": rec["other_permit_successes"] == 0,
         "forgery_ran": forgery.get("ran", False),
         "forgery_genuine_verifies": forgery.get("genuine_verifies", False),
@@ -717,6 +742,10 @@ def main():
         },
         "replay_outcome_histogram": dict(replay_hist),
         "reconciliation": rec,
+        "persisted_denial_check": {
+            "cross_tenant_permits_persisted": len(xtenant_permits_persisted),
+            "intruder_success_receipts": len(intruder_success),
+        },
         "forgery": forgery,
         "live_outcome_counts": {
             k: Counter(
