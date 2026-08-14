@@ -121,7 +121,9 @@ permissive local/demo deployment (`ALLOW_LEGACY_UNPERMITTED_MCP=true`,
 refused at boot in production-like environments) accepts ungoverned
 permit-less calls, so it advertises `governed`, `receiptProvided`,
 `supportsIdempotency`, and `approvalMayBeRequired` as `false` rather than
-promising guarantees that path does not provide.
+promising guarantees that path does not provide. The exception is a
+`require_permit` tool: the router forces the governed path for it even in
+permissive mode, so it advertises the contract as `true` regardless.
 
 ## "What authority do I currently have?"
 

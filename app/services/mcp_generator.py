@@ -170,17 +170,21 @@ class McpGenerator:
         # with approvalMayBeRequired signaling that wallet policy or the
         # backing permit can pause any call on a human decision (a retryable
         # pending_human_approval, not a failure). Advertised only when the
-        # active trust configuration actually enforces it on every call:
-        # a permissive deployment (ALLOW_LEGACY_UNPERMITTED_MCP, local/demo
-        # only — refused at boot in production-like environments) accepts
-        # ungoverned permit-less calls, and this manifest must not promise
-        # guarantees that path does not provide.
+        # invocation path actually enforces it on every call: a permissive
+        # deployment (ALLOW_LEGACY_UNPERMITTED_MCP, local/demo only — refused
+        # at boot in production-like environments) accepts ungoverned
+        # permit-less calls, and this manifest must not promise guarantees
+        # that path does not provide. A require_permit tool is the exception:
+        # the router forces the governed path for it even in permissive mode.
         from ..core.config import get_settings
 
         settings = get_settings()
         governed = bool(
-            settings.TRUST_MODE_ENABLED
-            and not settings.ALLOW_LEGACY_UNPERMITTED_MCP
+            (
+                settings.TRUST_MODE_ENABLED
+                and not settings.ALLOW_LEGACY_UNPERMITTED_MCP
+            )
+            or service.get("require_permit")
         )
 
         annotations = {

@@ -643,16 +643,53 @@ async def test_annotations_are_honest_in_permissive_trust_mode(
     client, registered_tool, monkeypatch
 ):
     """A deployment that accepts ungoverned permit-less calls must not
-    advertise governance guarantees it does not enforce."""
+    advertise governance guarantees it does not enforce — except for a
+    require_permit tool, whose calls the router forces onto the governed
+    path even in permissive mode."""
     settings = get_settings()
     monkeypatch.setattr(settings, "TRUST_MODE_ENABLED", True)
     monkeypatch.setattr(settings, "ALLOW_LEGACY_UNPERMITTED_MCP", True)
 
-    resp = await client.get("/mcp/tools.json")
-    ann = {t["name"]: t for t in resp.json()["tools"]}[TOOL]["annotations"]
-    assert ann["governed"] is False
-    assert ann["receiptProvided"] is False
-    assert ann["supportsIdempotency"] is False
-    assert ann["approvalMayBeRequired"] is False
-    # Pricing facts are configuration-independent.
-    assert ann["economicAction"] is True
+    registry = get_service_registry()
+    registry.register_local(
+        service_id="authority-permit-forced",
+        name="Permit-Forced Tool",
+        description="High-value tool that always requires a permit",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda: {"ok": True},
+        credits_per_unit=3.0,
+        unit_name="call",
+        require_permit=True,
+    )
+    try:
+        resp = await client.get("/mcp/tools.json")
+        tools = {t["name"]: t for t in resp.json()["tools"]}
+
+        ann = tools[TOOL]["annotations"]
+        assert ann["governed"] is False
+        assert ann["receiptProvided"] is False
+        assert ann["supportsIdempotency"] is False
+        assert ann["approvalMayBeRequired"] is False
+        # Pricing facts are configuration-independent.
+        assert ann["economicAction"] is True
+
+        forced = tools["authority-permit-forced"]["annotations"]
+        assert forced["governed"] is True
+        assert forced["receiptProvided"] is True
+        assert forced["supportsIdempotency"] is True
+        assert forced["approvalMayBeRequired"] is True
+        assert forced["requirePermit"] is True
+    finally:
+        registry.unregister_local("authority-permit-forced")
+
+
+def test_approval_window_is_clamped_to_sentinel_bounds(monkeypatch):
+    from app.services.human_approval import approval_window_seconds
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "SENTINEL_APPROVAL_TIMEOUT_SECONDS", 0)
+    assert approval_window_seconds() == 1
+    monkeypatch.setattr(settings, "SENTINEL_APPROVAL_TIMEOUT_SECONDS", 100_000)
+    assert approval_window_seconds() == 86_400
+    monkeypatch.setattr(settings, "SENTINEL_APPROVAL_TIMEOUT_SECONDS", 300)
+    assert approval_window_seconds() == 300
