@@ -12,8 +12,9 @@ Supports two modes:
 MCP Protocol Reference: https://modelcontextprotocol.io/
 """
 
-import logging
 import asyncio
+import logging
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -162,7 +163,10 @@ class McpGenerator:
         try:
             per_call_cost = float(raw_cost)
         except (TypeError, ValueError):
-            # An unparseable price must not advertise a free tool.
+            per_call_cost = 1.0
+        if not math.isfinite(per_call_cost):
+            # A malformed price (unparseable, NaN, infinite) must not
+            # advertise a free tool.
             per_call_cost = 1.0
 
         # The governance contract behind tools/call: authorized by a

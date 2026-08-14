@@ -683,6 +683,21 @@ async def test_annotations_are_honest_in_permissive_trust_mode(
         registry.unregister_local("authority-permit-forced")
 
 
+def test_non_finite_cost_is_not_advertised_as_free():
+    from app.services.mcp_generator import McpGenerator
+
+    tool = McpGenerator()._service_to_mcp_tool(
+        {
+            "service_id": "authority-nan-priced",
+            "description": "Tool with a malformed exact price",
+            "category": ServiceCategory.AGENT_COMMS.value,
+            "credits_per_unit": 2.0,
+            "credits_per_unit_exact": "nan",
+        }
+    )
+    assert tool["annotations"]["economicAction"] is True
+
+
 def test_approval_window_is_clamped_to_sentinel_bounds(monkeypatch):
     from app.services.human_approval import approval_window_seconds
 
