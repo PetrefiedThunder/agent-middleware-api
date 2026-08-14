@@ -191,6 +191,13 @@ def test_combined_treats_linux_zombie_as_stopped(monkeypatch) -> None:
     assert not combined.alive(4321)
 
 
+def test_combined_proc_stat_parser_handles_comm_parenthesis_and_malformed_input() -> (
+    None
+):
+    assert combined.proc_stat_state("4321 (python) worker) Z 1 2 3") == "Z"
+    assert combined.proc_stat_state("malformed proc stat without delimiter") is None
+
+
 def test_attack6_requires_exact_status_and_reason() -> None:
     expected = {"status": 403, "json": {"detail": {"error": "invalid_api_key"}}}
 
