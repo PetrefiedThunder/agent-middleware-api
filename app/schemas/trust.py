@@ -161,10 +161,16 @@ class AuthoritySummaryResponse(BaseModel):
     human_approval_required: bool
     # Declarative constraints operators set for this wallet.
     policies: list[PolicyBundleResponse]
-    # Explicit signed authority currently held (status=active, this key).
+    # Explicit signed authority currently held: status=active, this key, and
+    # not yet expired. Capped at 50 rows; the total says whether the list is
+    # complete — page /v1/me/permits for the remainder.
     active_permits: list[PermitResponse]
-    # Authority already asked for and still awaiting a human decision.
+    active_permits_total: int
+    # Authority already asked for and still awaiting a human decision. Capped
+    # at 50 rows; the total says whether the list is complete — page
+    # /v1/me/permit-requests for the remainder.
     pending_permit_requests: list[PermitRequestResponse]
+    pending_permit_requests_total: int
 
 
 class PermitVerifyRequest(BaseModel):

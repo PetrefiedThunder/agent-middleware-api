@@ -90,7 +90,7 @@ from app.services.idempotency import (
 from app.services.mcp_generator import MCP_SERVER_VERSION, McpGenerator
 from app.services.permits import PermitError, get_permit_service
 from app.services.service_registry import get_service_registry
-from app.trust import wallet_human_approval_required
+from app.trust import approval_window_seconds, wallet_human_approval_required
 
 logger = logging.getLogger(__name__)
 
@@ -224,14 +224,20 @@ async def _mint_auto_permit(
     if not wallet_id:  # narrowed by the caller; fail closed regardless
         raise _mcp_error(-32003, "wallet_scoped_key_required")
     settings = get_settings()
+    # An approval-gated permit must stay valid for the whole decision window
+    # plus the normal TTL as execution margin: permit expiry is validated
+    # before the approval is polled, so a shorter-lived permit would strand a
+    # decision made late in the window as a terminal permit_expired denial.
+    ttl_seconds = settings.STANDARD_MCP_PERMIT_TTL_SECONDS
+    if requires_human_approval:
+        ttl_seconds += approval_window_seconds()
     permit_request = PermitCreateRequest(
         issuer_wallet_id=wallet_id,
         subject_wallet_id=wallet_id,
         subject_key_id=auth.key_id,
         allowed_tools=[tool_name],
         max_credits=_tool_call_budget(record),
-        expires_at=utc_now()
-        + timedelta(seconds=settings.STANDARD_MCP_PERMIT_TTL_SECONDS),
+        expires_at=utc_now() + timedelta(seconds=ttl_seconds),
         requires_human_approval=requires_human_approval,
     )
 

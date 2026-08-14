@@ -8178,12 +8178,20 @@
             "type": "array",
             "title": "Active Permits"
           },
+          "active_permits_total": {
+            "type": "integer",
+            "title": "Active Permits Total"
+          },
           "pending_permit_requests": {
             "items": {
               "$ref": "#/components/schemas/PermitRequestResponse"
             },
             "type": "array",
             "title": "Pending Permit Requests"
+          },
+          "pending_permit_requests_total": {
+            "type": "integer",
+            "title": "Pending Permit Requests Total"
           }
         },
         "type": "object",
@@ -8194,7 +8202,9 @@
           "human_approval_required",
           "policies",
           "active_permits",
-          "pending_permit_requests"
+          "active_permits_total",
+          "pending_permit_requests",
+          "pending_permit_requests_total"
         ],
         "title": "AuthoritySummaryResponse",
         "description": "Answer to \"what authority do I currently have?\" for one wallet key.\n\nComposes reads the caller can already make one at a time — balance,\nactive policy constraints, active permits, pending permit requests — into\na single view, so a planning agent sees what it may do, what will pause\nfor a human, and what it has already asked for, without stitching four\nlists together. Everything here describes the caller's own wallet."

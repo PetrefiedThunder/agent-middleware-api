@@ -957,12 +957,20 @@ async def _execute_registered_tool(
                 status_code=403,
             )
             # A policy denial's actionable constraint is the policy, not the
-            # (valid) permit — permit_validation.details is None here.
+            # (valid) permit — permit_validation.details is None here. The
+            # evaluated constraints describe the caller's own wallet policy,
+            # which the wallet holder can already read.
             raise ToolPermissionDenied(
                 reason,
                 receipt=receipt_payload,
                 details=(
-                    {"policy_id": policy.policy_id} if policy.policy_id else None
+                    {
+                        "policy_id": policy.policy_id,
+                        "reason_code": reason,
+                        "evaluated_constraints": policy.evaluated_constraints,
+                    }
+                    if policy.policy_id
+                    else None
                 ),
             )
         raise PermissionError(policy.reason)

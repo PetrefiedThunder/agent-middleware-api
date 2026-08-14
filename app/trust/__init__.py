@@ -36,6 +36,7 @@ from .approvals import (
     HumanApprovalError,
     HumanApprovalService,
     HumanApprovalUnavailableError,
+    approval_window_seconds,
     get_human_approval_service,
     human_approval_available,
     human_approval_configured,
@@ -162,6 +163,7 @@ __all__ = [
     "get_human_approval_service",
     "human_approval_available",
     "human_approval_configured",
+    "approval_window_seconds",
     # permits
     "PermitService",
     "PermitValidation",

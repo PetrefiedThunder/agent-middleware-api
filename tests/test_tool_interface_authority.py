@@ -23,9 +23,11 @@ These tests pin the recomposition that makes that true on the standard
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 
 import app.routers.mcp_standard as mcp_standard_module
 import app.services.human_approval as human_approval_module
@@ -220,6 +222,19 @@ async def test_policy_materializes_approval_gate_pending_then_approved(
     assert permit["requires_human_approval"] is True
     assert permit["allowed_tools"] == [TOOL]
 
+    # The permit outlives the whole approval window (plus execution margin),
+    # so a decision made late in the window still executes instead of
+    # stranding as permit_expired.
+    settings = get_settings()
+    issued_at = datetime.fromisoformat(permit["issued_at"])
+    expires_at = datetime.fromisoformat(permit["expires_at"])
+    lifetime = (expires_at - issued_at).total_seconds()
+    assert lifetime >= (
+        settings.SENTINEL_APPROVAL_TIMEOUT_SECONDS
+        + settings.STANDARD_MCP_PERMIT_TTL_SECONDS
+        - 1
+    )
+
 
 @pytest.mark.anyio
 async def test_approval_policy_requires_idempotency_key(
@@ -246,6 +261,45 @@ async def test_approval_policy_requires_idempotency_key(
     assert error["message"] == "idempotency_key_required_for_human_approval"
     assert error["data"]["error"] == "authority_required"
     assert error["data"]["remediation"]["type"] == "retry_with_idempotency_key"
+
+
+@pytest.mark.anyio
+async def test_rejected_approval_is_terminal_and_replays_on_standard_surface(
+    client,
+    standard_mcp_enabled,
+    clean_database,
+    registered_tool,
+    fresh_service,
+    monkeypatch,
+):
+    """A rejected decision denies with a signed receipt, and the same key
+    replays the same denial instead of paging a human again."""
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="rejected")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    await _approval_policy(provisioned["agent_wallet_id"])
+
+    body, headers = _tools_call(idem_key="authority-rejected-1")
+    headers = {**provisioned["agent_headers"], **headers}
+
+    # Approval creation always starts pending; the human's rejection lands
+    # on the poll that the keyed retry performs.
+    fake.status = "pending"
+    first = await client.post("/mcp", json=body, headers=headers)
+    assert first.json()["error"]["code"] == -32005
+
+    fake.status = "rejected"
+    second = await client.post("/mcp", json=body, headers=headers)
+    error = second.json()["error"]
+    assert error["code"] == -32003
+    assert error["message"] == "human_approval_rejected"
+    assert error["data"]["receipt"]["outcome"] == "denied"
+
+    replay = await client.post("/mcp", json=body, headers=headers)
+    assert replay.json()["error"]["message"] == "human_approval_rejected"
+    assert len(fake.created) == 1
 
 
 @pytest.mark.anyio
@@ -403,8 +457,14 @@ async def test_standard_surface_forwards_denial_details(
 
 @pytest.mark.anyio
 async def test_discovery_annotations_carry_governance_contract(
-    client, registered_tool
+    client, registered_tool, monkeypatch
 ):
+    # The suite's ambient env is permissive (conftest); pin strict mode —
+    # the production default — so the manifest advertises the contract.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "TRUST_MODE_ENABLED", True)
+    monkeypatch.setattr(settings, "ALLOW_LEGACY_UNPERMITTED_MCP", False)
+
     resp = await client.get("/mcp/tools.json")
     assert resp.status_code == 200
     tools = {t["name"]: t for t in resp.json()["tools"]}
@@ -473,3 +533,120 @@ async def test_me_authority_requires_wallet_key(client, clean_database):
     resp = await client.get("/v1/me/authority", headers=BOOTSTRAP_HEADERS)
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == "wallet_key_required"
+
+
+@pytest.mark.anyio
+async def test_me_authority_missing_wallet_is_404(
+    client, clean_database, monkeypatch
+):
+    provisioned = await provision_agent_wallet(client)
+
+    async def _no_wallet(self, wallet_id):
+        return None
+
+    from app.services.agent_money import AgentMoney
+
+    monkeypatch.setattr(AgentMoney, "get_wallet", _no_wallet)
+    resp = await client.get("/v1/me/authority", headers=provisioned["agent_headers"])
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error"] == "wallet_not_found"
+
+
+@pytest.mark.anyio
+async def test_me_authority_excludes_expired_permits(
+    client, clean_database, registered_tool
+):
+    """A permit past expires_at keeps status="active" in storage; the summary
+    must not present it as current authority."""
+    from app.db.database import get_session_factory
+    from app.db.models import PermitModel
+
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    live = await create_tool_permit(
+        client,
+        wallet_id=wallet_id,
+        key_id=provisioned["key_id"],
+        tool_name=TOOL,
+        max_credits=5,
+        idem_key="authority-live-permit",
+    )
+    stale = await create_tool_permit(
+        client,
+        wallet_id=wallet_id,
+        key_id=provisioned["key_id"],
+        tool_name=TOOL,
+        max_credits=5,
+        idem_key="authority-stale-permit",
+    )
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            update(PermitModel)
+            .where(PermitModel.permit_id == stale["permit_id"])  # type: ignore[arg-type]
+            .values(
+                expires_at=datetime.now(timezone.utc).replace(tzinfo=None)
+                - timedelta(minutes=5)
+            )
+        )
+        await session.commit()
+
+    resp = await client.get("/v1/me/authority", headers=provisioned["agent_headers"])
+    assert resp.status_code == 200
+    summary = resp.json()
+    permit_ids = [p["permit_id"] for p in summary["active_permits"]]
+    assert live["permit_id"] in permit_ids
+    assert stale["permit_id"] not in permit_ids
+    assert summary["active_permits_total"] == len(permit_ids)
+
+
+@pytest.mark.anyio
+async def test_me_authority_reports_totals_beyond_the_preview_cap(
+    client, clean_database, registered_tool
+):
+    """More than 50 active permits: the preview is capped but the total says
+    so, so a planner never mistakes truncation for absence."""
+    from app.schemas.trust import PermitCreateRequest
+    from app.services.permits import get_permit_service
+
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    service = get_permit_service()
+    for _ in range(52):
+        await service.create_permit(
+            PermitCreateRequest(
+                issuer_wallet_id=wallet_id,
+                subject_wallet_id=wallet_id,
+                subject_key_id=provisioned["key_id"],
+                allowed_tools=[TOOL],
+                max_credits=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            ),
+            subject_key_id=provisioned["key_id"],
+        )
+
+    resp = await client.get("/v1/me/authority", headers=provisioned["agent_headers"])
+    assert resp.status_code == 200
+    summary = resp.json()
+    assert len(summary["active_permits"]) == 50
+    assert summary["active_permits_total"] == 52
+
+
+@pytest.mark.anyio
+async def test_annotations_are_honest_in_permissive_trust_mode(
+    client, registered_tool, monkeypatch
+):
+    """A deployment that accepts ungoverned permit-less calls must not
+    advertise governance guarantees it does not enforce."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "TRUST_MODE_ENABLED", True)
+    monkeypatch.setattr(settings, "ALLOW_LEGACY_UNPERMITTED_MCP", True)
+
+    resp = await client.get("/mcp/tools.json")
+    ann = {t["name"]: t for t in resp.json()["tools"]}[TOOL]["annotations"]
+    assert ann["governed"] is False
+    assert ann["receiptProvided"] is False
+    assert ann["supportsIdempotency"] is False
+    assert ann["approvalMayBeRequired"] is False
+    # Pricing facts are configuration-independent.
+    assert ann["economicAction"] is True

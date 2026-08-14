@@ -7,6 +7,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.auth import AuthContext, get_auth_context
+from app.core.time import utc_now
 from app.schemas.audit import AuditEventListResponse, AuditEventResponse
 from app.schemas.billing import AlertListResponse
 from app.schemas.trust import (
@@ -90,14 +91,18 @@ async def get_my_authority(
         else Decimal(str(wallet.balance))
     )
     policies = [p for p in await list_policy_bundles(wallet_id) if p.is_active]
-    permits, _total = await get_permit_service().list_permits(
+    # A permit past expires_at keeps status="active" in storage (expiry is
+    # enforced dynamically at invoke time), so bound the read to unexpired
+    # rows — this summary must never present authority every invoke rejects.
+    permits, permits_total = await get_permit_service().list_permits(
         wallet_id=wallet_id,
         status="active",
         subject_key_id=key_id,
+        expires_after=utc_now(),
         limit=50,
         offset=0,
     )
-    pending_requests, _requests_total = (
+    pending_requests, requests_total = (
         await get_permit_request_service().list_requests(
             subject_wallet_id=wallet_id,
             status="pending",
@@ -112,9 +117,11 @@ async def get_my_authority(
         human_approval_required=any(p.human_approval_required for p in policies),
         policies=policies,
         active_permits=permits,
+        active_permits_total=permits_total,
         pending_permit_requests=[
             await request_to_response(model) for model in pending_requests
         ],
+        pending_permit_requests_total=requests_total,
     )
 
 

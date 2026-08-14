@@ -63,6 +63,11 @@ depends on the key, approval-gated calls **require** a client
 without one the call is refused with
 `idempotency_key_required_for_human_approval` and a remediation block.
 
+An approval-gated auto-permit lives for the whole approval window
+(`SENTINEL_APPROVAL_TIMEOUT_SECONDS`) plus the standard TTL as execution
+margin, so a decision made late in the window still executes instead of
+stranding as `permit_expired`.
+
 The gate satisfies only the policy's `human_approval_required` constraint.
 Every other constraint in the bundle — tool allowlists, category allowlists,
 `max_cost_per_action`, `daily_spend_limit`, `require_real_effects` — is
@@ -111,6 +116,13 @@ contract alongside pricing:
 pause any call on a human decision without that being an error. Sensitive
 policy internals (whose policy, what thresholds) are not exposed here.
 
+The governance annotations reflect the **active trust configuration**: a
+permissive local/demo deployment (`ALLOW_LEGACY_UNPERMITTED_MCP=true`,
+refused at boot in production-like environments) accepts ungoverned
+permit-less calls, so it advertises `governed`, `receiptProvided`,
+`supportsIdempotency`, and `approvalMayBeRequired` as `false` rather than
+promising guarantees that path does not provide.
+
 ## "What authority do I currently have?"
 
 `GET /v1/me/authority` (wallet-scoped keys only) answers the planning
@@ -123,13 +135,19 @@ question in one read:
   "daily_spend_used": "…",
   "human_approval_required": true,
   "policies": [ … active policy bundles … ],
-  "active_permits": [ … status=active permits for this key … ],
-  "pending_permit_requests": [ … awaiting a human … ]
+  "active_permits": [ … unexpired status=active permits for this key … ],
+  "active_permits_total": 3,
+  "pending_permit_requests": [ … awaiting a human … ],
+  "pending_permit_requests_total": 1
 }
 ```
 
 It is read-only and composes reads the caller could already make one at a
-time; listing never advances a decision or pages a human.
+time; listing never advances a decision or pages a human. Permits past their
+`expires_at` are excluded even while their stored status is still `active`.
+The two lists are previews capped at 50 rows; the `*_total` fields say
+whether a list is complete, and `/v1/me/permits` / `/v1/me/permit-requests`
+page through the remainder.
 
 ## What stays the same
 

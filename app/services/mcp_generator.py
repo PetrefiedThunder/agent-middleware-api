@@ -156,14 +156,32 @@ class McpGenerator:
         cat = service.get("category", "unknown") or "unknown"
         truth = truth_for_category(cat)
 
+        raw_cost = service.get("credits_per_unit_exact")
+        if raw_cost is None:
+            raw_cost = service.get("credits_per_unit", 1.0)
         try:
-            per_call_cost = float(
-                service.get("credits_per_unit_exact")
-                or service.get("credits_per_unit", 1.0)
-                or 0
-            )
+            per_call_cost = float(raw_cost)
         except (TypeError, ValueError):
-            per_call_cost = float(service.get("credits_per_unit", 1.0) or 0)
+            # An unparseable price must not advertise a free tool.
+            per_call_cost = 1.0
+
+        # The governance contract behind tools/call: authorized by a
+        # wallet-bounded permit, metered, and answered with a signed receipt,
+        # with approvalMayBeRequired signaling that wallet policy or the
+        # backing permit can pause any call on a human decision (a retryable
+        # pending_human_approval, not a failure). Advertised only when the
+        # active trust configuration actually enforces it on every call:
+        # a permissive deployment (ALLOW_LEGACY_UNPERMITTED_MCP, local/demo
+        # only — refused at boot in production-like environments) accepts
+        # ungoverned permit-less calls, and this manifest must not promise
+        # guarantees that path does not provide.
+        from ..core.config import get_settings
+
+        settings = get_settings()
+        governed = bool(
+            settings.TRUST_MODE_ENABLED
+            and not settings.ALLOW_LEGACY_UNPERMITTED_MCP
+        )
 
         annotations = {
             "creditsPerCall": service.get("credits_per_unit", 1.0),
@@ -171,17 +189,11 @@ class McpGenerator:
             "category": cat,
             "simulation": truth["simulation"],
             "integrationStatus": truth["integration_status"],
-            # The governance contract behind every call on the governed
-            # surfaces: authorized by a wallet-bounded permit, metered, and
-            # answered with a signed receipt. approvalMayBeRequired signals
-            # that wallet policy or the backing permit can pause any call on
-            # a human decision — the call returns a retryable
-            # pending_human_approval rather than failing.
-            "governed": True,
-            "receiptProvided": True,
-            "supportsIdempotency": True,
+            "governed": governed,
+            "receiptProvided": governed,
+            "supportsIdempotency": governed,
             "economicAction": per_call_cost > 0,
-            "approvalMayBeRequired": True,
+            "approvalMayBeRequired": governed,
         }
         if service.get("credits_per_unit_exact") is not None:
             annotations["creditsPerCallExact"] = service["credits_per_unit_exact"]
