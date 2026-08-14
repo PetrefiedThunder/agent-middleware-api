@@ -462,10 +462,21 @@ def test_cta_aria_labels_preserve_visible_text_and_booking_url(tmp_path) -> None
         assert collector.labeled_links, f"{relative_path} exposes no aria-labelled links"
         for visible, label, href in collector.labeled_links:
             assert visible, f"{relative_path}: aria-label {label!r} on a link with no visible text"
-            assert visible in label, (
-                f"{relative_path}: aria-label {label!r} does not contain the "
-                f"visible link text {visible!r} (WCAG 2.1 Label-in-Name)"
-            )
+            # WCAG 2.1 Label-in-Name: the accessible name must contain the visible
+            # text. For an interactive CTA the visible text must LEAD the label so
+            # a voice-control user who speaks the visible wording reliably
+            # activates the control. A mailto link legitimately prepends a verb
+            # ("Email <address>"), so it only needs to contain the address.
+            if href.startswith("mailto:"):
+                assert visible in label, (
+                    f"{relative_path}: aria-label {label!r} does not contain the "
+                    f"visible link text {visible!r} (WCAG 2.1 Label-in-Name)"
+                )
+            else:
+                assert label.startswith(visible), (
+                    f"{relative_path}: aria-label {label!r} does not lead with the "
+                    f"visible link text {visible!r} (WCAG 2.1 Label-in-Name)"
+                )
             if visible.startswith("Book a"):
                 assert href == booking_url, (
                     f"{relative_path}: booking CTA {visible!r} resolves to {href!r}, "
