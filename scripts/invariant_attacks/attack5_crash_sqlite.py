@@ -172,6 +172,7 @@ def classify_verdict(
     no_receipt_without_charge,
     silent_orphan_count,
     proof_pending_count,
+    worker_error_count,
 ):
     """Classify hard corruption separately from unresolved proof delivery."""
     hard_invariants_hold = (
@@ -180,12 +181,29 @@ def classify_verdict(
         and no_double_by_key
         and no_receipt_without_charge
         and silent_orphan_count == 0
+        and worker_error_count == 0
     )
     if not hard_invariants_hold:
         return "BROKE"
     if proof_pending_count:
         return "PARTIAL"
     return "HELD"
+
+
+def run_worker_request(request_tag, invoke, launch_hist, worker_errors, lock):
+    """Record an invocation outcome, failing closed on an escaped exception."""
+    try:
+        response = invoke()
+    except Exception:
+        with lock:
+            worker_errors[request_tag] += 1
+        return
+    with lock:
+        launch_hist[
+            "receipt"
+            if A.receipt_of(response)
+            else (A.reason_of(response) or "conn_err")
+        ] += 1
 
 
 def main():
@@ -204,6 +222,7 @@ def main():
     ctr = {"n": 0}
     lock = threading.Lock()
     launch_hist = Counter()
+    worker_errors = Counter()
     killed = {"happened": False, "at_debits": None}
 
     def worker():
@@ -213,17 +232,21 @@ def main():
                 ctr["n"] += 1
             if idx >= U:
                 return
-            r = A.invoke(
-                cred["api_key"],
-                wallet,
-                pid_c,
-                attempted[idx],
-                f"note {idx}",
-                rpc_id=attempted[idx],
+            request_tag = attempted[idx]
+            run_worker_request(
+                request_tag,
+                lambda: A.invoke(
+                    cred["api_key"],
+                    wallet,
+                    pid_c,
+                    request_tag,
+                    f"note {idx}",
+                    rpc_id=request_tag,
+                ),
+                launch_hist,
+                worker_errors,
+                lock,
             )
-            launch_hist[
-                "receipt" if A.receipt_of(r) else (A.reason_of(r) or "conn_err")
-            ] += 1
 
     def killer():
         while not stop.is_set():
@@ -248,7 +271,8 @@ def main():
             try:
                 f.result(timeout=30)
             except Exception:
-                pass
+                with lock:
+                    worker_errors["worker_future"] += 1
     stop.set()
     kt.join()
     t0 = time.time()
@@ -295,6 +319,7 @@ def main():
         no_receipt_without_charge=no_receipt_without_charge,
         silent_orphan_count=silent_orphan_count,
         proof_pending_count=proof_pending_count,
+        worker_error_count=sum(worker_errors.values()),
     )
     ev = {
         "attack": "5c - decisive sqlite crash (kill after commit, replay all)",
@@ -316,7 +341,9 @@ def main():
             "no_receipt_without_charge": no_receipt_without_charge,
             "no_silent_orphan_debit": silent_orphan_count == 0,
             "no_unresolved_proof_pending": proof_pending_count == 0,
+            "no_worker_errors": not worker_errors,
         },
+        "worker_errors_by_request_tag": dict(worker_errors),
         "killed_at_committed_debits": killed["at_debits"],
         "unresolved_proof_pending_final": proof_pending_count,
         "crashed_state": crashed,

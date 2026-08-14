@@ -107,7 +107,24 @@ def current_pid():
     return int(open(PIDFILE).read().strip())
 
 
+def proc_stat_state(stat_text):
+    """Return the Linux /proc process state without trusting the comm field."""
+    _, separator, fields = stat_text.rpartition(")")
+    if not separator:
+        return None
+    state_fields = fields.strip().split()
+    return state_fields[0] if state_fields else None
+
+
 def alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as proc_stat:
+            if proc_stat_state(proc_stat.read()) == "Z":
+                return False
+    except (FileNotFoundError, OSError):
+        # /proc is unavailable on macOS, and a disappearing PID is handled by
+        # the portable signal probe below.
+        pass
     try:
         os.kill(pid, 0)
         return True

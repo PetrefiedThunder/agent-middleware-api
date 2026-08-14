@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import sys
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -44,6 +46,7 @@ def test_combined_fails_closed_when_storm_variant_did_not_start(missing: str) ->
                 "no_receipt_without_charge": True,
                 "silent_orphan_count": 0,
                 "proof_pending_count": 0,
+                "worker_error_count": 0,
             },
             "HELD",
         ),
@@ -55,6 +58,7 @@ def test_combined_fails_closed_when_storm_variant_did_not_start(missing: str) ->
                 "no_receipt_without_charge": True,
                 "silent_orphan_count": 0,
                 "proof_pending_count": 1,
+                "worker_error_count": 0,
             },
             "PARTIAL",
         ),
@@ -66,6 +70,7 @@ def test_combined_fails_closed_when_storm_variant_did_not_start(missing: str) ->
                 "no_receipt_without_charge": True,
                 "silent_orphan_count": 1,
                 "proof_pending_count": 0,
+                "worker_error_count": 0,
             },
             "BROKE",
         ),
@@ -77,6 +82,7 @@ def test_combined_fails_closed_when_storm_variant_did_not_start(missing: str) ->
                 "no_receipt_without_charge": True,
                 "silent_orphan_count": 0,
                 "proof_pending_count": 0,
+                "worker_error_count": 0,
             },
             "BROKE",
         ),
@@ -88,29 +94,101 @@ def test_attack5_verdict_distinguishes_pending_from_corruption(
     assert attack5.classify_verdict(**kwargs) == expected
 
 
-def test_attack5_refunds_must_correlate_to_the_exact_debit(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("refund", "expected_correlated", "expected_orphan"),
+    [
+        (
+            {
+                "entry_id": "refund-ledger-1",
+                "amount": 2,
+                "correlation_id": "ledger-1",
+            },
+            1,
+            0,
+        ),
+        (None, 0, 1),
+        (
+            {
+                "entry_id": "refund-wrong-ledger",
+                "amount": 2,
+                "correlation_id": "ledger-1",
+            },
+            0,
+            1,
+        ),
+        (
+            {
+                "entry_id": "refund-ledger-1",
+                "amount": 3,
+                "correlation_id": "ledger-1",
+            },
+            0,
+            1,
+        ),
+    ],
+)
+def test_attack5_refunds_must_correlate_to_the_exact_debit(
+    monkeypatch, refund, expected_correlated: int, expected_orphan: int
+) -> None:
     def fake_db_rows(query: str, params=()):
         if "action='debit'" in query:
-            return [
-                {"entry_id": "ledger-1", "amount": -2, "operation_key": "idem-1"},
-                {"entry_id": "ledger-2", "amount": -2, "operation_key": "idem-2"},
-            ]
+            return [{"entry_id": "ledger-1", "amount": -2, "operation_key": "idem-1"}]
         if "action='refund'" in query:
-            return [
-                {
-                    "entry_id": "refund-ledger-1",
-                    "amount": 2,
-                    "correlation_id": "ledger-1",
-                }
-            ]
+            return [refund] if refund else []
         return []
 
     monkeypatch.setattr(attack5.A, "db_rows", fake_db_rows)
 
-    analysis = attack5.ledger_analysis("agt-test", {"idem-1", "idem-2"})
+    analysis = attack5.ledger_analysis("agt-test", {"idem-1"})
 
-    assert analysis["correlated_refunded_debits"] == 1
-    assert analysis["silent_orphan_debits"] == 1
+    assert analysis["correlated_refunded_debits"] == expected_correlated
+    assert analysis["silent_orphan_debits"] == expected_orphan
+
+
+def test_attack5_worker_failure_prevents_held_verdict() -> None:
+    launch_hist = Counter()
+    worker_errors = Counter()
+
+    def fail_request():
+        raise RuntimeError("injected worker failure")
+
+    attack5.run_worker_request(
+        "idem-failed",
+        fail_request,
+        launch_hist,
+        worker_errors,
+        threading.Lock(),
+    )
+
+    assert worker_errors == {"idem-failed": 1}
+    assert (
+        attack5.classify_verdict(
+            crash_happened=True,
+            no_double_by_total=True,
+            no_double_by_key=True,
+            no_receipt_without_charge=True,
+            silent_orphan_count=0,
+            proof_pending_count=0,
+            worker_error_count=sum(worker_errors.values()),
+        )
+        == "BROKE"
+    )
+
+
+def test_combined_treats_linux_zombie_as_stopped(monkeypatch) -> None:
+    monkeypatch.setattr(
+        combined,
+        "open",
+        lambda *_args, **_kwargs: io.StringIO("4321 (python worker) Z 1 2 3"),
+        raising=False,
+    )
+
+    def unexpected_signal_probe(_pid, _signal):
+        raise AssertionError("zombie must be classified before the signal probe")
+
+    monkeypatch.setattr(combined.os, "kill", unexpected_signal_probe)
+
+    assert not combined.alive(4321)
 
 
 def test_attack6_requires_exact_status_and_reason() -> None:

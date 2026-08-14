@@ -485,15 +485,18 @@ the no-side-effect check passed.
 
 ## What this campaign proves — and what it does not
 
-**Verified:** the isolated attacks exercise all six core trust invariants with
-real concurrency, receipt tampering, deterministic crash boundaries, and exact
-credential-denial contracts. Double-charge, scope escape, receipt forgery, and
-credential authority hold. Budget-cap containment historically broke on SQLite
-but now holds on SQLite and PostgreSQL after the guarded atomic-UPDATE fix. Crash
-integrity holds at the deterministic Postgres boundaries; the live SQLite test is
-classified `PARTIAL` whenever proof delivery remains pending rather than being
-misreported as fully held. The combined campaign must independently satisfy its
-new non-vacuity checks before receiving a hardened `HELD` verdict.
+**Verified:** the isolated attacks exercise all six core trust invariants. The
+applicable budget, deduplication, scope, and crash attacks use real concurrency;
+Attack 4's receipt-forgery mutations and Attack 6's credential-authority checks
+are serial probes. The campaign also covers deterministic crash boundaries and
+exact credential-denial contracts. Double-charge, scope escape, receipt forgery,
+and credential authority hold. Budget-cap containment historically broke on
+SQLite but now holds on SQLite and PostgreSQL after the guarded atomic-UPDATE
+fix. Crash integrity holds at the deterministic Postgres boundaries; the live
+SQLite test is classified `PARTIAL` whenever proof delivery remains pending
+rather than being misreported as fully held. The combined campaign must
+independently satisfy its new non-vacuity checks before receiving a hardened
+`HELD` verdict.
 
 **Does not prove:** production security. Credits here are synthetic; the quickstart
 signing key is local; settlement is not exercised; and the concurrency findings
