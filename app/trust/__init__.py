@@ -106,7 +106,9 @@ from .policy import (
     evaluate_governed_action,
     evaluate_tool_invocation,
     evaluate_wallet_policy,
+    list_policy_bundles,
     record_governed_action,
+    wallet_human_approval_required,
 )
 from .quotes import (
     QUOTE_REASON_CONSUMED,
@@ -240,7 +242,9 @@ __all__ = [
     "evaluate_tool_invocation",
     "evaluate_governed_action",
     "evaluate_wallet_policy",
+    "list_policy_bundles",
     "record_governed_action",
+    "wallet_human_approval_required",
     "PolicyDecision",
     "PolicyEvaluation",
     # metering

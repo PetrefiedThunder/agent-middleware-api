@@ -1,0 +1,475 @@
+"""The middleware disappears behind the tool interface.
+
+An agent should discover a normal MCP tool, call it normally, and have
+governance happen automatically because that is the only executable path.
+These tests pin the recomposition that makes that true on the standard
+``/mcp`` surface:
+
+- A wallet policy demanding a human decision is *materialized* as an
+  approval-gated auto-permit: the agent calls the tool with only name and
+  arguments, gets a retryable ``pending_human_approval`` with an approval id
+  and remediation, and the SAME call with the SAME idempotency key executes
+  once a human approves. The agent never learns the permit API.
+- The approval gate satisfies the policy's ``human_approval_required``
+  constraint but waives nothing else — cost caps still deny.
+- Denials are machine-actionable: the standard surface carries the same
+  ``details`` as the governed endpoints, and mint failures name the gap and
+  the way out (``authority_required`` + remediation).
+- Discovery advertises the governance contract per tool.
+- ``GET /v1/me/authority`` answers "what authority do I currently have?" in
+  one wallet-scoped read.
+"""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+import app.routers.mcp_standard as mcp_standard_module
+import app.services.human_approval as human_approval_module
+from app.core.config import get_settings
+from app.main import app
+from app.routers.mcp import ToolPermissionDenied
+from app.schemas.billing import ServiceCategory
+from app.schemas.policies import PolicyBundleCreate
+from app.services.human_approval import HumanApprovalService
+from app.services.policies import (
+    create_policy_bundle,
+    evaluate_wallet_policy,
+    wallet_human_approval_required,
+)
+from app.services.service_registry import get_service_registry
+from tests.test_trust_helpers import (
+    BOOTSTRAP_HEADERS,
+    create_tool_permit,
+    provision_agent_wallet,
+)
+
+TOOL = "authority-echo"
+
+MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+}
+
+
+@pytest.fixture
+async def client():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
+def standard_mcp_enabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_STANDARD_MCP_ENDPOINT", "true")
+    get_settings.cache_clear()
+    yield
+    monkeypatch.setenv("ENABLE_STANDARD_MCP_ENDPOINT", "false")
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def registered_tool():
+    registry = get_service_registry()
+    registry.register_local(
+        service_id=TOOL,
+        name="Authority Echo",
+        description="Tool-interface authority test tool",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda message="ok": {"message": message},
+        credits_per_unit=2.0,
+        unit_name="call",
+    )
+    yield
+    registry.unregister_local(TOOL)
+
+
+@pytest.fixture
+def fresh_service(monkeypatch):
+    service = HumanApprovalService()
+    monkeypatch.setattr(human_approval_module, "_service", service)
+    return service
+
+
+def _sentinel_env(monkeypatch, *, simulated: bool, configured: bool = True):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "SIMULATION_MODE_HUMAN_APPROVAL", simulated)
+    monkeypatch.setattr(
+        settings, "SENTINEL_API_URL", "https://sentinel.test" if configured else ""
+    )
+    monkeypatch.setattr(
+        settings, "SENTINEL_API_KEY", "sk_test_" + "0" * 64 if configured else ""
+    )
+    monkeypatch.setattr(settings, "SENTINEL_WAIT_SECONDS", 0.0)
+    return settings
+
+
+class FakeSentinel:
+    """Stands in for SentinelClient; decisions are scripted per test."""
+
+    def __init__(self, status: str = "pending") -> None:
+        self.status = status
+        self.created: list[dict] = []
+        self.polls = 0
+
+    async def create_approval(self, **kwargs):
+        self.created.append(kwargs)
+        return {"action_id": f"act_{uuid.uuid4().hex[:16]}", "status": "pending"}
+
+    async def get_approval(self, action_id: str):
+        self.polls += 1
+        payload = {"action_id": action_id, "status": self.status}
+        if self.status in {"approved", "rejected"}:
+            payload["decided_by"] = "reviewer@example.com"
+            payload["reason"] = f"scripted {self.status}"
+        return payload
+
+    async def wait_approval(self, action_id: str, timeout: float):
+        return await self.get_approval(action_id)
+
+
+def _tools_call(idem_key: str | None = None) -> tuple[dict, dict]:
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"message": "hi"}},
+    }
+    headers = dict(MCP_HEADERS)
+    if idem_key:
+        headers["Idempotency-Key"] = idem_key
+    return body, headers
+
+
+async def _approval_policy(wallet_id: str):
+    return await create_policy_bundle(
+        PolicyBundleCreate(
+            wallet_id=wallet_id,
+            name="human approval for everything",
+            human_approval_required=True,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Policy -> materialized approval on the standard /mcp surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_policy_materializes_approval_gate_pending_then_approved(
+    client,
+    standard_mcp_enabled,
+    clean_database,
+    registered_tool,
+    fresh_service,
+    monkeypatch,
+):
+    """The vision's core loop: call -> pending approval -> approve -> retry -> receipt.
+
+    The agent sends only the tool name and arguments (plus an idempotency
+    key). It never sees /v1/permits or mcpContext.
+    """
+    _sentinel_env(monkeypatch, simulated=False)
+    fake = FakeSentinel(status="pending")
+    monkeypatch.setattr(fresh_service, "_sentinel", lambda: fake)
+
+    provisioned = await provision_agent_wallet(client)
+    await _approval_policy(provisioned["agent_wallet_id"])
+    assert await wallet_human_approval_required(provisioned["agent_wallet_id"])
+
+    body, headers = _tools_call(idem_key="authority-call-1")
+    headers = {**provisioned["agent_headers"], **headers}
+
+    first = await client.post("/mcp", json=body, headers=headers)
+    assert first.status_code == 200
+    error = first.json()["error"]
+    assert error["code"] == -32005
+    assert error["message"] == "human_approval_pending"
+    data = error["data"]
+    assert data["error"] == "authority_required"
+    assert data["status"] == "pending_human_approval"
+    assert data["approval_id"].startswith("appr-")
+    assert data["remediation"]["type"] == "await_human_decision"
+    assert len(fake.created) == 1
+
+    # Retry while pending: the same approval is polled, no human re-paged.
+    second = await client.post("/mcp", json=body, headers=headers)
+    assert second.json()["error"]["message"] == "human_approval_pending"
+    assert len(fake.created) == 1
+
+    # Human approves; the SAME call with the SAME key executes and receipts.
+    fake.status = "approved"
+    third = await client.post("/mcp", json=body, headers=headers)
+    assert third.status_code == 200, third.text
+    result = third.json()["result"]
+    receipt = result["receipt"]
+    assert receipt["outcome"] == "success"
+    assert receipt["approval_id"] == data["approval_id"]
+
+    # The materialized permit is real, bounded, and approval-gated — the
+    # cryptographic artifact of the policy decision, minted server-side.
+    permit_resp = await client.get(
+        f"/v1/permits/{receipt['permit_id']}", headers=provisioned["agent_headers"]
+    )
+    assert permit_resp.status_code == 200
+    permit = permit_resp.json()
+    assert permit["requires_human_approval"] is True
+    assert permit["allowed_tools"] == [TOOL]
+
+
+@pytest.mark.anyio
+async def test_approval_policy_requires_idempotency_key(
+    client,
+    standard_mcp_enabled,
+    clean_database,
+    registered_tool,
+    fresh_service,
+    monkeypatch,
+):
+    """Without a client key every retry would page a human again. Refuse with
+    a structured, machine-actionable error instead."""
+    _sentinel_env(monkeypatch, simulated=True, configured=False)
+
+    provisioned = await provision_agent_wallet(client)
+    await _approval_policy(provisioned["agent_wallet_id"])
+
+    body, headers = _tools_call(idem_key=None)
+    resp = await client.post(
+        "/mcp", json=body, headers={**provisioned["agent_headers"], **headers}
+    )
+    error = resp.json()["error"]
+    assert error["code"] == -32003
+    assert error["message"] == "idempotency_key_required_for_human_approval"
+    assert error["data"]["error"] == "authority_required"
+    assert error["data"]["remediation"]["type"] == "retry_with_idempotency_key"
+
+
+@pytest.mark.anyio
+async def test_simulated_approval_auto_approves_on_standard_surface(
+    client,
+    standard_mcp_enabled,
+    clean_database,
+    registered_tool,
+    fresh_service,
+    monkeypatch,
+):
+    _sentinel_env(monkeypatch, simulated=True, configured=False)
+
+    provisioned = await provision_agent_wallet(client)
+    await _approval_policy(provisioned["agent_wallet_id"])
+
+    body, headers = _tools_call(idem_key="authority-sim-1")
+    resp = await client.post(
+        "/mcp", json=body, headers={**provisioned["agent_headers"], **headers}
+    )
+    assert resp.status_code == 200, resp.text
+    receipt = resp.json()["result"]["receipt"]
+    assert receipt["outcome"] == "success"
+    assert receipt["approval_id"], "simulated approval must still be recorded"
+
+
+# ---------------------------------------------------------------------------
+# The gate satisfies human_approval_required and waives nothing else
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_policy_gate_semantics(client, clean_database):
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    await create_policy_bundle(
+        PolicyBundleCreate(
+            wallet_id=wallet_id,
+            name="approval plus cost cap",
+            human_approval_required=True,
+            max_cost_per_action=5.0,
+        )
+    )
+
+    # No approval gate: fail closed, as before.
+    ungated = await evaluate_wallet_policy(
+        wallet_id=wallet_id, tool_name=TOOL, estimated_cost=1.0
+    )
+    assert ungated.allowed is False
+    assert ungated.reason == "human_approval_required"
+
+    # Gate active: the approval demand is satisfied and recorded.
+    gated = await evaluate_wallet_policy(
+        wallet_id=wallet_id,
+        tool_name=TOOL,
+        estimated_cost=1.0,
+        approval_gate_active=True,
+    )
+    assert gated.allowed is True
+    evaluated = gated.evaluated_constraints["evaluated"]
+    assert evaluated[0]["human_approval_satisfied_by_gate"] is True
+
+    # Gate active but over the cost cap: every OTHER constraint still binds.
+    capped = await evaluate_wallet_policy(
+        wallet_id=wallet_id,
+        tool_name=TOOL,
+        estimated_cost=50.0,
+        approval_gate_active=True,
+    )
+    assert capped.allowed is False
+    assert capped.reason == "max_cost_per_action_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Machine-actionable errors on the standard surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_budget_denial_names_the_gap_and_the_way_out(
+    client, standard_mcp_enabled, clean_database
+):
+    """A tool the wallet cannot afford yields authority_required with the
+    requested cost and remediation, not a bare reason string."""
+    provisioned = await provision_agent_wallet(client)
+    registry = get_service_registry()
+    registry.register_local(
+        service_id="authority-expensive",
+        name="Expensive Tool",
+        description="Costs more than the test wallet holds",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda: {"ok": True},
+        credits_per_unit=100000.0,
+        unit_name="call",
+    )
+    try:
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "authority-expensive", "arguments": {}},
+        }
+        resp = await client.post(
+            "/mcp", json=body, headers={**provisioned["agent_headers"], **MCP_HEADERS}
+        )
+        error = resp.json()["error"]
+        assert error["code"] == -32004
+        assert error["message"] == "permit_budget_exceeds_wallet_balance"
+        data = error["data"]
+        assert data["error"] == "authority_required"
+        assert data["reason_code"] == "permit_budget_exceeds_wallet_balance"
+        assert data["requested"]["tool"] == "authority-expensive"
+        assert float(data["requested"]["estimated_credits"]) == 100000.0
+        remediation = data["remediation"]
+        assert remediation["type"] == "fund_wallet_or_request_authority"
+        assert "/v1/permit-requests" in remediation["request_authority"]
+        assert "/v1/me/authority" in remediation["check_authority"]
+    finally:
+        registry.unregister_local("authority-expensive")
+
+
+@pytest.mark.anyio
+async def test_standard_surface_forwards_denial_details(
+    client, standard_mcp_enabled, clean_database, registered_tool, monkeypatch
+):
+    """Parity with /mcp/messages: ToolPermissionDenied.details must survive
+    the standard-surface boundary, not just the receipt."""
+    provisioned = await provision_agent_wallet(client)
+
+    details = {"required_credits": "5", "remaining_credits": "1"}
+    receipt = {"receipt_id": "rcpt-test", "outcome": "denied"}
+
+    async def _deny(*args, **kwargs):
+        raise ToolPermissionDenied(
+            "permit_budget_exceeded", receipt=receipt, details=details
+        )
+
+    monkeypatch.setattr(mcp_standard_module, "_handle_tools_call", _deny)
+
+    body, headers = _tools_call(idem_key=None)
+    resp = await client.post(
+        "/mcp", json=body, headers={**provisioned["agent_headers"], **headers}
+    )
+    error = resp.json()["error"]
+    assert error["code"] == -32003
+    assert error["message"] == "permit_budget_exceeded"
+    assert error["data"]["details"] == details
+    assert error["data"]["receipt"] == receipt
+
+
+# ---------------------------------------------------------------------------
+# Discovery advertises the governance contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_discovery_annotations_carry_governance_contract(
+    client, registered_tool
+):
+    resp = await client.get("/mcp/tools.json")
+    assert resp.status_code == 200
+    tools = {t["name"]: t for t in resp.json()["tools"]}
+    ann = tools[TOOL]["annotations"]
+    assert ann["governed"] is True
+    assert ann["receiptProvided"] is True
+    assert ann["supportsIdempotency"] is True
+    assert ann["approvalMayBeRequired"] is True
+    assert ann["economicAction"] is True  # 2.0 credits per call
+
+    registry = get_service_registry()
+    registry.register_local(
+        service_id="authority-free",
+        name="Free Tool",
+        description="Zero-cost tool",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda: {"ok": True},
+        credits_per_unit=0.0,
+        unit_name="call",
+    )
+    try:
+        resp = await client.get("/mcp/tools.json")
+        free = {t["name"]: t for t in resp.json()["tools"]}["authority-free"]
+        assert free["annotations"]["economicAction"] is False
+        assert free["annotations"]["governed"] is True
+    finally:
+        registry.unregister_local("authority-free")
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/me/authority
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_me_authority_summarizes_current_authority(
+    client, clean_database, registered_tool
+):
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    await _approval_policy(wallet_id)
+    permit = await create_tool_permit(
+        client,
+        wallet_id=wallet_id,
+        key_id=provisioned["key_id"],
+        tool_name=TOOL,
+        max_credits=50,
+        idem_key="authority-permit-1",
+    )
+
+    resp = await client.get("/v1/me/authority", headers=provisioned["agent_headers"])
+    assert resp.status_code == 200, resp.text
+    summary = resp.json()
+    assert summary["wallet_id"] == wallet_id
+    assert float(summary["balance"]) == 1000.0
+    assert float(summary["daily_spend_used"]) == 0.0
+    assert summary["human_approval_required"] is True
+    assert [p["human_approval_required"] for p in summary["policies"]] == [True]
+    permit_ids = [p["permit_id"] for p in summary["active_permits"]]
+    assert permit["permit_id"] in permit_ids
+    assert summary["pending_permit_requests"] == []
+
+
+@pytest.mark.anyio
+async def test_me_authority_requires_wallet_key(client, clean_database):
+    resp = await client.get("/v1/me/authority", headers=BOOTSTRAP_HEADERS)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "wallet_key_required"

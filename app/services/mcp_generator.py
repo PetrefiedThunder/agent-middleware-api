@@ -156,12 +156,32 @@ class McpGenerator:
         cat = service.get("category", "unknown") or "unknown"
         truth = truth_for_category(cat)
 
+        try:
+            per_call_cost = float(
+                service.get("credits_per_unit_exact")
+                or service.get("credits_per_unit", 1.0)
+                or 0
+            )
+        except (TypeError, ValueError):
+            per_call_cost = float(service.get("credits_per_unit", 1.0) or 0)
+
         annotations = {
             "creditsPerCall": service.get("credits_per_unit", 1.0),
             "unitName": service.get("unit_name", "call"),
             "category": cat,
             "simulation": truth["simulation"],
             "integrationStatus": truth["integration_status"],
+            # The governance contract behind every call on the governed
+            # surfaces: authorized by a wallet-bounded permit, metered, and
+            # answered with a signed receipt. approvalMayBeRequired signals
+            # that wallet policy or the backing permit can pause any call on
+            # a human decision — the call returns a retryable
+            # pending_human_approval rather than failing.
+            "governed": True,
+            "receiptProvided": True,
+            "supportsIdempotency": True,
+            "economicAction": per_call_cost > 0,
+            "approvalMayBeRequired": True,
         }
         if service.get("credits_per_unit_exact") is not None:
             annotations["creditsPerCallExact"] = service["credits_per_unit_exact"]
