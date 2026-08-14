@@ -64,7 +64,15 @@ async def list_my_alerts(
     )
 
 
-@router.get("/authority", response_model=AuthoritySummaryResponse)
+@router.get(
+    "/authority",
+    response_model=AuthoritySummaryResponse,
+    responses={
+        401: {"description": "Missing or invalid API key"},
+        403: {"description": "Key is not wallet-scoped (wallet_key_required)"},
+        404: {"description": "Key's wallet no longer exists (wallet_not_found)"},
+    },
+)
 async def get_my_authority(
     auth: AuthContext = Depends(get_auth_context),
 ) -> AuthoritySummaryResponse:

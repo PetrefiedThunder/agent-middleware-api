@@ -5870,6 +5870,15 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid API key"
+          },
+          "403": {
+            "description": "Key is not wallet-scoped (wallet_key_required)"
+          },
+          "404": {
+            "description": "Key's wallet no longer exists (wallet_not_found)"
+          },
           "422": {
             "description": "Validation Error",
             "content": {

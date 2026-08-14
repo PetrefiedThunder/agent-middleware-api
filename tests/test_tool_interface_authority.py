@@ -536,6 +536,12 @@ async def test_me_authority_requires_wallet_key(client, clean_database):
 
 
 @pytest.mark.anyio
+async def test_me_authority_requires_credentials(client, clean_database):
+    resp = await client.get("/v1/me/authority")
+    assert resp.status_code == 401
+
+
+@pytest.mark.anyio
 async def test_me_authority_missing_wallet_is_404(
     client, clean_database, monkeypatch
 ):
