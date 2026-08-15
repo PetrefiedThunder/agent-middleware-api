@@ -55,12 +55,14 @@ roughly six months. That one needs no market model and is the one to lean on.
 ## 2. Problem Evidence
 
 The failure this repo exists to prevent — an agent framework retrying a
-timed-out tool call and producing a second charge — is documented in production
-by parties with no stake in this product.
+timed-out tool call and producing a second charge — is reported and reproduced
+by parties with no stake in this product. Note the evidence level carefully: an
+issue report with a reproduction is not the same as a confirmed production
+incident, and this document does not have the latter for anyone.
 
 | Evidence | What it establishes | Verification |
 |---|---|---|
-| [stripe/ai#402](https://github.com/stripe/ai/issues/402), "Agent-level retry creates duplicate charges — no idempotency guard above the tool layer" (open, 2026-05-03) | The strongest single piece of external evidence. The reporter documents that the Stripe SDK's idempotency keys cover *network-level* retries within a session, while agent frameworks retry as a **new invocation with a freshly generated key**, producing duplicate charges. They explicitly conclude the fix belongs "above the tool layer." | **Verified** — issue read directly |
+| [stripe/ai#402](https://github.com/stripe/ai/issues/402), "Agent-level retry creates duplicate charges — no idempotency guard above the tool layer" (open, 2026-05-03) | The strongest single piece of external evidence — though it is an issue report with a reproduction, not a confirmed production incident. The reporter documents that the Stripe SDK's idempotency keys cover *network-level* retries within a session, while agent frameworks retry as a **new invocation with a freshly generated key**, producing duplicate charges. They explicitly conclude the fix belongs "above the tool layer." | **Verified** — issue read directly |
 | [OpenBB-finance/OpenBB#7455](https://github.com/OpenBB-finance/OpenBB/issues/7455), "Signed audit receipts for MCP server tool calls (regulatory compliance)" | A production MCP operator asking for signed per-call evidence, and being pointed at a third-party gateway rather than anything native. | **Verified** — issue located |
 | Practitioner writing on idempotency in agentic tool calling | Frames this as a distributed-systems problem the agent layer imported without the corresponding patterns. | Unverified — the specific essay cited in the brief was not located |
 | Vendor commentary on retry-driven cost amplification | Agents retrying on data-layer timeouts multiply per-step cost. | Unverified |

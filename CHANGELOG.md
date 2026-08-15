@@ -63,9 +63,10 @@ full release gate; do not backfill a final `v1.2.0` tag.
 
 - Added `docs/market-research-2026-08.md`: MCP-native competitive set, market
   sizing, and problem evidence, each row carrying an explicit verification
-  level. `stripe/ai#402` — a third-party production report of agent-level
-  retries creating duplicate charges — was read directly and is now the
-  strongest external evidence for the wedge.
+  level. `stripe/ai#402` — a third-party issue report, with a reproduction, of
+  agent-level retries creating duplicate charges — was read directly and is now
+  the strongest external evidence for the wedge. It is a reported reproduction,
+  not a confirmed production incident, and is labeled as such.
 - **Signed, offline-verifiable receipts are no longer differentiating**, and the
   docs now say so. At least one MCP policy proxy ships Ed25519 receipts
   verifiable without calling its issuer, with an IETF Internet-Draft for the

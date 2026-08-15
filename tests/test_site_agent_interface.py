@@ -981,7 +981,12 @@ def test_typography_is_self_hosted_with_no_third_party_request(tmp_path) -> None
     output = tmp_path / "site"
     assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
 
-    rendered = [output / "index.html", output / "proof" / "index.html", output / "404.html"]
+    rendered = [
+        output / "index.html",
+        output / "proof" / "index.html",
+        output / "compare" / "index.html",
+        output / "404.html",
+    ]
     for page in rendered:
         markup = page.read_text(encoding="utf-8")
         for host in ("fonts.googleapis.com", "fonts.gstatic.com"):
@@ -1001,6 +1006,39 @@ def test_typography_is_self_hosted_with_no_third_party_request(tmp_path) -> None
     assert (output / "fonts.css").is_file()
     for face in re.findall(r'url\("(/fonts/[^"]+)"\)', (output / "fonts.css").read_text()):
         assert (output / face.lstrip("/")).is_file(), f"{face} not published"
+
+
+def test_every_page_loads_the_accessibility_scripts(tmp_path) -> None:
+    """Saved accessibility preferences must apply on every page, including 404.
+
+    This is a merge-regression guard. ``a11y-preload.js`` is what stops a
+    visitor who has set larger text or higher contrast from getting a flash of
+    the default theme, and ``a11y.js`` is what renders the controls at all. A
+    page that keeps the shared stylesheet but loses these two scripts looks
+    fine in review and silently drops the feature — which is exactly what a
+    conflict resolution did to ``404.html`` once.
+    """
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    for relative_path in (
+        "index.html",
+        "proof/index.html",
+        "compare/index.html",
+        "404.html",
+    ):
+        markup = (output / relative_path).read_text(encoding="utf-8")
+        # Blocking, in <head>, before first paint — a deferred preload would
+        # not prevent the flash it exists to prevent.
+        assert re.search(
+            r'<script src="/a11y-preload\.js\?v=[^"]+"></script>', markup
+        ), f"{relative_path} does not apply saved accessibility preferences"
+        assert "defer" not in re.search(
+            r"<script[^>]*a11y-preload[^>]*>", markup
+        ).group(0), f"{relative_path} defers a11y-preload.js; it must block"
+        assert re.search(
+            r'<script defer src="/a11y\.js\?v=[^"]+"></script>', markup
+        ), f"{relative_path} does not load the accessibility controls"
 
 
 def test_font_stylesheet_and_files_agree() -> None:
@@ -1050,7 +1088,7 @@ def test_preloaded_fonts_exist_and_are_actually_used(tmp_path) -> None:
     # font fetches per bad URL buys nothing.
     assert 'rel="preload"' not in (output / "404.html").read_text(encoding="utf-8")
 
-    for relative_path in ("index.html", "proof/index.html"):
+    for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         markup = (output / relative_path).read_text(encoding="utf-8")
         preloads = re.findall(r'<link rel="preload" href="(/fonts/[^"]+)"', markup)
         assert preloads, f"{relative_path} preloads no fonts"
