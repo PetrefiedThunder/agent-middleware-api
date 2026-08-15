@@ -88,12 +88,24 @@ Flowchart:
 **Both reservation paths use this flow.** The figure depicts
 `PermitService.authorize_and_reserve()`; the upstream MCP dispatch path
 (`authorize_reserve_and_prepare()`) performs the same guarded update at **250**
-with the same affected-row check at **260**, differing only in that it also
-creates a prepared dispatch-attempt record inside the same transaction on the
-success branch (claim 6). Show that as a second box after **280** on a branch
-labelled "upstream MCP dispatch". An earlier draft marked this path as
-lock-dependent and **[not implemented]** for the guarantee — that is no longer
-accurate.
+with the same affected-row check at **260**.
+
+It differs on the success branch, and the **ordering matters for claim 6** —
+draw it exactly as the code runs
+(`app/services/mcp_dispatch_attempts.py`, transaction opened at `:384`):
+
+> **250** guarded `UPDATE` → **260** affected-row check → **275** insert
+> `McpDispatchAttemptModel` in `prepared` state and flush (`:548`, `:549`) →
+> **280** commit → **290** dispatch invocation
+
+The insert and flush sit **inside** the transaction, before the commit. Do not
+place them after **280**: claim 6 recites that the reservation and the
+prepared-attempt creation occur *within the same database transaction*, and a
+figure showing the insert after commit would depict the opposite and undercut
+the claim it is drawn to support.
+
+An earlier draft marked this path as lock-dependent and **[not implemented]**
+for the guarantee, and placed the attempt box after commit. Both were wrong.
 
 ### FIG. 3 — Debit checkpoint and asymmetric reconciliation
 
