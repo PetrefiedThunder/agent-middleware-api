@@ -255,6 +255,7 @@ def test_customer_facing_outputs_do_not_publish_provider_origins(tmp_path) -> No
     public_paths = (
         output / "index.html",
         output / "proof" / "index.html",
+        output / "compare" / "index.html",
         output / "llm.txt",
         output / "llms.txt",
         output / ".well-known" / "agent.json",
@@ -320,6 +321,7 @@ def test_search_social_and_analytics_contracts(tmp_path) -> None:
     assert "/_vercel/insights/script.js" not in page
     assert "Sitemap: https://www.thisisatest.tech/sitemap.xml" in robots
     assert "https://www.thisisatest.tech/proof/" in sitemap
+    assert "https://www.thisisatest.tech/compare/" in sitemap
     assert _png_dimensions(output / "social-card.png") == (1200, 630)
 
     for event_name in ("booking_click", "email_click", "proof_click"):
@@ -335,22 +337,22 @@ def test_vercel_insights_loader_requires_explicit_opt_in(tmp_path) -> None:
     default_output = tmp_path / "default"
     result = _render_site(default_output, VALID_TEST_CONTACTS)
     assert result.returncode == 0, result.stderr
-    for relative_path in ("index.html", "proof/index.html"):
+    for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         page = (default_output / relative_path).read_text(encoding="utf-8")
         assert "/_vercel/insights/script.js" not in page
         assert "/va-init.js" not in page
         assert "@@VERCEL_ANALYTICS_SCRIPTS@@" not in page
-        assert '<script defer src="/analytics.js?v=gateway-2"></script>' in page
+        assert '<script defer src="/analytics.js?v=gateway-3"></script>' in page
 
     enabled_output = tmp_path / "enabled"
     enabled_contacts = dict(VALID_TEST_CONTACTS)
     enabled_contacts["PUBLIC_ENABLE_VERCEL_ANALYTICS"] = "true"
     result = _render_site(enabled_output, enabled_contacts)
     assert result.returncode == 0, result.stderr
-    for relative_path in ("index.html", "proof/index.html"):
+    for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         page = (enabled_output / relative_path).read_text(encoding="utf-8")
         assert '<script defer src="/_vercel/insights/script.js"></script>' in page
-        assert '<script src="/va-init.js?v=gateway-2"></script>' in page
+        assert '<script src="/va-init.js?v=gateway-3"></script>' in page
         assert "@@VERCEL_ANALYTICS_SCRIPTS@@" not in page
 
     # "1"/"yes"/"on" aliases are rejected: the documented contract is exactly
@@ -392,7 +394,7 @@ def test_external_links_carry_noopener_noreferrer(tmp_path) -> None:
     result = _render_site(output, VALID_TEST_CONTACTS)
     assert result.returncode == 0, result.stderr
 
-    for relative_path in ("index.html", "proof/index.html"):
+    for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         collector = _ExternalLinkCollector()
         collector.feed((output / relative_path).read_text(encoding="utf-8"))
         collector.close()
@@ -463,7 +465,7 @@ def test_cta_aria_labels_preserve_visible_text_and_booking_url(tmp_path) -> None
     assert result.returncode == 0, result.stderr
 
     booking_url = VALID_TEST_CONTACTS["PUBLIC_BOOKING_URL"]
-    for relative_path in ("index.html", "proof/index.html"):
+    for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         collector = _LabeledLinkCollector()
         collector.feed((output / relative_path).read_text(encoding="utf-8"))
         collector.close()
@@ -512,6 +514,7 @@ def test_pages_publish_valid_json_ld(tmp_path) -> None:
     expected = {
         "index.html": ("WebSite", "https://www.thisisatest.tech/"),
         "proof/index.html": ("WebPage", "https://www.thisisatest.tech/proof/"),
+        "compare/index.html": ("WebPage", "https://www.thisisatest.tech/compare/"),
     }
     for relative_path, (schema_type, url) in expected.items():
         collector = _JsonLdCollector()
@@ -595,7 +598,12 @@ def test_pages_carry_no_inline_scripts(tmp_path) -> None:
     assert _render_site(enabled_output, enabled_contacts).returncode == 0
 
     for root in (output, enabled_output):
-        for relative_path in ("index.html", "proof/index.html", "404.html"):
+        for relative_path in (
+            "index.html",
+            "proof/index.html",
+            "compare/index.html",
+            "404.html",
+        ):
             collector = _InlineScriptCollector()
             collector.feed((root / relative_path).read_text(encoding="utf-8"))
             collector.close()
@@ -619,7 +627,12 @@ def test_static_assets_are_cached_and_html_is_not() -> None:
 
     # Fingerprinting is a query token, so every reference must carry it or the
     # week-long cache would pin visitors to a stale stylesheet.
-    for relative_path in ("index.html", "proof/index.html", "404.html"):
+    for relative_path in (
+            "index.html",
+            "proof/index.html",
+            "compare/index.html",
+            "404.html",
+        ):
         page = (SITE / relative_path).read_text(encoding="utf-8")
         for asset in ("/styles.css", "/a11y.js", "/a11y-preload.js"):
             assert f'{asset}?v=' in page, f"{relative_path} references {asset} unversioned"
@@ -747,19 +760,56 @@ def test_branded_404_offers_a_way_back(tmp_path) -> None:
 
 
 def test_navigation_is_identical_across_pages(tmp_path) -> None:
-    """A visitor on /proof/ must reach the same places as one on /."""
+    """A visitor on any subpage must reach the same places as one on /."""
 
     output = tmp_path / "site"
     assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
 
     landing = (output / "index.html").read_text(encoding="utf-8")
     proof = (output / "proof" / "index.html").read_text(encoding="utf-8")
+    compare = (output / "compare" / "index.html").read_text(encoding="utf-8")
 
-    for label in ("Pilot", "Proof", "Machine discovery"):
-        assert f">{label}</a>" in landing
-        assert f">{label}</a>" in proof
-    for anchor in ("/#pilot", "/#proof", "/#machine-discovery"):
-        assert f'href="{anchor}"' in proof
+    for label in ("Pilot", "Proof", "Compare", "Machine discovery"):
+        for page in (landing, proof, compare):
+            assert f">{label}</a>" in page
+    for anchor in ("/#pilot", "/#proof", "/compare/", "/#machine-discovery"):
+        for page in (proof, compare):
+            assert f'href="{anchor}"' in page
+
+
+def test_comparison_page_names_alternatives_and_refuses_superlatives(
+    tmp_path,
+) -> None:
+    """The comparison page exists to be trusted by a reader who can check it.
+
+    That imposes three contracts. It must name real alternatives with working
+    links, so the reader can go and look. It must concede at least one row —
+    a comparison where the author never loses is an advertisement. And it must
+    not smuggle in the two claims ``ELEVATOR_PITCH.md`` forbids: an
+    unverifiable "only product that…" superlative, or a compliance guarantee.
+    """
+
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    page = (output / "compare" / "index.html").read_text(encoding="utf-8")
+    text = " ".join(_page_text(page).split()).casefold()
+
+    # Names alternatives the reader can independently check.
+    for alternative in ("protect-mcp", "jamjet", "traceagent", "latch"):
+        assert alternative in text, f"comparison page does not name {alternative}"
+
+    # Concedes ground rather than winning every row.
+    assert "use something else" in text
+    assert "a poor fit" in text
+
+    # Refuses the superlative the research could not support.
+    for superlative in ("the only mcp", "the only gateway", "no competitor"):
+        assert superlative not in text, f"comparison page claims {superlative!r}"
+
+    # Refuses a compliance guarantee; states the boundary instead.
+    assert "not on their own" in text
+    assert "hold no" in text and "certification" in text
 
 
 def test_local_site_assets_exist() -> None:
@@ -776,6 +826,7 @@ def test_local_site_assets_exist() -> None:
         SITE / ".well-known" / "agent.json",
         SITE / "proof" / "index.html",
         SITE / "proof" / "proof.js",
+        SITE / "compare" / "index.html",
         SITE / "404.html",
         SITE / "a11y-preload.js",
         SITE / "va-init.js",
