@@ -109,11 +109,13 @@
         <div class="thesis-copy">
           <p>
             When this project started, per-call cryptographic evidence for MCP
-            tool calls was unusual. It is not unusual now. Policy gateways,
-            audit layers, and safety frameworks all emit signed receipts, and at
-            least one verifies offline without calling its issuer — the same
-            property our <a href="/proof/" data-analytics-event="proof_click">proof page</a>
-            demonstrates.
+            tool calls was unusual. It is not unusual now. Policy gateways and
+            safety frameworks emit signed receipts, and at least one verifies
+            offline without calling its issuer — the same property our
+            <a href="/proof/" data-analytics-event="proof_click">proof page</a>
+            demonstrates. Audit layers publish hash-chained receipts; whether
+            those also carry an issuer signature you can check without the
+            vendor, we have not confirmed either way.
           </p>
           <p>
             So the receipt is not the argument. The argument is what the receipt
@@ -130,7 +132,9 @@
           <table class="compare-table">
             <caption>
               Assessed August 2026 from each project's public source and
-              documentation. Capabilities change; verify before deciding.
+              documentation. &ldquo;Not documented&rdquo; means we did not find
+              the capability described &mdash; not that we proved it absent.
+              Capabilities change; verify before deciding.
             </caption>
             <thead>
               <tr>
@@ -160,7 +164,7 @@
                 <th scope="row">Signed receipts, verifiable without the vendor</th>
                 <td>Yes</td>
                 <td>Yes</td>
-                <td>Yes</td>
+                <td>Chained, signature unverified</td>
                 <td>No</td>
               </tr>
               <tr>
@@ -187,16 +191,16 @@
               <tr>
                 <th scope="row">Debit bound to the idempotency record</th>
                 <td>Yes</td>
-                <td>No</td>
-                <td>No</td>
-                <td>No</td>
+                <td>Not documented</td>
+                <td>Not documented</td>
+                <td>Not documented</td>
               </tr>
               <tr>
                 <th scope="row">Ambiguous outcome is a distinct receipted state</th>
                 <td>Yes</td>
-                <td>No</td>
-                <td>No</td>
-                <td>No</td>
+                <td>Not documented</td>
+                <td>Not documented</td>
+                <td>Not documented</td>
               </tr>
               <tr>
                 <th scope="row">Human approval before an action</th>
@@ -345,8 +349,13 @@
           <dt>Can these receipts satisfy a SOC 2 or EU AI Act audit?</dt>
           <dd>
             Not on their own, and we will not claim otherwise. A signed receipt
-            is evidence that a specific call was authorized, executed, and
-            charged, and that the record has not been altered since. Whether
+            is evidence of one call's <em>recorded outcome</em> — that it was
+            authorized and what then happened to it, whether that was execution
+            and a charge, a denial, a refunded failure, or an outcome we could
+            not confirm — and that the record has not been altered since. It is
+            deliberately not a success certificate: denials and failures get
+            signed too, which is what makes the evidence worth anything when
+            something goes wrong. Whether
             that evidence satisfies a given control is a question for your
             auditor, not for us. We publish no regulatory mappings and hold no
             certifications. If a mapped compliance report is the deliverable you

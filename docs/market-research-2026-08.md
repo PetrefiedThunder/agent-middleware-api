@@ -43,11 +43,12 @@ firm or from uncited ecosystem trackers. Treat it as evidence that the category
 is *taken seriously by analysts*, not as a sized addressable market. Do not put
 a dollar figure on a slide without naming SNS Insider next to it.
 
-The directional claim that survives scrutiny is weaker but still useful:
-governance and security are consistently framed by outside analysts as the
-fastest-growing part of MCP tooling, and the competitive set in §3 grew from
-near-empty to crowded inside roughly six months. That is observable directly
-and does not need a market model.
+Two weaker claims survive, and they are not equally strong. **Single-source:**
+SNS Insider frames governance and security as the fastest-growing part of MCP
+tooling — one firm, not a consensus, and the sub-segment figure behind it could
+not be confirmed at all. Do not say "analysts consistently find." **Directly
+observable:** the competitive set in §3 went from near-empty to crowded inside
+roughly six months. That one needs no market model and is the one to lean on.
 
 ---
 
@@ -85,7 +86,7 @@ competitive reality. The nearer competitors are MCP-native and recent.
 | [protect-mcp / ScopeBlind gateway](https://github.com/tomjwxf/scopeblind-gateway) | stdio proxy in front of an MCP server. Intercepts `tools/call`, evaluates Cedar + JSON policy per tool, emits optional Ed25519-signed decision receipts verifiable without calling the issuer. MIT, shadow mode by default, IETF Internet-Draft for the receipt format. | **The closest competitor.** Network boundary + per-tool policy + offline-verifiable Ed25519 receipts. No wallet, budget, or charge-once semantics. | **Verified** |
 | [jamjet-labs/jamjet](https://github.com/jamjet-labs/jamjet) | Open-source safety layer: one `policy.yaml` across hooks, guardrails, MCP gateways, and SDKs; blocks unsafe calls, requires approval, enforces budgets, audits, replays. Signed receipts with a hash-chained `previousReceiptHash` and pre/post-execution signatures. | Policy portability + HITL approval + budget enforcement + chained signed receipts. Broader surface, many framework adapters. | **Verified** |
 | [sangaraju1988/latch](https://github.com/sangaraju1988/latch) | MIT Python **library** (decorators/wrappers, not a proxy): idempotency, circuit breaker, timeout, budget guardrail, saga/compensation. Redis backend for cross-process idempotency; OpenAI and LangChain adapters. | Idempotency + budget caps, in-process. **No signed receipts.** | **Verified** |
-| [TraceAgent](https://www.traceagent.dev/) | Append-only audit receipts with SHA-256 hash chains, authority trails linking actions to approving humans, one-click compliance exports mapped to EU AI Act / Colorado AI Act / ISO 42001. Zero-config for MCP tool calls. | Audit and compliance evidence. No metering or charge-once semantics. | **Verified** (from vendor site) |
+| [TraceAgent](https://www.traceagent.dev/) | Append-only audit receipts with SHA-256 hash chains, authority trails linking actions to approving humans, one-click compliance exports mapped to EU AI Act / Colorado AI Act / ISO 42001. Zero-config for MCP tool calls. | Audit and compliance evidence. No metering or charge-once semantics. | **Verified** (from vendor site) that receipts are hash-chained. **Not verified**: whether they carry an issuer signature or can be verified offline without the vendor — a hash chain alone is neither. Do not classify TraceAgent as offline-verifiable without a primary source. |
 | [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | Policy enforcement, zero-trust identity, sandboxing, reliability engineering; an active proposal for independently verifiable compliance receipts. | A large vendor moving into verifiable receipts. Strategic risk more than a current competitor. | **Verified** |
 | Tork Governance MCP Server | PII detection, policy enforcement, compliance receipts, kill switch, HITL. | Security-focused governance. | Unverified |
 | SecureAuth Agent Authority | Enterprise IAM for agents: OAuth 2.1, CIBA HITL, anomaly detection, revocation. | Identity, upstream of this product. Not a competitor. | Unverified |
@@ -107,25 +108,31 @@ What survives is narrower and, usefully, matches
 |---|---|---|---|---|---|
 | Enforces at a network boundary | ✅ | ✅ (stdio proxy) | ✅ (adapters + gateway) | ❌ (in-process library) | ✅ |
 | Per-tool policy / scope | ✅ (signed permits) | ✅ (Cedar) | ✅ (policy.yaml) | ❌ | ❌ |
-| Offline-verifiable signed receipts | ✅ | ✅ | ✅ | ❌ | ✅ (hash chain) |
+| Offline-verifiable signed receipts | ✅ | ✅ | ✅ | ❌ | ⚠️ hash-chained; issuer signature and offline key distribution **not verified** |
 | Hash-chained audit | ✅ (per-wallet) | ❌ | ✅ | ❌ | ✅ |
 | Budget enforcement | ✅ (wallet ledger) | ❌ | ✅ (caps) | ✅ (guardrail) | ❌ |
 | Idempotency / no duplicate execution | ✅ | ❌ | ✅ (replay) | ✅ | ❌ |
-| **Debit bound to the idempotency record** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Debit bound to the idempotency record** | ✅ | ❌ | ❓ **not verified** — budgets and replay are documented as separate features, with no stated binding | ❌ | ❌ |
 | **Ambiguous post-dispatch outcome is a distinct, receipted state** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Human-in-the-loop approval | ✅ (permit requests) | ❌ | ✅ | ❌ | ✅ (authority trail) |
 | Compliance framework mapping | ❌ (deliberate) | ❌ | ❌ | ❌ | ✅ |
 
 Read down the bolded rows. Several projects have receipts; several have
-budgets; several have idempotency. The cell nobody else occupies is that **one
-accepted idempotency key produces exactly one ledger debit and one receipt, and
-the record linking them is a single persisted chain** — plus the refusal to
-silently redispatch when the outcome is genuinely unknown
+budgets; several have idempotency. The cell **no surveyed project is documented
+as occupying** is that *one accepted idempotency key produces exactly one ledger
+debit and one receipt, and the record linking them is a single persisted chain*
+— plus the refusal to silently redispatch when the outcome is genuinely unknown
 (`delivery_uncertain`, per `ELEVATOR_PITCH.md`).
 
+**That is a scope statement, not an exclusivity claim, and the difference
+matters.** jamjet enforces budgets *and* replays runs; whether it binds the two
+is unresolved (§7, question 3) and its public docs describe them as independent
+features. Absence of documentation is not evidence of absence. So the defensible
+sentence is "no project we surveyed documents this," never "nobody does" — the
+same discipline `WEDGE.md` applies to every other superlative.
+
 That is a smaller claim than "the only gateway with receipts." It is also the
-only one that is true, and it is the one this codebase can actually demonstrate
-with `make prove-trust-plane`.
+one this codebase can actually demonstrate, with `make prove-trust-plane`.
 
 ---
 

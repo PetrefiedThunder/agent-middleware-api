@@ -62,12 +62,18 @@ its issuer, and it carries an IETF Internet-Draft for the format; other projects
 ship hash-chained signed receipts alongside policy and HITL.
 
 This does not change the wedge — it sharpens which half of it to lead with.
-The row nothing else in that sweep occupies is the **economic** one:
+The row no surveyed project is *documented* as occupying is the **economic**
+one:
 
 > One accepted idempotency key produces exactly one gateway dispatch, one
 > ledger debit, and one receipt, linked by a single persisted chain — and a
 > genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
 > rather than a silent redispatch.
+
+State that as scope, not as exclusivity: several projects enforce budgets and
+several dedupe replays, and whether any of them *binds* the two is an open
+verification question (`docs/market-research-2026-08.md` §7). Say "no project we
+surveyed documents this," never "nobody does."
 
 Lead with the debit. Cite the signature as supporting evidence, never as the
 differentiator, and never as a superlative — see **What Not To Claim Yet**.

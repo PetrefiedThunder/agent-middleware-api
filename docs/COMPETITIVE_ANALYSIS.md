@@ -390,8 +390,10 @@ Full analysis, with per-claim verification levels and market sizing:
 §2.5 concluded "**No comparable system** offers per-invocation signed receipts
 with request/response hashes," and §5.1 listed signed receipts as moat #1.
 Against Stripe, AWS, and Okta that remains accurate. Against protect-mcp,
-jamjet, and TraceAgent it is **not** — all three ship signed per-call evidence,
-and protect-mcp's is offline-verifiable by design.
+jamjet, and TraceAgent it is **not** — all three ship per-call cryptographic
+evidence, and protect-mcp's is offline-verifiable by design. (TraceAgent's is
+verified only as far as hash chaining; whether it carries an issuer signature
+verifiable without the vendor is unverified, and a hash chain alone is not one.)
 
 The moat that survives verification is narrower and sits one layer down:
 
@@ -400,8 +402,11 @@ The moat that survives verification is narrower and sits one layer down:
 > genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
 > rather than a silent redispatch.
 
-No project in §9.1 binds a debit to an idempotency record. Receipts are being
-commoditized; the economic semantics are not. Positioning copy should lead with
+No project in §9.1 is *documented* as binding a debit to an idempotency record
+— jamjet's budgets and replay are described as independent features and the
+binding question is open (see §7 of the research doc). State this as the scope
+of the survey, not as proven exclusivity. Receipts are being commoditized; the
+economic semantics, so far as anyone has published, are not. Positioning copy should lead with
 the debit, not with the signature — see [`../WEDGE.md`](../WEDGE.md).
 
 ### 9.3 Strategic risks this set introduces

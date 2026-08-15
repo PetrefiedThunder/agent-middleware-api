@@ -164,14 +164,23 @@ Otherwise the library is the correct answer and we will say so.
 
 **"Don't other MCP gateways already sign receipts?"** Yes — several, and at
 least one verifies offline without calling its issuer. We do not claim to be
-alone here. What none of them do is bind the debit to the idempotency record:
-one accepted key, one dispatch, one ledger entry, one receipt, in a single
-persisted chain. The signature proves what happened; the ledger link is what
-makes a duplicate charge impossible rather than merely detectable.
+alone here. What no project we surveyed *documents* is binding the debit to the
+idempotency record:
+one accepted key, one dispatch, one ledger debit, one receipt, in a single
+persisted chain. (One *debit* — a refunded failure correctly writes a second,
+compensating ledger entry against that debit.) Several of them enforce budgets
+and several dedupe replays; whether any binds the two is unresolved, and we say
+so rather than claiming the cell outright. The signature proves what happened;
+the ledger link is what makes a duplicate charge impossible rather than merely
+detectable.
 
 **"Can these receipts satisfy SOC 2 or the EU AI Act?"** Not on their own, and
-we will not say otherwise. A receipt evidences that one call was authorized,
-executed, and charged, and that the record has not been altered since. Whether
+we will not say otherwise. A receipt evidences one call's signed *terminal
+outcome* and its linkage to permit, ledger, and audit chain — and that the
+record has not been altered since. Only a success receipt evidences that the
+call executed and was charged; denial, refunded-failure, and
+`delivery_uncertain` receipts evidence exactly those outcomes instead, which is
+the point of signing them. Whether
 that satisfies a given control is a determination for the operator's auditor.
 We publish no regulatory mappings and hold no certifications. If a mapped
 compliance report is the deliverable, an audit-layer product is the better

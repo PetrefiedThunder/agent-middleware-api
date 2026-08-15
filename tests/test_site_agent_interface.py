@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import json
 import os
 import shutil
@@ -626,7 +627,13 @@ def test_static_assets_are_cached_and_html_is_not() -> None:
     assert "/proof/proof.js" in cached_sources
 
     # Fingerprinting is a query token, so every reference must carry it or the
-    # week-long cache would pin visitors to a stale stylesheet.
+    # week-long cache would pin visitors to a stale asset. Discover the
+    # references rather than listing them: a hand-maintained list silently
+    # stops covering each newly added asset, which is exactly the reference
+    # that would go stale unnoticed.
+    local_asset_reference = re.compile(
+        r'(?:src|href)="(/[^"?]+\.(?:css|js))(\?[^"]*)?"'
+    )
     for relative_path in (
             "index.html",
             "proof/index.html",
@@ -634,8 +641,13 @@ def test_static_assets_are_cached_and_html_is_not() -> None:
             "404.html",
         ):
         page = (SITE / relative_path).read_text(encoding="utf-8")
-        for asset in ("/styles.css", "/a11y.js", "/a11y-preload.js"):
-            assert f'{asset}?v=' in page, f"{relative_path} references {asset} unversioned"
+        references = local_asset_reference.findall(page)
+        assert references, f"{relative_path} references no local CSS or JS"
+        for asset, query in references:
+            assert query.startswith("?v="), (
+                f"{relative_path} references {asset} without a ?v= cache token; "
+                "returning visitors would keep the old bytes for up to a week"
+            )
 
     # HTML gets no long-lived Cache-Control rule of its own.
     html_rules = [
@@ -776,6 +788,42 @@ def test_navigation_is_identical_across_pages(tmp_path) -> None:
         for page in (proof, compare):
             assert f'href="{anchor}"' in page
 
+    # 404 carries the same nav minus the booking CTA, so a visitor who lands on
+    # a dead URL can still reach every real page.
+    not_found = (output / "404.html").read_text(encoding="utf-8")
+    for anchor in ("/#pilot", "/#proof", "/compare/", "/#machine-discovery"):
+        assert f'href="{anchor}"' in not_found, f"404.html cannot reach {anchor}"
+
+
+def _anchor_texts_and_hrefs(markup: str) -> list[tuple[str, str]]:
+    """Return ``(visible_text, href)`` for every ``<a>`` in the page."""
+
+    class _Anchors(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pairs: list[tuple[str, str]] = []
+            self._href: str | None = None
+            self._parts: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs) -> None:
+            if tag == "a":
+                self._href = (dict(attrs).get("href") or "").strip()
+                self._parts = []
+
+        def handle_data(self, data: str) -> None:
+            if self._href is not None and data.strip():
+                self._parts.append(" ".join(data.split()))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "a" and self._href is not None:
+                self.pairs.append((" ".join(self._parts), self._href))
+                self._href = None
+
+    parser = _Anchors()
+    parser.feed(markup)
+    parser.close()
+    return parser.pairs
+
 
 def test_comparison_page_names_alternatives_and_refuses_superlatives(
     tmp_path,
@@ -795,19 +843,46 @@ def test_comparison_page_names_alternatives_and_refuses_superlatives(
     page = (output / "compare" / "index.html").read_text(encoding="utf-8")
     text = " ".join(_page_text(page).split()).casefold()
 
-    # Names alternatives the reader can independently check.
+    # Naming an alternative in prose is not enough — "independently checkable"
+    # means the reader can click through to the project and judge for
+    # themselves, so each name must carry an off-site link.
+    anchors = _anchor_texts_and_hrefs(page)
     for alternative in ("protect-mcp", "jamjet", "traceagent", "latch"):
-        assert alternative in text, f"comparison page does not name {alternative}"
+        linked = [
+            href
+            for visible, href in anchors
+            if alternative in visible.casefold() and href.startswith("https://")
+        ]
+        assert linked, (
+            f"comparison page names {alternative} without an off-site link the "
+            "reader can check"
+        )
 
     # Concedes ground rather than winning every row.
     assert "use something else" in text
     assert "a poor fit" in text
 
-    # Refuses the superlative the research could not support.
-    for superlative in ("the only mcp", "the only gateway", "no competitor"):
-        assert superlative not in text, f"comparison page claims {superlative!r}"
+    # Refuses uniqueness superlatives and compliance guarantees in any phrasing,
+    # not just the exact wordings that existed when this test was written.
+    # WEDGE.md's never-claim list is the contract; these are its normalized form.
+    prohibited = (
+        r"\bthe only (?:mcp|gateway|product|tool|one)\b",
+        r"\bno competitor\b",
+        r"\bnobody else\b",
+        r"\bno one else\b",
+        r"\bfirst and only\b",
+        r"\bcompliance[- ]ready\b",
+        r"\b(?:soc ?2|eu ai act|iso ?42001)[- ]compliant\b",
+        r"\bguarantees? compliance\b",
+        r"\bfully compliant\b",
+    )
+    for pattern in prohibited:
+        assert not re.search(pattern, text), (
+            f"comparison page matches prohibited claim pattern {pattern!r} — see "
+            "WEDGE.md 'What Not To Claim Yet'"
+        )
 
-    # Refuses a compliance guarantee; states the boundary instead.
+    # States the compliance boundary rather than dodging the question.
     assert "not on their own" in text
     assert "hold no" in text and "certification" in text
 
