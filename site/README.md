@@ -104,9 +104,15 @@ python3 vendor_fonts.py --check  # verify the committed output matches upstream
 Only `latin` and `latin-ext` are vendored, and each face keeps upstream's
 `unicode-range`, so a browser downloads only the subsets a page actually uses.
 Libre Franklin and Public Sans are variable fonts: one file per subset serves
-every weight, which is why their filenames carry no weight. Licensing and
-attribution ship as `fonts/OFL.txt` — plain text so the notice deploys
-alongside the fonts it covers. All three families are OFL 1.1.
+every weight, which is why their filenames carry no weight.
+
+All three families are OFL 1.1, and `fonts/OFL.txt` carries the **full license
+text**, not a link to it — plain text so the notice deploys alongside the fonts
+it covers. The bare-link shortcut the OFL FAQ tolerates applies to fonts
+embedded in a document or bundled inside a program; serving `/fonts/*.woff2` as
+standalone files is plain redistribution, so condition 2 applies in full. The
+copyright lines are verbatim from each family's upstream `OFL.txt` — including
+the Reserved Font Name on IBM Plex, which the other two do not reserve.
 
 Filenames carry a content hash, so `vercel.json` serves `/fonts/*.woff2`
 `immutable` for a year and a re-vendored font can never be served stale. The

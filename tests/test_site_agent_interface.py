@@ -574,6 +574,18 @@ def _csp_policy(header_value: str) -> dict[str, str]:
     return {name: directive for name, directive in zip(names, directives)}
 
 
+def test_csp_parser_rejects_a_shadowed_directive() -> None:
+    """The guard in _csp_policy is what makes every other CSP assertion mean
+    something, so it needs a case that actually trips it."""
+
+    with pytest.raises(AssertionError, match="duplicate CSP directives"):
+        _csp_policy("style-src *; style-src 'self'")
+
+    # The permissive directive alone must still parse, or the guard would be
+    # passing for the wrong reason.
+    assert _csp_policy("style-src *")["style-src"] == "style-src *"
+
+
 def test_site_sends_a_content_security_policy_and_hsts() -> None:
     config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
 
@@ -992,7 +1004,8 @@ def test_build_refuses_a_malformed_or_stale_font_manifest(tmp_path) -> None:
 
 
 def test_vendored_font_license_is_published(tmp_path) -> None:
-    """The OFL asks that the notice travel with the redistributed fonts.
+    """OFL 1.1 condition 2 asks that the notice and the license itself travel
+    with the redistributed fonts.
 
     The operator README is deliberately withheld from dist/, so the attribution
     lives in a plain-text file that ships beside the woff2 files it covers.
@@ -1001,10 +1014,31 @@ def test_vendored_font_license_is_published(tmp_path) -> None:
     assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
 
     license_text = (output / "fonts" / "OFL.txt").read_text(encoding="utf-8")
-    assert "Open Font License" in license_text
     for family in ("IBM Plex Mono", "Libre Franklin", "Public Sans"):
         assert family in license_text
     assert "Copyright" in license_text
+    # Upstream reserves a name for Plex and for neither of the others; dropping
+    # it would understate the terms these files travel under.
+    assert 'Reserved Font Name "Plex"' in license_text
+
+    # These fonts are served as standalone files, not embedded in a document or
+    # bundled in a program, so OFL 1.1 condition 2 wants the license itself and
+    # not a link to it. Assert the operative sections, not just the title: a
+    # file that has been quietly reduced back to a URL still says "Open Font
+    # License" at the top.
+    for clause in (
+        "SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007",
+        "PREAMBLE",
+        "DEFINITIONS",
+        "PERMISSION & CONDITIONS",
+        "TERMINATION",
+        "DISCLAIMER",
+        "may be sold by itself",
+        "contains the above copyright notice and this license",
+        'THE FONT SOFTWARE IS PROVIDED "AS IS"',
+    ):
+        assert clause in license_text, f"OFL text is missing: {clause}"
+    assert len(license_text.splitlines()) > 100
 
     # The operator note stays internal; the exclusion must not be broader.
     assert not (output / "fonts" / "README.md").exists()
