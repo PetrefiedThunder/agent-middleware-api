@@ -36,19 +36,35 @@ def is_postgres_url(url: str) -> bool:
 
 
 def sqlite_path_from_url(url: str) -> str:
-    """Return the SQLite file path in ``url``, or "" if it is not SQLite.
+    """Return the **durable** SQLite file path in ``url``, or "" otherwise.
 
     Accepts the SQLAlchemy spellings (``sqlite://`` and ``sqlite+aiosqlite://``)
-    and returns what ``aiosqlite.connect`` expects. In-memory URLs yield "",
-    since there is nothing durable to point a state backend at.
+    and returns what ``aiosqlite.connect`` expects.
+
+    In-memory URLs return "" on purpose. They are valid SQLite, but a state
+    store pointed at one keeps nothing across a restart, so treating one as
+    durable would reintroduce exactly the silent non-durability this function
+    exists to prevent. Callers get "" and fall through to their next option.
     """
     trimmed = (url or "").strip()
     for prefix in ("sqlite+aiosqlite://", "sqlite://"):
         if trimmed.lower().startswith(prefix):
             remainder = trimmed[len(prefix) :]
             # sqlite:///relative.db -> relative.db; sqlite:////abs.db -> /abs.db
-            return remainder[1:] if remainder.startswith("/") else remainder
+            path = remainder[1:] if remainder.startswith("/") else remainder
+            if _is_in_memory_sqlite(path):
+                return ""
+            return path
     return ""
+
+
+def _is_in_memory_sqlite(path: str) -> bool:
+    """True for the SQLite spellings that never touch disk."""
+    normalized = path.strip().lower()
+    if not normalized or normalized == ":memory:":
+        return True
+    # URI forms: file::memory:?cache=shared, file:name?mode=memory
+    return "mode=memory" in normalized or normalized.startswith("file::memory:")
 
 
 def as_asyncpg_url(url: str) -> str:

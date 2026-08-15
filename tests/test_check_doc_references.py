@@ -23,6 +23,7 @@ _SPEC.loader.exec_module(check_doc_references)
 _defined_names = check_doc_references._defined_names
 _reference_resolves = check_doc_references._reference_resolves
 _prose_spans = check_doc_references._prose_spans
+_qualified_members = check_doc_references._qualified_members
 
 
 def _names(**files: str) -> set[str]:
@@ -59,6 +60,61 @@ def test_dotted_reference_needs_both_halves():
     names = _names(**{"mod.py": "def save():\n    pass\n"})
     assert _reference_resolves("save", names)
     assert not _reference_resolves("DeletedModel.save", names)
+
+
+def test_member_must_belong_to_a_known_owner_class():
+    """When the owner is a real class, the member must be that class's."""
+    sources = {
+        Path("mod.py"): (
+            "class Wallet:\n"
+            "    def charge(self):\n"
+            "        pass\n"
+            "\n"
+            "def unrelated_save():\n"
+            "    pass\n"
+            "\n"
+            "def save():\n"
+            "    pass\n"
+        )
+    }
+    names = _defined_names(sources)
+    members = _qualified_members(sources)
+    assert _reference_resolves("Wallet.charge", names, members)
+    # `save` exists, but not on Wallet.
+    assert not _reference_resolves("Wallet.save", names, members)
+
+
+def test_main_returns_one_on_a_dangling_reference(tmp_path, monkeypatch):
+    """The failure path must actually fail, with a real file on disk."""
+    good = tmp_path / "good.py"
+    good.write_text("class Wallet:\n    def charge(self):\n        pass\n")
+    bad = tmp_path / "bad.py"
+    bad.write_text("# ``renamed_away_handler`` used to live here\nx = 1\n")
+    monkeypatch.setattr(check_doc_references, "ROOT", tmp_path)
+    monkeypatch.setattr(check_doc_references, "_python_files", lambda: [good, bad])
+    assert check_doc_references.main([]) == 1
+
+
+def test_main_returns_zero_when_every_reference_resolves(tmp_path, monkeypatch):
+    good = tmp_path / "good.py"
+    good.write_text(
+        "class Wallet:\n"
+        "    def charge(self):\n"
+        "        # ``Wallet.charge`` is the real thing\n"
+        "        pass\n"
+    )
+    monkeypatch.setattr(check_doc_references, "ROOT", tmp_path)
+    monkeypatch.setattr(check_doc_references, "_python_files", lambda: [good])
+    assert check_doc_references.main([]) == 0
+
+
+def test_unparseable_file_still_reports_its_tokenizable_comments(tmp_path, monkeypatch):
+    """A file that fails ast.parse must not silently skip its comments."""
+    broken = tmp_path / "broken.py"
+    broken.write_text("# ``ghost_symbol`` never existed\ndef (((\n")
+    monkeypatch.setattr(check_doc_references, "ROOT", tmp_path)
+    monkeypatch.setattr(check_doc_references, "_python_files", lambda: [broken])
+    assert check_doc_references.main([]) == 1
 
 
 def test_unparseable_source_contributes_no_names():

@@ -84,6 +84,47 @@ def _prose_spans(source: str) -> list[tuple[int, str]]:
     return spans
 
 
+def _qualified_members(sources: dict[Path, str]) -> dict[str, set[str]]:
+    """Map each class to the member names it actually defines.
+
+    Lets a dotted reference be checked against its own owner instead of against
+    every name in the tree.
+
+    Classes only, deliberately. Module names are not reliable owners here: prose
+    also writes ``table.column``, and this repo has table names that collide
+    with module names (``permits``), so treating a module as an exhaustive
+    owner would reject correct references to non-Python things.
+    """
+    members: dict[str, set[str]] = {}
+
+    def _names_in_body(body: list[ast.stmt]) -> set[str]:
+        found: set[str] = set()
+        for statement in body:
+            if isinstance(
+                statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                found.add(statement.name)
+            elif isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    if isinstance(target, ast.Name):
+                        found.add(target.id)
+            elif isinstance(statement, ast.AnnAssign) and isinstance(
+                statement.target, ast.Name
+            ):
+                found.add(statement.target.id)
+        return found
+
+    for path, source in sources.items():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                members.setdefault(node.name, set()).update(_names_in_body(node.body))
+    return members
+
+
 def _defined_names(sources: dict[Path, str]) -> set[str]:
     """Every identifier the tree defines or uses **as code**.
 
@@ -131,13 +172,22 @@ def _defined_names(sources: dict[Path, str]) -> set[str]:
     return names
 
 
-def _reference_resolves(reference: str, defined: set[str]) -> bool:
+def _reference_resolves(
+    reference: str,
+    defined: set[str],
+    members: dict[str, set[str]] | None = None,
+) -> bool:
     """True when ``reference`` names something the tree actually contains.
 
     The whole string is tried first, so dotted names that are real values or
-    filenames resolve directly. A remaining dotted reference must resolve
-    **both** halves: a bare matching member is not enough, or a reference to a
-    deleted class's method would pass on any unrelated method of that name.
+    filenames resolve directly.
+
+    For a remaining dotted reference, when the owner is a class this tree
+    defines, the member must actually belong to **that** class — otherwise
+    a reference to a deleted class's method would pass on any unrelated method
+    of the same name. When the owner is not a known definition (an instance, a
+    third-party object), both halves must still be defined somewhere, which is
+    the most that can be checked without type inference.
     """
     if reference in defined:
         return True
@@ -145,6 +195,8 @@ def _reference_resolves(reference: str, defined: set[str]) -> bool:
         return False
     owner, _, member = reference.rpartition(".")
     owner_head = owner.split(".")[0]
+    if members is not None and owner_head in members:
+        return member in members[owner_head]
     return owner_head in defined and member in defined
 
 
@@ -153,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     files = _python_files()
     sources = {path: path.read_text(encoding="utf-8", errors="replace") for path in files}
     defined = _defined_names(sources)
+    members = _qualified_members(sources)
 
     dangling: list[tuple[str, int, str]] = []
     checked = 0
@@ -164,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not tail or tail in KNOWN_EXTERNAL or reference in KNOWN_EXTERNAL:
                     continue
                 checked += 1
-                if not _reference_resolves(reference, defined):
+                if not _reference_resolves(reference, defined, members):
                     rel = path.relative_to(ROOT)
                     dangling.append((str(rel), lineno, reference))
 

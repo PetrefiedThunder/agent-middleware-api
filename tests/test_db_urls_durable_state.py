@@ -65,6 +65,38 @@ def test_sqlite_path_from_url_extracts_aiosqlite_path():
     assert sqlite_path_from_url("") == ""
 
 
+def test_in_memory_sqlite_is_not_a_durable_path():
+    """In-memory SQLite must never be offered as durable state.
+
+    It is valid SQLite but keeps nothing across a restart, so accepting it
+    would reintroduce the silent non-durability this helper prevents.
+    """
+    assert sqlite_path_from_url("sqlite:///:memory:") == ""
+    assert sqlite_path_from_url("sqlite+aiosqlite:///:memory:") == ""
+    assert sqlite_path_from_url("sqlite+aiosqlite://") == ""
+    assert sqlite_path_from_url("sqlite+aiosqlite:///file::memory:?cache=shared") == ""
+    assert sqlite_path_from_url("sqlite+aiosqlite:///file:x?mode=memory") == ""
+
+
+def test_auto_backend_does_not_select_in_memory_sqlite(monkeypatch):
+    """An in-memory DATABASE_URL falls through rather than posing as durable."""
+    reset_runtime_degradation()
+    reset_durable_state_for_tests()
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    monkeypatch.setenv("STATE_BACKEND", "auto")
+    monkeypatch.setenv("SQLITE_URL", "")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("REDIS_URL", "")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    store = DurableStateStore()
+    assert store._resolve_backend() == "memory"
+    get_settings.cache_clear()
+    reset_durable_state_for_tests()
+    reset_runtime_degradation()
+
+
 def test_auto_backend_uses_sqlite_for_a_sqlite_database_url(monkeypatch):
     """A SQLite DATABASE_URL must not route auto-resolution to asyncpg.
 
