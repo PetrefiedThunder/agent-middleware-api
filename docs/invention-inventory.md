@@ -30,7 +30,7 @@ prosecution.
 
 ## Corrections to the source memo
 
-Twelve corrections. Wrong names in the "Memo says" column appear deliberately,
+Thirteen corrections. Wrong names in the "Memo says" column appear deliberately,
 so the delta is auditable.
 
 | # | Memo says | Code actually has |
@@ -47,6 +47,7 @@ so the delta is auditable.
 | 10 | INV-001: "six terminal outcomes" in `docs/failure-semantics.md` | That document tabulates **seven** (`docs/failure-semantics.md:40-56`): `success`, `denied`, `insufficient_funds`, `failed_refunded`, `delivery_uncertain`, `response_rejected`, `failed_unrefunded`. Separately, `_CALL_OUTCOMES` (`upstream_mcp.py:60-68`) lists six *call* outcomes — a different vocabulary at a different layer |
 | 11 | INV-001: the reconciler transitions `prepared → failed_refunded` | `failed_refunded` is a **receipt outcome**, not a dispatch state. `DISPATCH_TERMINAL_STATES` (`mcp_dispatch_attempts.py:32-39`) is exactly `{succeeded, returned_error, delivery_uncertain, response_rejected}`. The reconciler completes a stale `prepared` attempt as `state="returned_error"` with `error_code="reconciled_stale_prepared"` (`mcp_dispatch_reconciliation.py:244-252`); the *receipt* then reports `failed_refunded`. The memo conflates two vocabularies |
 | 12 | INV-007/009: `agent_money.py` — `charge()` does `SELECT ... FOR UPDATE` with balance check | `AgentMoney.charge` (`agent_money.py:317`) is a thin delegate to `BillingEngine.charge`. The actual `with_for_update()` debit is in `app/services/billing_engine.py:255`, which the memo never cites |
+| 13 | INV-005: a duplicate refund "collides on the primary key and the `IntegrityError` is safely absorbed" | **`refund_reconciliation.py` neither imports nor catches `IntegrityError`** — a collision would propagate and roll back. Concurrent repair is serialized by reading the durable work item `with_for_update` (`:512`) plus the process-local `_process_lock` (`:87`, `:492`). The only `IntegrityError` absorption in the money path is on the *charge* side (`billing_engine.py:506`). This correction was raised by an automated reviewer on PR #282: the first version of this document repeated the source memo's claim without verifying it — the same failure mode the document was written to correct |
 
 Line-count approximations in the source memo's appendix were not accurate and
 have been regenerated from `wc -l`; see the [appendix](#appendix-mechanism-to-file-map).
@@ -202,13 +203,27 @@ Evidence: `app/services/receipts.py` — `ReceiptService` (`:69`),
 
 ## INV-005 — Exact-once refund reconciliation with deterministic entry IDs
 
-**Evidence confidence: Partially verified** (correction 5)
+**Evidence confidence: Partially verified** (corrections 5 and 13)
 
 Exact-once refunds without a separate idempotency store: the refund ledger entry
 id is derived from the original charge id as `refund-{ledger_entry_id}`
-(`refund_reconciliation.py:61`, `:276`), so the database `UNIQUE` constraint on
-`entry_id` *is* the deduplication mechanism. A duplicate attempt collides on the
-primary key and the `IntegrityError` is safely absorbed.
+(`refund_reconciliation.py:61`, `:276`), so a duplicate refund is a duplicate
+primary key rather than a second row.
+
+The deterministic id is the *naming* rule, but it is not what serializes
+concurrent repair. Two mechanisms do that, and a claim should rest on them:
+the durable work item is read `with_for_update` inside the transaction that
+applies the refund (`:512`), so concurrent Postgres workers queue on that row;
+and `_process_lock` (`:87`, held across `retry` at `:492`) keeps a single
+worker deterministic on SQLite. Proven by
+`test_concurrent_refund_reconciliation_is_exactly_once_in_postgres`
+(`tests/test_permit_postgres_concurrency.py:736`).
+
+Note what this path does **not** do: `refund_reconciliation.py` neither imports
+nor catches `IntegrityError`. A primary-key collision would propagate and roll
+the transaction back, not be absorbed. The only `IntegrityError` absorption in
+the money path is on the *charge* side, guarding the wallet/operation-key
+constraint (`billing_engine.py:506`).
 
 Forged-resolution detection: a work item marked `resolved` is re-validated
 against the ledger on every read via `validate_resolved_claim` (`:408`), whose
@@ -227,10 +242,14 @@ which locates the original debit by `operation_key` even when the crash preceded
 
 **Evidence confidence: Partially verified** (correction 6)
 
-Idempotency scope is the `(key, request_hash)` pair, not the key alone: reusing
-a key with a different payload raises
-`IdempotencyConflictError("idempotency_key_reused")` (`idempotency.py:67-70`),
-which blocks payload substitution under a replayed key. In-progress requests
+A record is *identified* by `(wallet_id, endpoint, idempotency_key)` — that is
+the uniqueness constraint, with endpoint canonicalization as described below.
+The `request_hash` is not part of that identity; it **binds a payload** to the
+record, so reusing the identity with a different payload raises
+`IdempotencyConflictError("idempotency_key_reused")` (`idempotency.py:67-70`).
+Identity decides which record you get; the hash decides whether you are allowed
+to have it. That pairing is what blocks payload substitution under a replayed
+key. In-progress requests
 raise `IdempotencyInProgressError` (`:33`) or block for a bounded wait
 (`_wait_for_replay`, `:86`, polled with a caller-supplied timeout at `:124-158`).
 
@@ -293,7 +312,7 @@ swallowed so a real payment is never silently dropped
 
 `validate_trust_mode_config` (`app/core/trust_mode.py:71`) refuses to boot a
 production-like environment unless the full strict posture holds. The memo lists
-six checks; the signature accepts **eleven** validated inputs (`:71-85`),
+six checks; the signature accepts **twelve** validated inputs (`:71-85`),
 including `static_dev_api_keys`, `enable_dev_key_self_provision`,
 `enable_public_mcp_endpoint`, `redis_url`, and `public_url` beyond the six
 named. The Ed25519 key is validated structurally, not merely for presence
@@ -354,8 +373,11 @@ identifies what to revoke (`api_key_service.py:369-371`). It prevents an
 Engineering opinion, offered so counsel is not the first to encounter these.
 Not a legal opinion, and not a patentability assessment.
 
-**Prioritize INV-001 and INV-002.** These are the two entries whose evidence
-survived verification with no substantive correction. INV-001 additionally has
+**Prioritize INV-001 and INV-002.** These are the two entries whose core
+mechanisms have the strongest verified evidence. INV-002 is the only entry that
+needed no correction at all; INV-001 required corrections 2, 10, and 11 to its
+cited details, but every one was a mislabel in the memo rather than a gap in the
+implementation. INV-001 additionally has
 enablement support most software patents lack: seven enumerated terminal
 outcomes, six labelled crash windows, and a named test per window including
 multi-process kill tests under Postgres.

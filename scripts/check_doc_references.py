@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCANNED_DIRS = ("app", "scripts", "migrations")
 
-# ``identifier``, ``module.attr``, or ``func()`` appearing in prose.
+# A double-backticked name, dotted path, or call form appearing in prose.
 BACKTICK_REF = re.compile(r"``([A-Za-z_][A-Za-z0-9_.]*)(?:\(\))?``")
 
 # Names that legitimately appear in prose without being defined in this tree:
@@ -42,6 +42,9 @@ KNOWN_EXTERNAL = frozenset(
         # Python builtins / typing vocabulary used descriptively in prose.
         "true", "false", "none", "null", "int", "str", "bool", "float",
         "dict", "list", "set", "bytes", "object", "Any", "Decimal", "datetime",
+        "None", "True", "False",
+        # HTTP header name, not a repo symbol.
+        "Origin",
         # pytest/setuptools configuration key, not a repo symbol.
         "pythonpath",
         # MCP SDK class referenced when describing what the SDK transport does.
@@ -82,19 +85,67 @@ def _prose_spans(source: str) -> list[tuple[int, str]]:
 
 
 def _defined_names(sources: dict[Path, str]) -> set[str]:
-    """Every identifier the tree uses outside of backticked prose.
+    """Every identifier the tree defines or uses **as code**.
 
-    Deliberately broad: the goal is to flag names that appear *only* in prose,
-    not to resolve each reference to its definition. A name used anywhere as
-    real code counts as existing.
+    Collected from the AST, never from raw text. Scanning text would let prose
+    vouch for prose: an ordinary comment that happens to contain a word, or a
+    renamed function whose old name survives in a docstring or string literal,
+    would certify a reference that resolves to nothing. That would defeat the
+    whole check, so definitions come from parsed syntax only.
     """
     names: set[str] = set()
-    for source in sources.values():
-        # Strip backticked prose so a name that only ever appears in comments
-        # cannot vouch for itself.
-        stripped = BACKTICK_REF.sub(" ", source)
-        names.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stripped))
+    for path, source in sources.items():
+        # The file exists whether or not it parses, so its name always resolves.
+        names.add(path.stem)
+        names.add(path.name)
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            # Unparseable source cannot vouch for any name. ruff/mypy own that
+            # failure; this check simply contributes nothing from the file.
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.arg):
+                names.add(node.arg)
+            elif isinstance(node, ast.keyword) and node.arg:
+                names.add(node.arg)
+            elif isinstance(node, ast.alias):
+                names.add((node.asname or node.name).split(".")[0])
+                names.add(node.name.split(".")[-1])
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names.update(node.module.split("."))
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                # Prose here also names things that are string *values* in code:
+                # states (``expired``), error codes, env vars, table names.
+                # Grounding those in real literals keeps them checkable without
+                # letting free text vouch for a symbol.
+                value = node.value.strip()
+                if value and len(value) <= 128:
+                    names.add(value)
     return names
+
+
+def _reference_resolves(reference: str, defined: set[str]) -> bool:
+    """True when ``reference`` names something the tree actually contains.
+
+    The whole string is tried first, so dotted names that are real values or
+    filenames resolve directly. A remaining dotted reference must resolve
+    **both** halves: a bare matching member is not enough, or a reference to a
+    deleted class's method would pass on any unrelated method of that name.
+    """
+    if reference in defined:
+        return True
+    if "." not in reference:
+        return False
+    owner, _, member = reference.rpartition(".")
+    owner_head = owner.split(".")[0]
+    return owner_head in defined and member in defined
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not tail or tail in KNOWN_EXTERNAL or reference in KNOWN_EXTERNAL:
                     continue
                 checked += 1
-                if tail not in defined:
+                if not _reference_resolves(reference, defined):
                     rel = path.relative_to(ROOT)
                     dangling.append((str(rel), lineno, reference))
 
