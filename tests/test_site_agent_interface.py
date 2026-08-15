@@ -1014,12 +1014,19 @@ def test_vendored_font_license_is_published(tmp_path) -> None:
     assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
 
     license_text = (output / "fonts" / "OFL.txt").read_text(encoding="utf-8")
-    for family in ("IBM Plex Mono", "Libre Franklin", "Public Sans"):
-        assert family in license_text
-    assert "Copyright" in license_text
-    # Upstream reserves a name for Plex and for neither of the others; dropping
-    # it would understate the terms these files travel under.
-    assert 'Reserved Font Name "Plex"' in license_text
+
+    # Each family's own notice, verbatim from its upstream OFL.txt. Asserting
+    # the family names alone is not enough: all three were present and all
+    # three notices were still wrong — two attributed to a foundry that no
+    # longer holds them, and Plex missing its name reservation entirely, which
+    # understates the terms the bytes travel under.
+    for family, notice in (
+        ("IBM Plex Mono", 'Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"'),
+        ("Libre Franklin", "Copyright 2020 The Libre Franklin Project Authors"),
+        ("Public Sans", "Copyright 2015 The Public Sans Project Authors"),
+    ):
+        assert family in license_text, f"{family}: not named in the license file"
+        assert notice in license_text, f"{family}: upstream notice missing or altered"
 
     # These fonts are served as standalone files, not embedded in a document or
     # bundled in a program, so OFL 1.1 condition 2 wants the license itself and
