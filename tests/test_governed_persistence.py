@@ -1060,6 +1060,7 @@ async def test_dispatch_reconciliation_queries_active_and_unfinalized_terminal(
 async def test_remote_prepare_cap_holds_under_concurrency(
     client: AsyncClient,
     clean_database,
+    monkeypatch,
 ) -> None:
     """Two concurrent upstream reservations cannot jointly exceed the cap.
 
@@ -1067,9 +1068,16 @@ async def test_remote_prepare_cap_holds_under_concurrency(
     this was fixed. On SQLite the ``with_for_update()`` on the permit row is a
     silent no-op, so both callers read the same ``spent_credits``, both passed
     the read-time budget check, and one increment clobbered the other -- the
-    permit overspent with nothing in the record showing it. The guarded
-    conditional UPDATE makes the database evaluate the cap in the statement
-    that performs the increment, so exactly one of the two can win.
+    permit overspent with nothing in the record showing it.
+
+    The interleaving is forced rather than hoped for. Both callers are held at
+    a barrier immediately after validation -- which is after they have read the
+    permit and before either reserves -- and released together. Without the
+    barrier this test could pass against the broken implementation whenever one
+    task happened to finish before the other read, which would make it useless
+    as a regression guard. With it, both validations necessarily approve the
+    same pre-reservation balance, so the guarded UPDATE is the only thing that
+    can keep the cap.
     """
     provisioned = await provision_agent_wallet(client)
     tool_name = "partner-tool-cap-race"
@@ -1084,6 +1092,37 @@ async def test_remote_prepare_cap_holds_under_concurrency(
 
     # Each reservation fits on its own; together they exceed max_credits.
     credits = Decimal("6")
+    concurrency = 2
+
+    import anyio
+
+    from app.services.permits import PermitService
+
+    original_validate = PermitService._validate_model_for_action
+    arrived = 0
+    both_validated = anyio.Event()
+
+    async def _barriered_validate(self, **kwargs):
+        # Run the real validation first, so each caller reads and approves the
+        # permit exactly as it would in production...
+        result = await original_validate(self, **kwargs)
+        nonlocal arrived
+        arrived += 1
+        if arrived >= concurrency:
+            both_validated.set()
+        # ...then hold every caller until all of them have done so. Releasing
+        # earlier would let one reservation commit before the other reads,
+        # which is precisely the schedule under which the pre-fix code looks
+        # correct. fail_after keeps a lost caller from hanging the suite.
+        with anyio.fail_after(30):
+            await both_validated.wait()
+        return result
+
+    monkeypatch.setattr(
+        PermitService,
+        "_validate_model_for_action",
+        _barriered_validate,
+    )
 
     async def _reserve(index: int):
         payload = {"tool": tool_name, "arguments": {"value": index}}
@@ -1105,8 +1144,6 @@ async def test_remote_prepare_cap_holds_under_concurrency(
             credits_authorized=credits,
         )
 
-    import anyio
-
     results: dict[int, tuple] = {}
 
     async def _run(index: int) -> None:
@@ -1116,11 +1153,13 @@ async def test_remote_prepare_cap_holds_under_concurrency(
             results[index] = (exc, None)
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(_run, 0)
-        tg.start_soon(_run, 1)
+        for index in range(concurrency):
+            tg.start_soon(_run, index)
+
+    assert arrived == concurrency, "both callers must reach the barrier"
 
     outcomes = list(results.values())
-    assert len(outcomes) == 2
+    assert len(outcomes) == concurrency
     for validation, _attempt in outcomes:
         assert not isinstance(validation, Exception), validation
 
@@ -1129,6 +1168,9 @@ async def test_remote_prepare_cap_holds_under_concurrency(
     assert len(allowed) == 1, "exactly one reservation may win the cap"
     assert len(denied) == 1
     assert denied[0].reason == "permit_budget_exceeded"
+    # The denial carries what an agent needs to retry smaller.
+    assert denied[0].details is not None
+    assert denied[0].details["remaining_credits"] is not None
 
     # The winner holds a prepared attempt; the loser left nothing to compensate.
     prepared = [a for v, a in outcomes if v.allowed]
