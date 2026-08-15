@@ -731,7 +731,7 @@ async def _assert_signed_terminal_evidence(
     attempt_state: str,
     attempt_error_code: str,
     terminal_result: dict[str, object],
-) -> None:
+) -> str:
     """A recovered attempt must carry verifiable signed evidence.
 
     Reconstructing state after a kill is only worth something if the evidence
@@ -803,6 +803,35 @@ async def _assert_signed_terminal_evidence(
     ]
     assert not failed, f"recovered evidence did not verify: {failed}"
     assert evidence.valid
+    return row.receipt_id
+
+
+def _assert_replayed_terminal(
+    response: httpx.Response,
+    *,
+    reason: str,
+    receipt_id: str,
+) -> None:
+    """A retry must replay the recovered terminal disposition, and say which.
+
+    Asserting merely that *some* error came back is not enough: an unrepaired
+    record answers ``idempotency_in_progress``, which is also an error, so a
+    loose check would pass on a reconciliation that never happened. The reason
+    and the signed receipt identity are what distinguish "resolved to this
+    outcome" from "still stuck".
+    """
+    assert response.status_code == 200
+    payload = response.json()
+    assert "result" not in payload, f"terminal replay returned a success: {payload}"
+    error = payload["error"]
+    assert error["message"] == reason, (
+        f"expected replayed reason {reason!r}, got {error['message']!r}"
+    )
+    replayed_receipt = error.get("data", {}).get("receipt", {})
+    assert replayed_receipt.get("receipt_id") == receipt_id, (
+        "replay did not carry the recovered receipt: "
+        f"{replayed_receipt.get('receipt_id')!r} != {receipt_id!r}"
+    )
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -1025,7 +1054,7 @@ async def test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain(
     assert after.refund_count == 0
     assert after.permit_spent == before.permit_spent
     assert after.receipt_outcomes == ("delivery_uncertain",)
-    await _assert_signed_terminal_evidence(
+    receipt_id = await _assert_signed_terminal_evidence(
         seeded,
         receipt_outcome="delivery_uncertain",
         reason_code="delivery_uncertain",
@@ -1036,7 +1065,7 @@ async def test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain(
 
     # A client retry must replay the ambiguous disposition, never re-execute.
     replay = await _invoke(steady_worker, seeded)
-    assert "error" in replay.json()
+    _assert_replayed_terminal(replay, reason="delivery_uncertain", receipt_id=receipt_id)
     assert await _upstream_snapshot(seeded) == after
 
     # Reconciliation is idempotent: a second sweep is not a second recovery.
@@ -1084,7 +1113,7 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
     assert after.refund_count == 0
     assert after.permit_spent == before.permit_spent
     assert after.receipt_outcomes == ("delivery_uncertain",)
-    await _assert_signed_terminal_evidence(
+    receipt_id = await _assert_signed_terminal_evidence(
         seeded,
         receipt_outcome="delivery_uncertain",
         reason_code="delivery_uncertain",
@@ -1094,7 +1123,7 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
     )
 
     replay = await _invoke(steady_worker, seeded)
-    assert "error" in replay.json()
+    _assert_replayed_terminal(replay, reason="delivery_uncertain", receipt_id=receipt_id)
     assert await _upstream_snapshot(seeded) == after
 
     again = await _reconcile(stress_harness, steady_worker)
@@ -1154,7 +1183,7 @@ async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
     assert after.refund_count == 1
     assert after.permit_spent == "0"
     assert after.receipt_outcomes == ("failed_refunded",)
-    await _assert_signed_terminal_evidence(
+    receipt_id = await _assert_signed_terminal_evidence(
         seeded,
         receipt_outcome="failed_refunded",
         reason_code="failed_refunded",
@@ -1167,7 +1196,7 @@ async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
     )
 
     replay = await _invoke(steady_worker, seeded)
-    assert "error" in replay.json()
+    _assert_replayed_terminal(replay, reason="failed_refunded", receipt_id=receipt_id)
     assert await _upstream_snapshot(seeded) == after
 
     # Refund-once: a second sweep must not issue a second compensation.

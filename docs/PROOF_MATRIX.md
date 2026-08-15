@@ -225,9 +225,11 @@ Being explicit about the boundary is what makes the proofs worth anything.
   Faults are injected at specific durable commit points. It does not prove
   survival of a kill at an arbitrary instruction, database crash or failover,
   or multi-node high availability. The harness exposes more fault points than
-  the six CI-run scenarios currently exercise: `before_permit_reserve`,
-  `after_permit_reserve`, `after_idempotency_begin`, `after_mark_charged`, and
-  `before_receipt_commit` are instrumented but unexercised.
+  the six CI-run scenarios currently exercise. Of the twelve instrumented
+  points those scenarios reach five; the other seven —
+  `before_permit_reserve`, `after_permit_reserve`, `after_idempotency_begin`,
+  `after_idempotency_complete`, `after_mark_charged`, `before_receipt_commit`,
+  and `after_audit_commit` — are instrumented but unexercised.
 - **`make prove-trust-plane` runs on SQLite with a hardcoded demo signing
   seed.** It proves the logic, not the production posture. No target re-runs
   these assertions against PostgreSQL — see the defect note above. PostgreSQL
@@ -253,7 +255,8 @@ Ordered by how much each would strengthen the differentiator per unit of work.
    channel, is what makes the verifier meaningful against a compromised
    issuer.
 3. **Exercise the remaining crash fault points.** The harness already
-   instruments more commit boundaries than the three proven scenarios use.
+   instruments more commit boundaries than the six proven scenarios use:
+   seven of its twelve fault points are not yet reached by a test.
 4. **External anchoring or append-only storage**, which is what would let the
    project retire the "tamper-evident, not immutable" caveat.
 5. **KMS-backed signing custody**, designed in
