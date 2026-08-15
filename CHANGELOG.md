@@ -201,6 +201,25 @@ full release gate; do not backfill a final `v1.2.0` tag.
   with `outcome="insufficient_funds"`; `tests/test_mcp_trust.py` now proves a
   balance shortfall signs that receipt at 402/`-32004`, executes nothing,
   debits nothing, releases the reserved budget, and replays identically.
+- **`delivery_uncertain` is now proved by a real process kill, not only by
+  seeded state.** The two-process PostgreSQL harness previously exercised the
+  local execution path only: its stress tool was registered with
+  `register_local`, its control endpoint never called the dispatch reconciler,
+  and so no `mcp_dispatch_attempts` row — and no `delivery_uncertain` — was
+  ever produced by an actual crash. The remote state machine's crash behavior
+  was covered only by in-process tests that seed durable states through the
+  production service API. The harness now also registers an upstream-backed
+  tool and gates the two boundaries that matter: `after_mark_dispatched` (past
+  the durable checkpoint, before any effect) and `after_upstream_effect` (the
+  effect landed, the acknowledgement did not). Killing a worker at either one
+  and reconciling proves the attempt terminalizes to `delivery_uncertain`, the
+  charge and permit reservation are retained with no refund, the upstream
+  side-effect count never grows, a client retry replays the ambiguity instead
+  of re-executing, a second sweep is a no-op, and the recovered receipt's full
+  evidence bundle verifies.
+- The upstream effects table permits duplicate call tokens deliberately, so a
+  redispatch after ambiguity would surface as a second row rather than being
+  hidden by a unique constraint.
 
 ### 🔍 Observability
 

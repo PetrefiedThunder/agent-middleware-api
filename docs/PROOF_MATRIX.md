@@ -88,7 +88,8 @@ make prove-crash-recovery
 
 This starts two independent Uvicorn worker processes against one shared
 PostgreSQL database and injects faults at durable commit boundaries. It proves
-three things:
+five things — the first three on the local execution path, the last two on the
+governed *remote* dispatch path:
 
 1. **Concurrent invokes serialize.** While worker A is paused mid-side-effect,
    an identical invoke on worker B receives `idempotency_in_progress`. After
@@ -104,12 +105,35 @@ three things:
    it, replay stays `idempotency_in_progress`, and nothing is redispatched
    automatically.
 
+4. **A kill past the dispatch checkpoint is charged and signed ambiguous.** The
+   worker is killed after the durable `prepared -> dispatched` transition but
+   before the remote effect runs. No effect actually landed, and the trust
+   plane still cannot prove that, so reconciliation terminalizes the attempt as
+   `delivery_uncertain`: the charge is retained, no refund is issued, the permit
+   reservation stands, and the signed receipt records the ambiguity.
+5. **A kill after the remote effect never redispatches it.** The worker is
+   killed once the remote effect is durable but before any terminal result is
+   recorded. Reconciliation terminalizes the attempt as `delivery_uncertain`
+   and the upstream side-effect count stays at exactly one — the effects table
+   permits duplicates on purpose, so a redispatch would be visible as a second
+   row rather than hidden by a constraint.
+
 Note that (3) is deliberately *not* a recovery. The correct behavior for an
-ambiguous post-side-effect crash is fail-closed manual review, because the
-gateway cannot know whether the remote effect landed. Describing this proof as
-"crash recovery" without that qualifier overstates it; the accurate framing is
-**crash consistency with reconciliation, and fail-closed review for ambiguous
-outcomes**.
+ambiguous post-side-effect crash on the local path is fail-closed manual
+review, because the gateway cannot know whether the effect landed. Describing
+this proof as "crash recovery" without that qualifier overstates it; the
+accurate framing is **crash consistency with reconciliation, and fail-closed
+review for ambiguous outcomes**. (4) and (5) are the governed remote path's
+answer to the same ambiguity: there the durable dispatch state machine can
+classify it, so recovery terminalizes into `delivery_uncertain` instead of
+waiting for a human — but it still never redispatches.
+
+Both remote-path proofs additionally rebuild the full evidence bundle for the
+recovered receipt and require every check to pass, so the claim is that the
+recovered evidence *verifies*, not merely that a receipt row exists. Each also
+re-runs reconciliation and asserts the second sweep is a no-op, and replays the
+call to confirm a client retry gets the ambiguous disposition back rather than a
+fresh execution.
 
 The harness refuses to run unless it is safe: it fails closed on a
 non-PostgreSQL URL, a production-like `ENVIRONMENT`, a stale Alembic revision,
@@ -117,7 +141,7 @@ or any application table that already holds rows, and it takes an advisory lock
 so two runs cannot overlap. Without the opt-in environment variables it skips,
 so it never interferes with `make test`.
 
-CI runs the same three tests in the `postgres_permit_concurrency` job. That job
+CI runs the same five tests in the `postgres_permit_concurrency` job. That job
 installs dependencies with `pip` rather than `uv`, so its step is spelled
 inline; the Make target is the operator-facing equivalent, not a literal
 copy of the CI step.
@@ -156,7 +180,10 @@ Being explicit about the boundary is what makes the proofs worth anything.
 - **Exactly-once is gateway-scoped.** A remote tool's side effect is exactly
   once only if that tool honors the forwarded idempotency key. A post-dispatch
   transport failure is signed `delivery_uncertain`, stays charged, and is never
-  automatically retried or refunded.
+  automatically retried or refunded. The gateway-scoped half of that — no
+  redispatch after ambiguity, charge retained, evidence verifiable — is proved
+  by a real process kill in `make prove-crash-recovery`; the downstream half
+  remains the tool's responsibility and is not proved here.
 - **Audit chains are tamper-evident, not immutable.** An administrator who can
   alter both the database and its chain metadata is inside the trust boundary.
   Append-only storage and external anchoring are not implemented.
@@ -190,7 +217,10 @@ Being explicit about the boundary is what makes the proofs worth anything.
   Faults are injected at specific durable commit points. It does not prove
   survival of a kill at an arbitrary instruction, database crash or failover,
   or multi-node high availability. The harness exposes more fault points than
-  the three CI-run scenarios currently exercise.
+  the five CI-run scenarios currently exercise: `before_permit_reserve`,
+  `after_permit_reserve`, `after_idempotency_begin`, `after_debit_commit`,
+  `after_mark_charged`, `before_receipt_commit`, and `after_audit_commit` are
+  instrumented but unexercised.
 - **`make prove-trust-plane` runs on SQLite with a hardcoded demo signing
   seed.** It proves the logic, not the production posture. No target re-runs
   these assertions against PostgreSQL — see the defect note above. PostgreSQL
