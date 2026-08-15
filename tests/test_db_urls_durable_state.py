@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.db_urls import as_asyncpg_url, as_sqlalchemy_url
+from app.core.db_urls import (
+    as_asyncpg_url,
+    as_sqlalchemy_url,
+    is_postgres_url,
+    sqlite_path_from_url,
+)
 from app.core.durable_state import (
     DurableStateConfigError,
     DurableStateStore,
@@ -41,6 +46,68 @@ def test_url_helpers_are_idempotent():
     assert as_sqlalchemy_url(sa) == sa
     assert as_asyncpg_url(as_asyncpg_url(sa)) == as_asyncpg_url(sa)
     assert as_asyncpg_url(sa) == raw
+
+
+def test_is_postgres_url_rejects_non_postgres_backends():
+    assert is_postgres_url("postgresql://u:p@h/db")
+    assert is_postgres_url("postgres://u:p@h/db")
+    assert is_postgres_url("postgresql+asyncpg://u:p@h/db")
+    assert is_postgres_url("POSTGRESQL://u:p@h/db")
+    assert not is_postgres_url("sqlite+aiosqlite:///./x.db")
+    assert not is_postgres_url("")
+
+
+def test_sqlite_path_from_url_extracts_aiosqlite_path():
+    assert sqlite_path_from_url("sqlite+aiosqlite:///./x.db") == "./x.db"
+    assert sqlite_path_from_url("sqlite+aiosqlite:////abs/x.db") == "/abs/x.db"
+    assert sqlite_path_from_url("sqlite:///./x.db") == "./x.db"
+    assert sqlite_path_from_url("postgresql://u:p@h/db") == ""
+    assert sqlite_path_from_url("") == ""
+
+
+def test_auto_backend_uses_sqlite_for_a_sqlite_database_url(monkeypatch):
+    """A SQLite DATABASE_URL must not route auto-resolution to asyncpg.
+
+    Regression: auto-resolution treated any non-empty DATABASE_URL as postgres,
+    so the standard local setting sent a sqlite DSN to asyncpg, logged a
+    connection traceback, and silently degraded durable state to in-memory.
+    """
+    reset_runtime_degradation()
+    reset_durable_state_for_tests()
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    monkeypatch.setenv("STATE_BACKEND", "auto")
+    monkeypatch.setenv("SQLITE_URL", "")
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./local.db")
+    monkeypatch.setenv("REDIS_URL", "")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    store = DurableStateStore()
+    assert store._resolve_backend() == "sqlite"
+    assert store._sqlite_url == "./local.db"
+    report = get_runtime_degradation()
+    assert report["durable_state"]["fell_back_to_memory"] is False
+    get_settings.cache_clear()
+    reset_durable_state_for_tests()
+    reset_runtime_degradation()
+
+
+def test_auto_backend_still_uses_postgres_for_a_postgres_database_url(monkeypatch):
+    reset_runtime_degradation()
+    reset_durable_state_for_tests()
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    monkeypatch.setenv("STATE_BACKEND", "auto")
+    monkeypatch.setenv("SQLITE_URL", "")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@h/db")
+    monkeypatch.setenv("REDIS_URL", "")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    store = DurableStateStore()
+    assert store._resolve_backend() == "postgres"
+    get_settings.cache_clear()
+    reset_durable_state_for_tests()
+    reset_runtime_degradation()
 
 
 def test_sqlite_without_url_falls_back_outside_production(monkeypatch):
