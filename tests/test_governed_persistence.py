@@ -1172,9 +1172,17 @@ async def test_remote_prepare_cap_holds_under_concurrency(
     assert len(allowed) == 1, "exactly one reservation may win the cap"
     assert len(denied) == 1
     assert denied[0].reason == "permit_budget_exceeded"
-    # The denial carries what an agent needs to retry smaller.
+    # The denial carries what an agent needs to retry smaller -- and the
+    # numbers have to be right, not merely present. A stale balance here would
+    # send a retrying agent straight back into the same denial. Compared as
+    # Decimals because these are rendered with the storage column's scale
+    # ("4.00000000"), which is a formatting detail the assertion should not
+    # depend on; the values are what matter.
     assert denied[0].details is not None
-    assert denied[0].details["remaining_credits"] is not None
+    assert Decimal(denied[0].details["required_credits"]) == credits
+    assert Decimal(denied[0].details["remaining_credits"]) == Decimal("10") - credits
+    assert Decimal(denied[0].details["spent_credits"]) == credits
+    assert Decimal(denied[0].details["max_credits"]) == Decimal("10")
 
     # The winner holds a prepared attempt; the loser left nothing to compensate.
     prepared = [a for v, a in outcomes if v.allowed]
