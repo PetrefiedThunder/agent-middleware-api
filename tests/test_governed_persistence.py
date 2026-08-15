@@ -1152,9 +1152,13 @@ async def test_remote_prepare_cap_holds_under_concurrency(
         except Exception as exc:  # surfaced below as a failure, not swallowed
             results[index] = (exc, None)
 
-    async with anyio.create_task_group() as tg:
-        for index in range(concurrency):
-            tg.start_soon(_run, index)
+    # The barrier's own fail_after only starts once a caller reaches the
+    # patched validation. A caller that stalls before that point would hang the
+    # suite with no diagnostic, so bound the whole group as well.
+    with anyio.fail_after(90):
+        async with anyio.create_task_group() as tg:
+            for index in range(concurrency):
+                tg.start_soon(_run, index)
 
     assert arrived == concurrency, "both callers must reach the barrier"
 
