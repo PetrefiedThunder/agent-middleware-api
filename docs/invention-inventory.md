@@ -454,8 +454,11 @@ mechanism, so the column does not sum meaningfully.
 
 `docs/ip/` (added by #280) is the **patent prosecution package**: prior-art
 landscape, invention disclosure, claim sets, abstract and figures, IDS
-candidates. This document is not a competing package and should not be filed
-from. It answers a narrower question — *does a third-party memo describe this
+candidates. This document is not a competing package: do not draft a filing
+from it, and do not file it as part of the prosecution package. It is an
+internal accuracy check, not disclosure material.
+
+It answers a narrower question — *does a third-party memo describe this
 code correctly?* — and its output is a corrections table plus evidence-
 confidence markers.
 
