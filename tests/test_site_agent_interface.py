@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -578,8 +579,11 @@ def test_site_sends_a_content_security_policy_and_hsts() -> None:
     # precisely so no inline-script escape hatch is needed.
     assert policy["script-src"] == "script-src 'self'"
     assert "'unsafe-inline'" not in values["Content-Security-Policy"]
-    assert "https://fonts.googleapis.com" in policy["style-src"]
-    assert "https://fonts.gstatic.com" in policy["font-src"]
+    # Typography is self-hosted from /fonts, so neither font CDN is permitted.
+    assert policy["style-src"] == "style-src 'self'"
+    assert policy["font-src"] == "font-src 'self'"
+    assert "fonts.googleapis.com" not in values["Content-Security-Policy"]
+    assert "fonts.gstatic.com" not in values["Content-Security-Policy"]
 
 
 def test_pages_carry_no_inline_scripts(tmp_path) -> None:
@@ -780,8 +784,103 @@ def test_local_site_assets_exist() -> None:
         SITE / "a11y-preload.js",
         SITE / "va-init.js",
         SITE / ".well-known" / "security.txt",
+        SITE / "fonts.css",
+        SITE / "vendor_fonts.py",
     ):
         assert path.is_file(), f"missing landing-page asset: {path}"
+
+
+def test_typography_is_self_hosted_with_no_third_party_request(tmp_path) -> None:
+    """No page may reach a font CDN, and the CSP must not permit one.
+
+    Google Fonts cost two cross-origin handshakes on the critical path
+    (googleapis.com for the CSS, then gstatic.com for the files) and put a
+    third party between a visitor and a page whose entire pitch is that you can
+    verify things yourself.
+    """
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    rendered = [output / "index.html", output / "proof" / "index.html", output / "404.html"]
+    for page in rendered:
+        markup = page.read_text(encoding="utf-8")
+        for host in ("fonts.googleapis.com", "fonts.gstatic.com"):
+            assert host not in markup, f"{page.name} still requests {host}"
+        assert '<link rel="stylesheet" href="/fonts.css' in markup
+
+    config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
+    global_headers = next(
+        entry for entry in config["headers"] if entry["source"] == "/(.*)"
+    )
+    values = {header["key"]: header["value"] for header in global_headers["headers"]}
+    policy = {
+        directive.split(" ")[0]: directive
+        for directive in values["Content-Security-Policy"].split("; ")
+    }
+    assert policy["style-src"] == "style-src 'self'"
+    assert policy["font-src"] == "font-src 'self'"
+
+    # The build must actually ship the files the stylesheet points at.
+    assert (output / "fonts.css").is_file()
+    for face in re.findall(r'url\("(/fonts/[^"]+)"\)', (output / "fonts.css").read_text()):
+        assert (output / face.lstrip("/")).is_file(), f"{face} not published"
+
+
+def test_font_stylesheet_and_files_agree() -> None:
+    """fonts.css and fonts/ are generated together; neither may drift alone.
+
+    This is the half of the vendoring contract that needs no network. Refreshing
+    against upstream is `python3 vendor_fonts.py --check`.
+    """
+    stylesheet = (SITE / "fonts.css").read_text(encoding="utf-8")
+    referenced = {
+        Path(src).name for src in re.findall(r'url\("(/fonts/[^"]+)"\)', stylesheet)
+    }
+    committed = {path.name for path in (SITE / "fonts").glob("*.woff2")}
+
+    assert referenced, "fonts.css declares no @font-face src"
+    assert referenced == committed, (
+        f"fonts.css and fonts/ disagree; only in css: {sorted(referenced - committed)}, "
+        f"only on disk: {sorted(committed - referenced)} — re-run vendor_fonts.py"
+    )
+    for name in committed:
+        assert (SITE / "fonts" / name).read_bytes()[:4] == b"wOF2", f"{name} is not woff2"
+
+    # Every family/weight the design system asks for must have a face, or the
+    # browser silently synthesises one.
+    for family, weight in (
+        ("IBM Plex Mono", 400), ("IBM Plex Mono", 500), ("IBM Plex Mono", 600),
+        ("Libre Franklin", 700), ("Libre Franklin", 800),
+        ("Public Sans", 400), ("Public Sans", 500), ("Public Sans", 600),
+    ):
+        block = re.search(
+            rf'font-family: "{re.escape(family)}";\s*font-style: normal;\s*'
+            rf"font-weight: {weight};",
+            stylesheet,
+        )
+        assert block, f"fonts.css has no face for {family} {weight}"
+
+
+def test_preloaded_fonts_exist_and_are_actually_used(tmp_path) -> None:
+    """A preload for a file the page never uses is pure wasted bandwidth."""
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    stylesheet = (output / "fonts.css").read_text(encoding="utf-8")
+    for relative_path in ("index.html", "proof/index.html", "404.html"):
+        markup = (output / relative_path).read_text(encoding="utf-8")
+        preloads = re.findall(r'<link rel="preload" href="(/fonts/[^"]+)"', markup)
+        assert preloads, f"{relative_path} preloads no fonts"
+        for href in preloads:
+            assert (output / href.lstrip("/")).is_file(), f"{href} missing"
+            assert f'url("{href}")' in stylesheet, f"{href} is preloaded but unused"
+            # Fonts are CORS-fetched even same-origin; without crossorigin the
+            # preload is discarded and the file is fetched twice.
+            assert re.search(
+                rf'<link rel="preload" href="{re.escape(href)}"[^>]*crossorigin',
+                markup,
+                re.S,
+            ), f"{href} preload is missing crossorigin"
 
 
 def teardown_module() -> None:

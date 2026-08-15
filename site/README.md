@@ -39,6 +39,8 @@ Open `http://127.0.0.1:8765/`.
 - `/.well-known/agent.json` — marketing-origin pointer to API discovery
 - `/.well-known/security.txt` — vulnerability-report contact (RFC 9116)
 - `/llm.txt` and `/llms.txt` — machine bootstrap prose
+- `/llms-full.txt` — long-form machine brief: boundary, vocabulary, non-claims
+- `/fonts.css` and `/fonts/*.woff2` — self-hosted typography
 - `/robots.txt` and `/sitemap.xml` — search discovery
 
 `sitemap.xml` and `.well-known/security.txt` are rendered, not copied:
@@ -68,14 +70,47 @@ change any of those files, bump the token in `index.html`, `proof/index.html`,
 keep the old bytes for up to a week. HTML itself carries no long-lived
 `Cache-Control` rule and revalidates on every request.
 
-`trailingSlash: true` makes `/proof` redirect to `/proof/`, matching the
-page's `rel="canonical"`.
+An explicit `/proof` → `/proof/` redirect matches the page's
+`rel="canonical"`. Do **not** replace it with the global `trailingSlash: true`
+setting: on Vercel that makes every `/.well-known/*` entry in `headers` stop
+matching, so `agent.json` and `security.txt` silently fall back to
+`max-age=0, must-revalidate` while every other configured path keeps its
+headers. Confirmed on the deployed site.
 
 The proof page reads fields from `/proof/receipt.json`; it does not hard-code a
 receipt ID, amount, or verification verdict. If either proof file is absent or
 does not contain the receipt's matching key, the page says the artifact is not
 published and makes no validity claim. Cryptographic validity comes only from
 the offline verifier.
+
+## Typography
+
+Fonts are **self-hosted**, not loaded from Google. A third-party font CDN costs
+two cross-origin handshakes on the critical path — `fonts.googleapis.com` for
+the CSS, then `fonts.gstatic.com` for the files — and puts an outside party
+between a visitor and a page whose whole pitch is that you can verify things
+yourself. Serving them here also lets the CSP stay `style-src 'self';
+font-src 'self'` with no external host.
+
+`fonts/` and `fonts.css` are **generated**. To add a family or weight, edit
+`FAMILIES` in `vendor_fonts.py`, then:
+
+```bash
+cd site
+python3 vendor_fonts.py          # refetch and rewrite fonts/ + fonts.css
+python3 vendor_fonts.py --check  # verify the committed output matches upstream
+```
+
+Only `latin` and `latin-ext` are vendored, and each face keeps upstream's
+`unicode-range`, so a browser downloads only the subsets a page actually uses.
+Libre Franklin and Public Sans are variable fonts: one file per subset serves
+every weight, which is why their filenames carry no weight. Licensing and
+attribution are in `fonts/README.md` — all three families are OFL 1.1.
+
+The three faces visible in the first viewport are `rel="preload"`ed. A preload
+for a font must carry `crossorigin` even same-origin, or the browser discards it
+and fetches the file twice; `test_preloaded_fonts_exist_and_are_actually_used`
+guards that, and that every preloaded file is one the stylesheet references.
 
 ## Analytics
 

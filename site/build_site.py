@@ -59,6 +59,8 @@ COPY_ASSETS = (
     ".well-known",
     "a11y.js",
     "a11y-preload.js",
+    "fonts",
+    "fonts.css",
     "analytics.js",
     "favicon.svg",
     "llm.txt",
