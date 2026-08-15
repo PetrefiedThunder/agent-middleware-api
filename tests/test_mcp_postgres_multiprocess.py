@@ -20,6 +20,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TextIO
 
@@ -87,6 +88,10 @@ class UpstreamSnapshot:
 
     effect_count: int
     dispatch_states: tuple[str, ...]
+    # Whether each attempt row carries its own ledger pointer. A crash between
+    # the debit commit and `attach_charge` leaves this False with a debit that
+    # nonetheless exists, which is exactly the state recovery has to survive.
+    dispatch_ledger_linked: tuple[bool, ...]
     debit_count: int
     refund_count: int
     receipt_outcomes: tuple[str, ...]
@@ -649,17 +654,19 @@ async def _upstream_snapshot(seeded: SeededCall) -> UpstreamSnapshot:
                 )
             ).scalar_one()
         )
-        dispatch_states = tuple(
-            (
-                await session.execute(
-                    text(
-                        "SELECT state FROM mcp_dispatch_attempts "
-                        "WHERE idempotency_record_id = :record_id "
-                        "ORDER BY attempt_id"
-                    ),
-                    {"record_id": record_id},
-                )
-            ).scalars()
+        attempt_rows = (
+            await session.execute(
+                text(
+                    "SELECT state, ledger_entry_id FROM mcp_dispatch_attempts "
+                    "WHERE idempotency_record_id = :record_id "
+                    "ORDER BY attempt_id"
+                ),
+                {"record_id": record_id},
+            )
+        ).all()
+        dispatch_states = tuple(row.state for row in attempt_rows)
+        dispatch_ledger_linked = tuple(
+            row.ledger_entry_id is not None for row in attempt_rows
         )
         debit_count = int(
             (
@@ -706,15 +713,26 @@ async def _upstream_snapshot(seeded: SeededCall) -> UpstreamSnapshot:
     return UpstreamSnapshot(
         effect_count=effect_count,
         dispatch_states=dispatch_states,
+        dispatch_ledger_linked=dispatch_ledger_linked,
         debit_count=debit_count,
         refund_count=refund_count,
         receipt_outcomes=receipt_outcomes,
-        permit_spent=str(permit_spent),
+        # Normalized so the comparison is on value, not on the scale the
+        # driver happens to return ("0E-8" and "0.00000000" are one number).
+        permit_spent=str(Decimal(permit_spent).normalize()),
     )
 
 
-async def _assert_signed_ambiguity_evidence(seeded: SeededCall) -> None:
-    """A recovered ambiguous attempt must carry verifiable signed evidence.
+async def _assert_signed_terminal_evidence(
+    seeded: SeededCall,
+    *,
+    receipt_outcome: str,
+    reason_code: str,
+    attempt_state: str,
+    attempt_error_code: str,
+    terminal_result: dict[str, object],
+) -> None:
+    """A recovered attempt must carry verifiable signed evidence.
 
     Reconstructing state after a kill is only worth something if the evidence
     it mints still verifies, so the full bundle is rebuilt and every check is
@@ -759,16 +777,17 @@ async def _assert_signed_ambiguity_evidence(seeded: SeededCall) -> None:
             )
         ).one()
 
-    assert row.outcome == "delivery_uncertain"
-    assert row.reason_code == "delivery_uncertain"
-    assert row.state == "delivery_uncertain"
-    assert row.attempt_error_code == "delivery_uncertain"
+    assert row.outcome == receipt_outcome
+    assert row.reason_code == reason_code
+    assert row.state == attempt_state
+    assert row.attempt_error_code == attempt_error_code
     # No upstream response was ever obtained. The retained bytes are the
-    # middleware's own ambiguity marker, and the receipt must hash exactly
+    # middleware's own terminal marker, and the receipt must hash exactly
     # those -- never a fabricated upstream result.
-    assert json.loads(row.attempt_result_json) == {"error": "delivery_uncertain"}
+    assert json.loads(row.attempt_result_json) == terminal_result
     assert row.response_hash == row.attempt_response_hash
-    # The charge is retained, so the receipt has to name the debit it kept.
+    # Whether the charge was kept or refunded, the receipt has to name the
+    # debit the disposition was computed from.
     assert row.ledger_entry_id is not None
 
     receipt = await get_receipt_service().get_receipt(row.receipt_id)
@@ -1006,7 +1025,14 @@ async def test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain(
     assert after.refund_count == 0
     assert after.permit_spent == before.permit_spent
     assert after.receipt_outcomes == ("delivery_uncertain",)
-    await _assert_signed_ambiguity_evidence(seeded)
+    await _assert_signed_terminal_evidence(
+        seeded,
+        receipt_outcome="delivery_uncertain",
+        reason_code="delivery_uncertain",
+        attempt_state="delivery_uncertain",
+        attempt_error_code="delivery_uncertain",
+        terminal_result={"error": "delivery_uncertain"},
+    )
 
     # A client retry must replay the ambiguous disposition, never re-execute.
     replay = await _invoke(steady_worker, seeded)
@@ -1058,7 +1084,14 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
     assert after.refund_count == 0
     assert after.permit_spent == before.permit_spent
     assert after.receipt_outcomes == ("delivery_uncertain",)
-    await _assert_signed_ambiguity_evidence(seeded)
+    await _assert_signed_terminal_evidence(
+        seeded,
+        receipt_outcome="delivery_uncertain",
+        reason_code="delivery_uncertain",
+        attempt_state="delivery_uncertain",
+        attempt_error_code="delivery_uncertain",
+        terminal_result={"error": "delivery_uncertain"},
+    )
 
     replay = await _invoke(steady_worker, seeded)
     assert "error" in replay.json()
@@ -1066,5 +1099,79 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
 
     again = await _reconcile(stress_harness, steady_worker)
     assert again["dispatch_dispatched_uncertain"] == 0
+    assert again["dispatch_failed_attempts"] == 0
+    assert await _upstream_snapshot(seeded) == after
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
+    stress_harness: StressHarness,
+    steady_worker: StressWorker,
+) -> None:
+    """A kill before the dispatch checkpoint is provably non-delivered.
+
+    The worker dies immediately after the debit commits, so the attempt is
+    still `prepared` and has not yet been told which ledger entry paid for it.
+    Nothing crossed the dispatch boundary, so this is the one post-charge crash
+    the trust plane *can* resolve in the caller's favour: recovery must find the
+    orphaned debit by its operation identity rather than by the attempt's own
+    null pointer, refund it, release the reservation, and finalize the attempt
+    without ever contacting the upstream server.
+    """
+    seeded = await _kill_governed_upstream_call(
+        stress_harness,
+        steady_worker,
+        scenario="upstream-debit-kill",
+        fault_point="after_debit_commit",
+    )
+
+    blocked = await _invoke(steady_worker, seeded)
+    _assert_in_progress(blocked)
+    before = await _upstream_snapshot(seeded)
+    assert before.dispatch_states == ("prepared",)
+    # The crash landed between the debit and `attach_charge`: the money moved
+    # but the attempt cannot yet name it.
+    assert before.dispatch_ledger_linked == (False,)
+    assert before.debit_count == 1
+    assert before.refund_count == 0
+    assert before.effect_count == 0
+    assert before.receipt_outcomes == ()
+
+    reconciliation = await _reconcile(stress_harness, steady_worker)
+    assert reconciliation["dispatch_prepared_finalized"] == 1
+    assert reconciliation["dispatch_dispatched_uncertain"] == 0
+    assert reconciliation["dispatch_failed_attempts"] == 0
+
+    after = await _upstream_snapshot(seeded)
+    assert after.dispatch_states == ("returned_error",)
+    # Recovery adopted the orphaned debit by operation identity.
+    assert after.dispatch_ledger_linked == (True,)
+    # Nothing was ever dispatched, so nothing may be dispatched now.
+    assert after.effect_count == 0
+    # Exactly one debit and exactly one compensating refund; the reservation is
+    # released rather than silently retained.
+    assert after.debit_count == 1
+    assert after.refund_count == 1
+    assert after.permit_spent == "0"
+    assert after.receipt_outcomes == ("failed_refunded",)
+    await _assert_signed_terminal_evidence(
+        seeded,
+        receipt_outcome="failed_refunded",
+        reason_code="failed_refunded",
+        attempt_state="returned_error",
+        attempt_error_code="reconciled_stale_prepared",
+        terminal_result={
+            "error": "failed_refunded",
+            "error_code": "reconciled_stale_prepared",
+        },
+    )
+
+    replay = await _invoke(steady_worker, seeded)
+    assert "error" in replay.json()
+    assert await _upstream_snapshot(seeded) == after
+
+    # Refund-once: a second sweep must not issue a second compensation.
+    again = await _reconcile(stress_harness, steady_worker)
+    assert again["dispatch_prepared_finalized"] == 0
     assert again["dispatch_failed_attempts"] == 0
     assert await _upstream_snapshot(seeded) == after

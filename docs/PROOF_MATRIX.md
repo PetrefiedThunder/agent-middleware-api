@@ -88,8 +88,8 @@ make prove-crash-recovery
 
 This starts two independent Uvicorn worker processes against one shared
 PostgreSQL database and injects faults at durable commit boundaries. It proves
-five things — the first three on the local execution path, the last two on the
-governed *remote* dispatch path:
+six things — the first three on the local execution path, the last three on
+the governed *remote* dispatch path:
 
 1. **Concurrent invokes serialize.** While worker A is paused mid-side-effect,
    an identical invoke on worker B receives `idempotency_in_progress`. After
@@ -104,7 +104,6 @@ governed *remote* dispatch path:
    untouched and reports it in its `needs_review` count rather than repairing
    it, replay stays `idempotency_in_progress`, and nothing is redispatched
    automatically.
-
 4. **A kill past the dispatch checkpoint is charged and signed ambiguous.** The
    worker is killed after the durable `prepared -> dispatched` transition but
    before the remote effect runs. No effect actually landed, and the trust
@@ -117,18 +116,27 @@ governed *remote* dispatch path:
    and the upstream side-effect count stays at exactly one — the effects table
    permits duplicates on purpose, so a redispatch would be visible as a second
    row rather than hidden by a constraint.
+6. **A kill before the checkpoint is refunded, not held.** The worker is killed
+   immediately after the debit commits, while the attempt is still `prepared`
+   and does not yet name the ledger entry that paid for it. Nothing crossed the
+   dispatch boundary, so this is the one post-charge crash the plane can resolve
+   in the caller's favour: recovery finds the orphaned debit by its operation
+   identity rather than by the attempt's null pointer, refunds it, releases the
+   reservation, signs `failed_refunded`, and never contacts the upstream server.
+   A second sweep issues no second refund.
 
 Note that (3) is deliberately *not* a recovery. The correct behavior for an
 ambiguous post-side-effect crash on the local path is fail-closed manual
 review, because the gateway cannot know whether the effect landed. Describing
 this proof as "crash recovery" without that qualifier overstates it; the
 accurate framing is **crash consistency with reconciliation, and fail-closed
-review for ambiguous outcomes**. (4) and (5) are the governed remote path's
-answer to the same ambiguity: there the durable dispatch state machine can
-classify it, so recovery terminalizes into `delivery_uncertain` instead of
-waiting for a human — but it still never redispatches.
+review for ambiguous outcomes**. (4), (5), and (6) are the governed remote path's
+answer to the same question: there the durable dispatch state machine can tell
+the cases apart. A crash before the checkpoint is provably non-delivered and is
+refunded; a crash after it is unknowable and terminalizes into
+`delivery_uncertain` instead of waiting for a human — and neither redispatches.
 
-Both remote-path proofs additionally rebuild the full evidence bundle for the
+All three remote-path proofs additionally rebuild the full evidence bundle for the
 recovered receipt and require every check to pass, so the claim is that the
 recovered evidence *verifies*, not merely that a receipt row exists. Each also
 re-runs reconciliation and asserts the second sweep is a no-op, and replays the
@@ -141,7 +149,7 @@ or any application table that already holds rows, and it takes an advisory lock
 so two runs cannot overlap. Without the opt-in environment variables it skips,
 so it never interferes with `make test`.
 
-CI runs the same five tests in the `postgres_permit_concurrency` job. That job
+CI runs the same six tests in the `postgres_permit_concurrency` job. That job
 installs dependencies with `pip` rather than `uv`, so its step is spelled
 inline; the Make target is the operator-facing equivalent, not a literal
 copy of the CI step.
@@ -217,10 +225,9 @@ Being explicit about the boundary is what makes the proofs worth anything.
   Faults are injected at specific durable commit points. It does not prove
   survival of a kill at an arbitrary instruction, database crash or failover,
   or multi-node high availability. The harness exposes more fault points than
-  the five CI-run scenarios currently exercise: `before_permit_reserve`,
-  `after_permit_reserve`, `after_idempotency_begin`, `after_debit_commit`,
-  `after_mark_charged`, `before_receipt_commit`, and `after_audit_commit` are
-  instrumented but unexercised.
+  the six CI-run scenarios currently exercise: `before_permit_reserve`,
+  `after_permit_reserve`, `after_idempotency_begin`, `after_mark_charged`, and
+  `before_receipt_commit` are instrumented but unexercised.
 - **`make prove-trust-plane` runs on SQLite with a hardcoded demo signing
   seed.** It proves the logic, not the production posture. No target re-runs
   these assertions against PostgreSQL — see the defect note above. PostgreSQL

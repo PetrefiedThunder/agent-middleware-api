@@ -220,6 +220,15 @@ full release gate; do not backfill a final `v1.2.0` tag.
 - The upstream effects table permits duplicate call tokens deliberately, so a
   redispatch after ambiguity would surface as a second row rather than being
   hidden by a unique constraint.
+- **The pre-checkpoint window is proved by kill too.** A third scenario gates
+  `after_debit_commit` on the remote path, killing the worker while the attempt
+  is still `prepared` and has not yet been told which ledger entry paid for it.
+  Recovery must locate the orphaned debit by its operation identity rather than
+  by the attempt's null pointer, refund it exactly once, release the
+  reservation, sign `failed_refunded`, and never contact the upstream server.
+  This is the counterpart to the ambiguous cases: a crash *before* the
+  checkpoint is provably non-delivered, so it resolves in the caller's favour
+  rather than being retained.
 
 ### 🔍 Observability
 

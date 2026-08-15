@@ -88,6 +88,7 @@ injected at each durable boundary in the tests named below.
 | Window — process dies… | Detected by | Resolution | Money |
 |---|---|---|---|
 | **A. after debit, before dispatch** (attempt `prepared`) | Stale-active sweep; the debit is found by its `operation_key` even if the crash preceded `attach_charge` | `failed_refunded` (`reconciled_stale_prepared`), signed receipt + audit, replay returns 502 | **Refunded**, budget released |
+| **A′. A, proved by an actual process kill** (worker killed the instant the debit commits, before `attach_charge`) | Stale-active sweep, after a real `SIGKILL` across two OS processes | `failed_refunded`; the orphaned debit is adopted by operation identity and the upstream is never contacted | **Refunded** exactly once, budget released |
 | **B. after dispatch, before response** (attempt `dispatched`) | Stale-active sweep | `delivery_uncertain`, signed receipt + audit, replay returns 504 | **Stays charged** |
 | **B′. B, proved by an actual process kill** (worker killed past the checkpoint, with and without a landed remote effect) | Stale-active sweep, after a real `SIGKILL` across two OS processes | `delivery_uncertain`; the upstream effect count never grows and the recovered evidence bundle verifies | **Stays charged**, reservation retained |
 | **C. after the response, before the receipt commit** (attempt terminal, no receipt) | Terminal-without-receipt sweep; the stored canonical result is **re-hashed byte-exact** before reuse (`dispatch_stored_result_hash_mismatch` on any tamper) | The recorded terminal state is adopted and signed; a recorded `returned_error` completes its refund | Per the recorded state |
@@ -104,8 +105,9 @@ test — `test_crash_between_debit_and_dispatch_reconciles_refund`,
 multi-process kill tests in `tests/test_mcp_postgres_multiprocess.py` — of
 which `test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain` and
 `test_kill_after_remote_effect_never_redispatches_the_effect` cover window B by
-killing a real worker on either side of the remote effect rather than by
-seeding the durable state in process.
+killing a real worker on either side of the remote effect, and
+`test_kill_between_debit_and_dispatch_refunds_without_dispatching` covers
+window A the same way, rather than by seeding the durable state in process.
 
 Reconciliation itself is idempotent by construction: audit event ids are
 derived deterministically from the attempt id, refunds are keyed
