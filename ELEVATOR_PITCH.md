@@ -76,8 +76,10 @@ scoped signed permit -> governed MCP invoke -> wallet charge -> signed receipt
   post-dispatch outcomes are marked `delivery_uncertain` and routed to
   fail-closed manual review — never silently redispatched.
 - **Portable gateway evidence.** Signed receipts for success, denial, *and*
-  failure, linked to permits, ledger entries, and a verifiable per-wallet hash
-  chain. This is not a compliance-grade ledger or proof of physical work.
+  failure, linked to permits, a verifiable per-wallet hash chain, and — where a
+  ledger record exists for that outcome — the ledger entry. A pre-dispatch
+  denial has no debit to link. This is not a compliance-grade ledger or proof of
+  physical work.
 
 **Why believe it.** The proof is executable, not asserted:
 
@@ -175,12 +177,15 @@ the ledger link is what makes a duplicate charge impossible rather than merely
 detectable.
 
 **"Can these receipts satisfy SOC 2 or the EU AI Act?"** Not on their own, and
-we will not say otherwise. A receipt evidences one call's signed *terminal
-outcome* and its linkage to permit, ledger, and audit chain — and that the
-record has not been altered since. Only a success receipt evidences that the
-call executed and was charged; denial, refunded-failure, and
+we will not say otherwise. A receipt evidences the signed *authorization
+decision* and the call's *terminal outcome*, linked to the permit and audit
+chain — and shows the record has not been altered since. Only a success receipt
+evidences that the call executed and was charged; denial, refunded-failure, and
 `delivery_uncertain` receipts evidence exactly those outcomes instead, which is
-the point of signing them. Whether
+the point of signing them. A denial is a refusal, not an authorization. Ledger
+linkage is present only where a ledger record exists — a debit, or the
+compensating entry that reversed it — so `_finalize_governed_denial` takes
+`ledger_entry_id` as optional and a pre-dispatch denial carries none. Whether
 that satisfies a given control is a determination for the operator's auditor.
 We publish no regulatory mappings and hold no certifications. If a mapped
 compliance report is the deliverable, an audit-layer product is the better

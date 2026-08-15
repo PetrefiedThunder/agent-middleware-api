@@ -349,11 +349,15 @@
           <dt>Can these receipts satisfy a SOC 2 or EU AI Act audit?</dt>
           <dd>
             Not on their own, and we will not claim otherwise. A signed receipt
-            is evidence of one call's <em>recorded outcome</em> — that it was
-            authorized and what then happened to it, whether that was execution
-            and a charge, a denial, a refunded failure, or an outcome we could
-            not confirm — and that the record has not been altered since. It is
-            deliberately not a success certificate: denials and failures get
+            records the <em>authorization decision</em> and the call's
+            <em>terminal outcome</em>, and shows the record has not been altered
+            since. Only a success receipt evidences that the call executed and
+            was charged; a denial receipt evidences that the call was refused
+            and never ran, and a refunded-failure or unconfirmed-outcome receipt
+            evidences exactly that. Ledger linkage appears where there is a
+            ledger record to link — a debit, or the compensating entry that
+            reversed it — so a pre-dispatch denial has no debit to point at. It
+            is deliberately not a success certificate: refusals and failures get
             signed too, which is what makes the evidence worth anything when
             something goes wrong. Whether
             that evidence satisfies a given control is a question for your

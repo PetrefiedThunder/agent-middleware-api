@@ -866,7 +866,7 @@ def test_comparison_page_names_alternatives_and_refuses_superlatives(
     # not just the exact wordings that existed when this test was written.
     # WEDGE.md's never-claim list is the contract; these are its normalized form.
     prohibited = (
-        r"\bthe only (?:mcp|gateway|product|tool|one)\b",
+        r"\b(?:the )?only (?:mcp|gateway|product|tool|one)\b",
         r"\bno competitor\b",
         r"\bnobody else\b",
         r"\bno one else\b",
@@ -880,6 +880,22 @@ def test_comparison_page_names_alternatives_and_refuses_superlatives(
         assert not re.search(pattern, text), (
             f"comparison page matches prohibited claim pattern {pattern!r} — see "
             "WEDGE.md 'What Not To Claim Yet'"
+        )
+
+    # Negative path: the patterns must actually reject offending copy. Without
+    # this, a pattern that silently stops matching would leave the page
+    # unguarded while the test still passed.
+    offending = (
+        "we are the only gateway that meters by the call",
+        "only product that prevents double charges",
+        "nobody else binds the debit",
+        "no competitor offers this",
+        "we are soc2-compliant and compliance-ready",
+        "this guarantees compliance with the eu ai act",
+    )
+    for sample in offending:
+        assert any(re.search(pattern, sample) for pattern in prohibited), (
+            f"prohibited-claim patterns fail to reject {sample!r}"
         )
 
     # States the compliance boundary rather than dodging the question.

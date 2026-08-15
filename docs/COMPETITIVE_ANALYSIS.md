@@ -185,11 +185,17 @@ permit = {
 
 **No comparable system** offers per-invocation signed receipts with request/response hashes.
 
+> **Superseded (2026-08-15).** True against the incumbents compared above;
+> **false** against the MCP-native set — protect-mcp and jamjet both ship signed
+> per-call evidence. Left in place per this document's record-don't-rewrite
+> convention. Do not quote this sentence; see [§9](#9-mcp-native-competitive-set-added-2026-08-15).
+
 **Gap Analysis:**
 - Missing: receipt verification endpoint (consumer can verify signature offline)
 - Missing: receipt batching (one receipt per N calls for high-volume)
 - Missing: receipt export format (PDF, JSON-LD with schema.org)
-- Strength: Unique in the ecosystem — no competitor has this
+- Strength: strong, but **not unique as of 2026-08** — see §9. (Original text:
+  "Unique in the ecosystem — no competitor has this.")
 
 ### 2.6 Audit Chain
 
@@ -303,7 +309,9 @@ permit = {
 
 ### 5.1 Technical Moats
 
-1. **Signed receipts with request/response hashes** — No competitor offers this
+1. **Signed receipts with request/response hashes** — ~~No competitor offers
+   this~~ **superseded 2026-08-15**: protect-mcp and jamjet do. The surviving
+   moat is the debit bound to the idempotency record; see §9.2
 2. **Hash-chain audit with per-wallet monotonic sequence** — Stronger than CloudTrail
 3. **Permit-scoped budget metering** — Stripe doesn't have tool-level budgets
 4. **Permanent idempotency with payload binding** — 24h TTL is industry standard
@@ -390,10 +398,12 @@ Full analysis, with per-claim verification levels and market sizing:
 §2.5 concluded "**No comparable system** offers per-invocation signed receipts
 with request/response hashes," and §5.1 listed signed receipts as moat #1.
 Against Stripe, AWS, and Okta that remains accurate. Against protect-mcp,
-jamjet, and TraceAgent it is **not** — all three ship per-call cryptographic
-evidence, and protect-mcp's is offline-verifiable by design. (TraceAgent's is
-verified only as far as hash chaining; whether it carries an issuer signature
-verifiable without the vendor is unverified, and a hash chain alone is not one.)
+and jamjet it is **not** — both ship signed per-call evidence, and
+protect-mcp's is offline-verifiable by design. TraceAgent is **not** a
+counterexample to the signed-receipt claim: its evidence is verified only as far
+as SHA-256 hash chaining, and a hash chain is neither an issuer signature nor a
+way to verify one without the vendor. It refutes only the weaker claim that
+nothing else produces per-call cryptographic evidence.
 
 The moat that survives verification is narrower and sits one layer down:
 
@@ -406,7 +416,7 @@ No project in §9.1 is *documented* as binding a debit to an idempotency record
 — jamjet's budgets and replay are described as independent features and the
 binding question is open (see §7 of the research doc). State this as the scope
 of the survey, not as proven exclusivity. Receipts are being commoditized; the
-economic semantics, so far as anyone has published, are not. Positioning copy should lead with
+economic semantics, so far as this survey found, are not. Positioning copy should lead with
 the debit, not with the signature — see [`../WEDGE.md`](../WEDGE.md).
 
 ### 9.3 Strategic risks this set introduces
