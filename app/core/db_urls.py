@@ -10,17 +10,29 @@ from __future__ import annotations
 from urllib.parse import parse_qsl
 
 
+def _split_scheme(url: str) -> tuple[str, str]:
+    """Return (lowercased scheme prefix, remainder) for a ``scheme://`` URL.
+
+    Only the scheme is lowercased. Everything after ``://`` — user, password,
+    host, path — is case-sensitive and must survive untouched.
+    """
+    marker = "://"
+    index = url.find(marker)
+    if index == -1:
+        return "", url
+    return url[: index + len(marker)].lower(), url[index + len(marker) :]
+
+
 def as_sqlalchemy_url(url: str) -> str:
     """Return a URL suitable for SQLAlchemy ``create_async_engine``."""
     trimmed = (url or "").strip()
     if not trimmed:
         return trimmed
-    if trimmed.startswith("postgresql+asyncpg://"):
-        return trimmed
-    if trimmed.startswith("postgres://"):
-        return "postgresql+asyncpg://" + trimmed[len("postgres://") :]
-    if trimmed.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + trimmed[len("postgresql://") :]
+    scheme, rest = _split_scheme(trimmed)
+    if scheme == "postgresql+asyncpg://":
+        return scheme + rest
+    if scheme in ("postgres://", "postgresql://"):
+        return "postgresql+asyncpg://" + rest
     return trimmed
 
 
@@ -86,8 +98,9 @@ def as_asyncpg_url(url: str) -> str:
     trimmed = (url or "").strip()
     if not trimmed:
         return trimmed
-    if trimmed.startswith("postgresql+asyncpg://"):
-        return "postgresql://" + trimmed[len("postgresql+asyncpg://") :]
-    if trimmed.startswith("postgres://"):
-        return "postgresql://" + trimmed[len("postgres://") :]
+    scheme, rest = _split_scheme(trimmed)
+    if scheme in ("postgresql+asyncpg://", "postgres://"):
+        return "postgresql://" + rest
+    if scheme == "postgresql://":
+        return scheme + rest
     return trimmed

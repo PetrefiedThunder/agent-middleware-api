@@ -40,6 +40,19 @@ def test_as_asyncpg_url_strips_driver():
     assert as_asyncpg_url("postgres://u:p@h/db") == "postgresql://u:p@h/db"
 
 
+def test_uppercase_schemes_normalize_without_touching_credentials():
+    """is_postgres_url accepts any case, so the converters must too.
+
+    Only the scheme is lowercased — user, password, host, and path are
+    case-sensitive and must survive verbatim.
+    """
+    upper = "POSTGRESQL://Us3R:PaSsW0rd@Host/DB"
+    assert is_postgres_url(upper)
+    assert as_asyncpg_url(upper) == "postgresql://Us3R:PaSsW0rd@Host/DB"
+    assert as_sqlalchemy_url(upper) == "postgresql+asyncpg://Us3R:PaSsW0rd@Host/DB"
+    assert as_asyncpg_url("POSTGRES://u:p@h/db") == "postgresql://u:p@h/db"
+
+
 def test_url_helpers_are_idempotent():
     raw = "postgresql://u:p@h/db"
     sa = as_sqlalchemy_url(raw)

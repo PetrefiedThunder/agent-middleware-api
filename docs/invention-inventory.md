@@ -450,8 +450,34 @@ mechanism, so the column does not sum meaningfully.
 | INV-011 Owner-key retirement | `migrations/versions/025_remove_plaintext_owner_keys.py` (86), `scripts/retire_owner_keys.py` (257), `tests/test_retire_owner_keys.py` (334) | 677 |
 | INV-012 API key lifecycle | `app/services/api_key_service.py` (726), `app/routers/api_keys.py` (301), `app/db/models.py` (1136) | 2163 |
 
+## Relationship to `docs/ip/`
+
+`docs/ip/` (added by #280) is the **patent prosecution package**: prior-art
+landscape, invention disclosure, claim sets, abstract and figures, IDS
+candidates. This document is not a competing package and should not be filed
+from. It answers a narrower question — *does a third-party memo describe this
+code correctly?* — and its output is a corrections table plus evidence-
+confidence markers.
+
+Read `docs/ip/` for what to file. Read this for whether a specific cited
+mechanism matches the implementation.
+
+**The two prioritize differently, and counsel should know that before
+reconciling them.** `docs/ip/README.md` leads with four mechanisms: atomic
+budget reservation, exactly-once debit across a crash, signature-stable receipt
+evolution, and offline verification with a status taxonomy. This document
+prioritizes INV-001 (the dispatch state machine) and INV-002 (DNS pinning with
+SNI preservation) on the narrower ground that their *cited evidence* survived
+verification best — INV-002 needed no correction at all. Notably, `docs/ip/`
+does not carry DNS pinning as a candidate, and this document does not assess
+signature-stable receipt evolution. Neither list is wrong; they were built to
+answer different questions. Where they disagree about strength, `docs/ip/` is
+the one written for filing.
+
 ## Related
 
+- [`docs/ip/README.md`](ip/README.md) — the prosecution package this document
+  supports rather than replaces.
 - [`docs/related-work.md`](related-work.md) — external literature mapped to the
   product wedge, with per-source verification levels.
 - [`docs/failure-semantics.md`](failure-semantics.md) — terminal outcomes and
