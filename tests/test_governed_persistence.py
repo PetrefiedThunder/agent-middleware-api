@@ -1054,3 +1054,99 @@ async def test_dispatch_reconciliation_queries_active_and_unfinalized_terminal(
 
     unfinalized = await service.list_unfinalized_terminal_contexts(idle_seconds=300)
     assert [item.attempt.attempt_id for item in unfinalized] == [prepared.attempt_id]
+
+
+@pytest.mark.anyio
+async def test_remote_prepare_cap_holds_under_concurrency(
+    client: AsyncClient,
+    clean_database,
+) -> None:
+    """Two concurrent upstream reservations cannot jointly exceed the cap.
+
+    The upstream dispatch path reserved with an ORM read-modify-write until
+    this was fixed. On SQLite the ``with_for_update()`` on the permit row is a
+    silent no-op, so both callers read the same ``spent_credits``, both passed
+    the read-time budget check, and one increment clobbered the other -- the
+    permit overspent with nothing in the record showing it. The guarded
+    conditional UPDATE makes the database evaluate the cap in the statement
+    that performs the increment, so exactly one of the two can win.
+    """
+    provisioned = await provision_agent_wallet(client)
+    tool_name = "partner-tool-cap-race"
+    permit = await create_tool_permit(
+        client,
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        tool_name=tool_name,
+        max_credits=10,
+        idem_key="permit-cap-race",
+    )
+
+    # Each reservation fits on its own; together they exceed max_credits.
+    credits = Decimal("6")
+
+    async def _reserve(index: int):
+        payload = {"tool": tool_name, "arguments": {"value": index}}
+        begun = await get_idempotency_service().begin_with_record(
+            wallet_id=provisioned["agent_wallet_id"],
+            endpoint="/mcp/messages",
+            idempotency_key=f"invoke-cap-race-{index}",
+            request_payload=payload,
+        )
+        return await get_mcp_dispatch_attempt_service().authorize_reserve_and_prepare(
+            idempotency_record_id=begun.record_id,
+            wallet_id=provisioned["agent_wallet_id"],
+            permit_id=permit["permit_id"],
+            key_id=provisioned["key_id"],
+            public_tool_id=tool_name,
+            upstream_tool_name="remote_tool",
+            upstream_origin="https://partner.example",
+            request_hash=begun.request_hash,
+            credits_authorized=credits,
+        )
+
+    import anyio
+
+    results: dict[int, tuple] = {}
+
+    async def _run(index: int) -> None:
+        try:
+            results[index] = await _reserve(index)
+        except Exception as exc:  # surfaced below as a failure, not swallowed
+            results[index] = (exc, None)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_run, 0)
+        tg.start_soon(_run, 1)
+
+    outcomes = list(results.values())
+    assert len(outcomes) == 2
+    for validation, _attempt in outcomes:
+        assert not isinstance(validation, Exception), validation
+
+    allowed = [v for v, _ in outcomes if v.allowed]
+    denied = [v for v, _ in outcomes if not v.allowed]
+    assert len(allowed) == 1, "exactly one reservation may win the cap"
+    assert len(denied) == 1
+    assert denied[0].reason == "permit_budget_exceeded"
+
+    # The winner holds a prepared attempt; the loser left nothing to compensate.
+    prepared = [a for v, a in outcomes if v.allowed]
+    assert prepared and prepared[0] is not None
+    assert prepared[0].state == "prepared"
+    assert [a for v, a in outcomes if not v.allowed] == [None]
+
+    # The invariant that matters: spend never exceeds the cap.
+    stored_permit = await get_permit_service().get_permit(permit["permit_id"])
+    assert stored_permit is not None
+    assert stored_permit.spent_credits == credits
+    assert stored_permit.spent_credits <= stored_permit.max_credits
+
+    factory = get_session_factory()
+    async with factory() as session:
+        attempts = (
+            await session.execute(
+                select(func.count()).select_from(McpDispatchAttemptModel)
+            )
+        ).scalar_one()
+    assert attempts == 1, "a denied reservation must not leave a prepared attempt"
