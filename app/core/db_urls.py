@@ -7,6 +7,8 @@ Railway and many hosts provide ``postgresql://...``. SQLAlchemy async needs
 
 from __future__ import annotations
 
+from urllib.parse import parse_qsl
+
 
 def as_sqlalchemy_url(url: str) -> str:
     """Return a URL suitable for SQLAlchemy ``create_async_engine``."""
@@ -59,12 +61,24 @@ def sqlite_path_from_url(url: str) -> str:
 
 
 def _is_in_memory_sqlite(path: str) -> bool:
-    """True for the SQLite spellings that never touch disk."""
+    """True for the SQLite spellings that never touch disk.
+
+    ``mode=memory`` counts only as a query parameter on a ``file:`` URI. A
+    substring test would classify the durable filename ``mode=memory.db`` — or
+    any directory named that — as ephemeral and route its state to memory.
+    """
     normalized = path.strip().lower()
     if not normalized or normalized == ":memory:":
         return True
-    # URI forms: file::memory:?cache=shared, file:name?mode=memory
-    return "mode=memory" in normalized or normalized.startswith("file::memory:")
+    if normalized.startswith("file::memory:"):
+        return True
+    if not normalized.startswith("file:"):
+        return False
+    _, _, query = normalized.partition("?")
+    return any(
+        key == "mode" and value == "memory"
+        for key, value in parse_qsl(query, keep_blank_values=True)
+    )
 
 
 def as_asyncpg_url(url: str) -> str:

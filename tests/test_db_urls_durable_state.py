@@ -78,6 +78,19 @@ def test_in_memory_sqlite_is_not_a_durable_path():
     assert sqlite_path_from_url("sqlite+aiosqlite:///file:x?mode=memory") == ""
 
 
+def test_durable_filenames_containing_memory_text_are_kept():
+    """``mode=memory`` counts only as a file: URI query parameter.
+
+    A substring test would classify these durable paths as ephemeral and route
+    their state to memory, losing it on restart.
+    """
+    assert sqlite_path_from_url("sqlite:///mode=memory.db") == "mode=memory.db"
+    assert (
+        sqlite_path_from_url("sqlite+aiosqlite:////var/data/mode=memory/app.db")
+        == "/var/data/mode=memory/app.db"
+    )
+
+
 def test_auto_backend_does_not_select_in_memory_sqlite(monkeypatch):
     """An in-memory DATABASE_URL falls through rather than posing as durable."""
     reset_runtime_degradation()
