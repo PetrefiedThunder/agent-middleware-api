@@ -101,7 +101,7 @@
 
       <section class="section" aria-labelledby="honest-title">
         <p class="section-kicker">01 / What is not unique</p>
-        <h2 id="honest-title">Signed, offline-verifiable receipts are no longer rare.</h2>
+        <h2 id="honest-title">Signed, offline-verifiable receipts are no longer rare in this field.</h2>
         <div class="thesis-copy">
           <p>
             When this project started, per-call cryptographic evidence for MCP
@@ -130,7 +130,10 @@
               Assessed August 2026 from each project's public source and
               documentation. &ldquo;Not documented&rdquo; means we did not find
               the capability described &mdash; not that we proved it absent.
-              Capabilities change; verify before deciding.
+              Capabilities change; verify before deciding. Retry protection is
+              scoped to this gateway: one accepted key means one dispatch from
+              here. Whether your upstream tool then runs its own side effect
+              exactly once depends on that tool honouring the forwarded key.
             </caption>
             <thead>
               <tr>
@@ -146,7 +149,7 @@
                 <th scope="row">Enforces at a boundary the agent cannot bypass</th>
                 <td>Yes</td>
                 <td>Yes</td>
-                <td>Yes</td>
+                <td>Not documented</td>
                 <td>No — in-process</td>
               </tr>
               <tr>
@@ -178,7 +181,7 @@
                 <td>Call and cost caps</td>
               </tr>
               <tr>
-                <th scope="row">Duplicate execution prevented on retry</th>
+                <th scope="row">Duplicate gateway dispatch prevented on retry</th>
                 <td>Yes</td>
                 <td>Varies</td>
                 <td>No</td>
@@ -411,8 +414,11 @@
             <p class="section-kicker">06 / Check it yourself</p>
             <h2 id="compare-cta-title">Do not take the table on faith.</h2>
             <p>
-              Every claim in the left-hand column is executable. Clone the
-              repository and run <code>make prove-trust-plane</code> to walk
+              The core trust-plane claims in the left-hand column are
+              executable — the rest, like the absence of compliance mapping or a
+              self-serve tier, are product facts you can only take us at our
+              word on. Clone the repository and run
+              <code>make prove-trust-plane</code> to walk
               permit → invoke → charge → receipt → replay → deny with no
               credentials and no signup. Then verify a published receipt
               offline, without us.

@@ -922,13 +922,22 @@ def test_comparison_page_names_alternatives_and_refuses_superlatives(
         "we are the only gateway that meters by the call",
         "only product that prevents double charges",
         "nobody else binds the debit",
+        "no one else binds the debit",
         "no competitor offers this",
+        "we are the first and only gateway for this",
         "we are soc2-compliant and compliance-ready",
+        "the service is fully compliant",
         "this guarantees compliance with the eu ai act",
     )
     for sample in offending:
         assert any(re.search(pattern, sample) for pattern in prohibited), (
             f"prohibited-claim patterns fail to reject {sample!r}"
+        )
+    # …and every pattern must earn its place. Without this, deleting a pattern
+    # that has no sample of its own would leave the suite green.
+    for pattern in prohibited:
+        assert any(re.search(pattern, sample) for sample in offending), (
+            f"prohibited-claim pattern {pattern!r} has no negative-path sample"
         )
 
     # States the compliance boundary rather than dodging the question.

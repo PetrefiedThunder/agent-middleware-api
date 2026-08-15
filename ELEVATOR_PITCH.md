@@ -75,8 +75,9 @@ scoped signed permit -> governed MCP invoke -> wallet charge -> signed receipt
   upstream-returned errors are refunded and receipted. Genuinely ambiguous
   post-dispatch outcomes are marked `delivery_uncertain` and routed to
   fail-closed manual review — never silently redispatched.
-- **Portable gateway evidence.** Signed receipts for success, denial, *and*
-  failure, linked to permits, a verifiable per-wallet hash chain, and — where a
+- **Portable gateway evidence.** Signed receipts for success, denial, failure,
+  *and* `delivery_uncertain`, linked to permits, a verifiable per-wallet hash
+  chain, and — where a
   ledger record exists for that outcome — the ledger entry. A pre-dispatch
   denial has no debit to link. This is not a compliance-grade ledger or proof of
   physical work.
