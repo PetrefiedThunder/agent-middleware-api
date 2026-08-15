@@ -15,6 +15,7 @@ default build omits the tag entirely.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -223,13 +224,15 @@ def _copy_asset(relative_path: str, output: Path) -> None:
     source = SITE_ROOT / relative_path
     destination = output / relative_path
     if source.is_dir():
-        # Copy the assets, not a directory's internal notes: shipping
-        # fonts/README.md would put an undocumented .md route on the live site.
+        # Withhold the operator note only. A blanket "*.md" would also silently
+        # drop Markdown from .well-known or proof if either ever gained one, and
+        # it would strip fonts/OFL.txt's neighbours; the license itself is
+        # plain text precisely so it stays published.
         shutil.copytree(
             source,
             destination,
             dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("*.md"),
+            ignore=shutil.ignore_patterns("README.md"),
         )
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -238,6 +241,26 @@ def _copy_asset(relative_path: str, output: Path) -> None:
 
 FONT_MANIFEST = SITE_ROOT / "fonts.manifest.json"
 FONT_PRELOAD_TOKEN = "@@FONT_PRELOADS@@"
+FONT_STYLESHEET = SITE_ROOT / "fonts.css"
+FONTS_CSS_VERSION_TOKEN = "@@FONTS_CSS_VERSION@@"
+
+
+def fonts_css_version() -> str:
+    """Return a cache key derived from the generated stylesheet's content.
+
+    fonts.css names content-hashed woff2 files and vendor_fonts.py deletes the
+    ones it replaces. A hand-maintained token would let a visitor hold a cached
+    stylesheet that points at files the deploy has already removed, so the
+    stylesheet's own key has to move whenever its bytes do.
+    """
+
+    try:
+        payload = FONT_STYLESHEET.read_bytes()
+    except OSError as error:
+        raise LaunchConfigurationError(
+            f"fonts.css is missing; re-run vendor_fonts.py ({error})"
+        ) from error
+    return hashlib.sha256(payload).hexdigest()[:8]
 
 
 def _require_declared_fonts() -> None:
@@ -282,9 +305,32 @@ def font_preload_tags() -> str:
             f"fonts.manifest.json is missing or malformed; re-run "
             f"vendor_fonts.py ({error})"
         ) from error
-    preload = manifest.get("preload", [])
+    # json.loads happily returns a list or a string; manifest.get would then
+    # raise AttributeError and the build would die with a traceback rather than
+    # the launch error the caller documents.
+    if not isinstance(manifest, dict):
+        raise LaunchConfigurationError(
+            "fonts.manifest.json must be a JSON object; re-run vendor_fonts.py"
+        )
+    preload = manifest.get("preload") or []
+    if not isinstance(preload, list) or not all(
+        isinstance(name, str) for name in preload
+    ):
+        raise LaunchConfigurationError(
+            "fonts.manifest.json preload must be a list of filenames"
+        )
     if not preload:
         raise LaunchConfigurationError("fonts.manifest.json preloads nothing")
+    # Filenames are content-hashed, so a stale entry names a file that no longer
+    # exists and would ship a <link rel="preload"> that 404s.
+    absent = sorted(
+        name for name in preload if not (SITE_ROOT / "fonts" / name).is_file()
+    )
+    if absent:
+        raise LaunchConfigurationError(
+            "fonts.manifest.json preloads missing files (re-run "
+            "vendor_fonts.py): " + ", ".join(absent)
+        )
     return "\n".join(
         f'    <link rel="preload" href="/fonts/{name}" as="font"\n'
         f'      type="font/woff2" crossorigin />'
@@ -372,6 +418,7 @@ def render_site(output: Path, environment: dict[str, str]) -> None:
             )
         if relative_path.endswith(".html"):
             rendered = rendered.replace(FONT_PRELOAD_TOKEN, font_preload_tags())
+            rendered = rendered.replace(FONTS_CSS_VERSION_TOKEN, fonts_css_version())
         replacements = (
             markup_replacements
             if relative_path.endswith((".html", ".xml"))

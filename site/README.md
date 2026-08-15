@@ -105,10 +105,15 @@ Only `latin` and `latin-ext` are vendored, and each face keeps upstream's
 `unicode-range`, so a browser downloads only the subsets a page actually uses.
 Libre Franklin and Public Sans are variable fonts: one file per subset serves
 every weight, which is why their filenames carry no weight. Licensing and
-attribution are in `fonts/README.md` — all three families are OFL 1.1.
+attribution ship as `fonts/OFL.txt` — plain text so the notice deploys
+alongside the fonts it covers. All three families are OFL 1.1.
 
 Filenames carry a content hash, so `vercel.json` serves `/fonts/*.woff2`
-`immutable` for a year and a re-vendored font can never be served stale. That
+`immutable` for a year and a re-vendored font can never be served stale. The
+stylesheet's own cache key is generated the same way — `@@FONTS_CSS_VERSION@@`
+becomes a digest of `fonts.css` at build time. It must not become a manual
+token: a visitor holding a week-old `fonts.css` would request the hashed woff2
+files that re-vendoring has already deleted, and get 404s until it expired. That
 also means preloads cannot be hand-written: `vendor_fonts.py` emits
 `fonts.manifest.json`, and `build_site.py` expands `@@FONT_PRELOADS@@` in each
 page from it. Edit `PRELOAD` in `vendor_fonts.py` to change which faces are

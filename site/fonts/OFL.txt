@@ -1,0 +1,22 @@
+Vendored webfonts — license and attribution
+===========================================
+
+The .woff2 files in this directory are redistributed under the
+SIL Open Font License, Version 1.1 (OFL 1.1). Full text:
+
+    https://openfontlicense.org/open-font-license-official-text/
+
+  IBM Plex Mono    Copyright (c) 2017 IBM Corp.
+                   https://github.com/IBM/plex
+
+  Libre Franklin   Copyright (c) 2015 Impallari Type
+                   https://github.com/impallari/Libre-Franklin
+
+  Public Sans      Copyright (c) 2015-2019 Impallari Type
+                   Copyright (c) 2019 United States Web Design System
+                   https://github.com/uswds/public-sans
+
+The OFL requires that these fonts not be sold on their own and that any
+modified version be renamed. Neither applies here: they are unmodified latin
+and latin-ext subsets as served by the Google Fonts API, vendored so this site
+makes no third-party request for typography.

@@ -28,6 +28,7 @@ import re
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -51,6 +52,9 @@ FAMILIES = {
     "Libre Franklin": (700, 800),
 }
 WANTED_SUBSETS = ("latin", "latin-ext")
+#: Font URLs are read out of a fetched CSS response and whatever they name gets
+#: committed and deployed, so the host is pinned rather than trusted.
+ALLOWED_FONT_HOSTS = frozenset({"fonts.gstatic.com"})
 #: Faces rendered in the first viewport of every page. ``latin`` only:
 #: latin-ext exists for characters most pages never show.
 PRELOAD = (
@@ -184,6 +188,11 @@ def download(faces: list[dict]) -> dict[str, bytes]:
     payloads: dict[str, bytes] = {}
     for face in faces:
         if face["url"] not in payloads:
+            host = urllib.parse.urlsplit(face["url"]).hostname or ""
+            if host.casefold() not in ALLOWED_FONT_HOSTS:
+                raise VendorError(
+                    f"refusing to vendor from unexpected host {host!r}: {face['url']}"
+                )
             blob = _get(face["url"])
             if blob[:4] != b"wOF2":
                 raise VendorError(f"{face['url']} is not woff2")
@@ -247,6 +256,8 @@ def render_manifest(faces: list[dict]) -> str:
 
 
 def vendor() -> tuple[dict[str, bytes], str, str]:
+    """Fetch upstream and return the files, stylesheet and manifest to write."""
+
     faces = discover_faces()
     files = download(faces)
     # render_* read the "file" key that download() assigns, so order matters.
@@ -254,6 +265,8 @@ def vendor() -> tuple[dict[str, bytes], str, str]:
 
 
 def write(files: dict[str, bytes], stylesheet: str, manifest: str) -> None:
+    """Replace the committed font output with a freshly vendored set."""
+
     FONT_DIR.mkdir(parents=True, exist_ok=True)
     for name, blob in files.items():
         (FONT_DIR / name).write_bytes(blob)
@@ -267,6 +280,8 @@ def write(files: dict[str, bytes], stylesheet: str, manifest: str) -> None:
 
 
 def check(files: dict[str, bytes], stylesheet: str, manifest: str) -> list[str]:
+    """Return every way the committed output differs from upstream."""
+
     problems: list[str] = []
     on_disk = {path.name for path in FONT_DIR.glob("*.woff2")}
     for extra in sorted(on_disk - set(files)):
@@ -289,6 +304,8 @@ def check(files: dict[str, bytes], stylesheet: str, manifest: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the CLI: 0 clean, 1 committed output drifted, 2 upstream unusable."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",

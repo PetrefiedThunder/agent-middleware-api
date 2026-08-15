@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 import json
 import runpy
 from pathlib import Path
@@ -167,16 +168,12 @@ def test_a_missing_subset_is_refused_rather_than_silently_dropped(vendor) -> Non
     def latin_only(url: str) -> bytes:
         if "css2" not in url:
             return vendor._fake_get(url)
+        # Remove the latin-ext faces outright, marker and block, so the guard
+        # fires because the face is absent rather than because a comment is.
         body = vendor._fake_get(url).decode()
-        head, _, _ = body.partition("/* latin-ext */")
-        return (
-            "".join(
-                block
-                for block in body.split("/* latin-ext */")
-                if "unicode-range: U+0000-00FF" in block
-            ).encode()
-            or head.encode()
-        )
+        return re.sub(
+            r"/\*\s*latin-ext\s*\*/\s*@font-face\s*\{.*?\}", "", body, flags=re.S
+        ).encode()
 
     vendor._get = latin_only
     with pytest.raises(vendor.VendorError, match="no face for"):
@@ -257,3 +254,72 @@ def test_slug_is_derived_not_hand_maintained(vendor) -> None:
     module = runpy.run_path(str(SITE / "vendor_fonts.py"))
     assert "SLUGS" not in module, "a parallel slug table will drift from FAMILIES"
     assert module["_slug"]("Some New Family") == "some-new-family"
+
+
+def test_main_maps_upstream_failure_to_exit_2(vendor, monkeypatch) -> None:
+    """--check has to distinguish "output is stale" from "the tool broke"."""
+
+    def explode():
+        raise vendor.VendorError("upstream unreachable")
+
+    monkeypatch.setattr(vendor, "vendor", explode)
+    assert vendor.main([]) == 2
+    assert vendor.main(["--check"]) == 2
+
+
+def test_main_maps_drift_to_exit_1_and_clean_to_0(vendor, monkeypatch) -> None:
+    files, stylesheet, manifest = _vendor_all(vendor)
+    monkeypatch.setattr(vendor, "vendor", lambda: (files, stylesheet, manifest))
+
+    # Nothing written yet: everything is missing, which is drift.
+    vendor.FONT_DIR.mkdir(parents=True, exist_ok=True)
+    assert vendor.main(["--check"]) == 1
+
+    assert vendor.main([]) == 0
+    assert vendor.main(["--check"]) == 0
+
+
+def test_ssl_context_ignores_a_ca_bundle_path_that_does_not_exist(
+    vendor, monkeypatch, tmp_path
+) -> None:
+    """A stale REQUESTS_CA_BUNDLE must not make every fetch fail."""
+
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(tmp_path / "nope.pem"))
+    context = vendor._ssl_context()
+    assert context.get_ca_certs(), "system roots were dropped"
+
+
+def test_ssl_context_layers_a_real_ca_bundle_on_top_of_the_system_store(
+    vendor, monkeypatch, tmp_path
+) -> None:
+    import ssl
+
+    default_paths = ssl.get_default_verify_paths()
+    real_bundle = default_paths.cafile or default_paths.openssl_cafile
+    if not real_bundle or not Path(real_bundle).is_file():
+        pytest.skip("no system CA bundle to layer in this environment")
+
+    baseline = len(ssl.create_default_context().get_ca_certs())
+    monkeypatch.setenv("CURL_CA_BUNDLE", real_bundle)
+    # The point is that the system roots survive the layering, not that the
+    # count grows: re-adding the same bundle is a no-op.
+    assert len(vendor._ssl_context().get_ca_certs()) >= baseline
+
+
+def test_vendoring_refuses_a_font_url_from_an_unexpected_host(vendor) -> None:
+    """The URL comes from a fetched CSS response and its bytes get committed."""
+
+    def elsewhere(url: str) -> bytes:
+        if "css2" not in url:
+            return vendor._fake_get(url)
+        return (
+            vendor._fake_get(url)
+            .decode()
+            .replace("fonts.gstatic.com", "cdn.example.invalid")
+            .encode()
+        )
+
+    vendor._get = elsewhere
+    faces = vendor.discover_faces()
+    with pytest.raises(vendor.VendorError, match="unexpected host"):
+        vendor.download(faces)
