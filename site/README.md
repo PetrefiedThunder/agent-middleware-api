@@ -107,10 +107,24 @@ Libre Franklin and Public Sans are variable fonts: one file per subset serves
 every weight, which is why their filenames carry no weight. Licensing and
 attribution are in `fonts/README.md` — all three families are OFL 1.1.
 
-The three faces visible in the first viewport are `rel="preload"`ed. A preload
-for a font must carry `crossorigin` even same-origin, or the browser discards it
-and fetches the file twice; `test_preloaded_fonts_exist_and_are_actually_used`
-guards that, and that every preloaded file is one the stylesheet references.
+Filenames carry a content hash, so `vercel.json` serves `/fonts/*.woff2`
+`immutable` for a year and a re-vendored font can never be served stale. That
+also means preloads cannot be hand-written: `vendor_fonts.py` emits
+`fonts.manifest.json`, and `build_site.py` expands `@@FONT_PRELOADS@@` in each
+page from it. Edit `PRELOAD` in `vendor_fonts.py` to change which faces are
+preloaded.
+
+Preloads cover every face in the first viewport. Public Sans and Libre Franklin
+are variable, so one file each is enough; IBM Plex Mono is static, so weights
+400 (nav links), 500 (section kickers) and 600 (nav brand) are three separate
+files and all three are preloaded. A preload must carry `crossorigin` even
+same-origin, or the browser discards it and fetches the file twice. The `404`
+page preloads nothing on purpose — it is `noindex` and mostly serves scanners.
+
+Adding a family or weight to `styles.css` without adding it to `FAMILIES` fails
+`test_font_stylesheet_and_files_agree` rather than letting the browser
+synthesise the weight. An interrupted vendoring run that empties `fonts/` fails
+the launch gate rather than deploying a stylesheet whose every `src` 404s.
 
 ## Analytics
 

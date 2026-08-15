@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import os
 import re
 import shutil
@@ -222,10 +223,73 @@ def _copy_asset(relative_path: str, output: Path) -> None:
     source = SITE_ROOT / relative_path
     destination = output / relative_path
     if source.is_dir():
-        shutil.copytree(source, destination, dirs_exist_ok=True)
+        # Copy the assets, not a directory's internal notes: shipping
+        # fonts/README.md would put an undocumented .md route on the live site.
+        shutil.copytree(
+            source,
+            destination,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.md"),
+        )
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+FONT_MANIFEST = SITE_ROOT / "fonts.manifest.json"
+FONT_PRELOAD_TOKEN = "@@FONT_PRELOADS@@"
+
+
+def _require_declared_fonts() -> None:
+    """Refuse to deploy a stylesheet whose @font-face files are not present.
+
+    ``fonts`` appearing in REQUIRED_PUBLIC_ASSETS only proves the directory
+    exists; an interrupted ``vendor_fonts.py`` run can leave it empty, and every
+    src would then 404 on the live site with the build still reporting success.
+    """
+
+    declared = set(
+        re.findall(
+            r'url\("/fonts/([^"]+)"\)',
+            (SITE_ROOT / "fonts.css").read_text(encoding="utf-8"),
+        )
+    )
+    if not declared:
+        raise LaunchConfigurationError("fonts.css declares no @font-face src")
+    absent = sorted(
+        name for name in declared if not (SITE_ROOT / "fonts" / name).is_file()
+    )
+    if absent:
+        raise LaunchConfigurationError(
+            "fonts.css references missing files (re-run vendor_fonts.py): "
+            + ", ".join(absent)
+        )
+
+
+def font_preload_tags() -> str:
+    """Render the <link rel="preload"> block from the generated manifest.
+
+    Filenames carry a content hash, so hand-written preloads in the HTML would
+    silently rot the moment a font is re-vendored. ``crossorigin`` is required
+    even same-origin: without it the browser discards the preload and fetches
+    the file a second time.
+    """
+
+    try:
+        manifest = json.loads(FONT_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise LaunchConfigurationError(
+            f"fonts.manifest.json is missing or malformed; re-run "
+            f"vendor_fonts.py ({error})"
+        ) from error
+    preload = manifest.get("preload", [])
+    if not preload:
+        raise LaunchConfigurationError("fonts.manifest.json preloads nothing")
+    return "\n".join(
+        f'    <link rel="preload" href="/fonts/{name}" as="font"\n'
+        f'      type="font/woff2" crossorigin />'
+        for name in preload
+    ).lstrip()
 
 
 def _validated_output_path(output: Path) -> Path:
@@ -282,6 +346,7 @@ def render_site(output: Path, environment: dict[str, str]) -> None:
         raise LaunchConfigurationError(
             "missing required public assets: " + ", ".join(sorted(missing_assets))
         )
+    _require_declared_fonts()
     output = _validated_output_path(output)
 
     shutil.rmtree(output, ignore_errors=True)
@@ -305,6 +370,8 @@ def render_site(output: Path, environment: dict[str, str]) -> None:
                 rendered,
                 flags=re.MULTILINE,
             )
+        if relative_path.endswith(".html"):
+            rendered = rendered.replace(FONT_PRELOAD_TOKEN, font_preload_tags())
         replacements = (
             markup_replacements
             if relative_path.endswith((".html", ".xml"))

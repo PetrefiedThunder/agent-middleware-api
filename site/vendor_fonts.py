@@ -4,17 +4,17 @@
 Run this only to add a family/weight or to refresh the files; the output is
 committed, so a normal build never touches the network.
 
-    python3 vendor_fonts.py            # rewrite fonts/ and fonts.css
+    python3 vendor_fonts.py            # rewrite fonts/, fonts.css, the manifest
     python3 vendor_fonts.py --check    # fail if the committed output is stale
 
-Self-hosting removes two cross-origin handshakes from the critical path
-(``fonts.googleapis.com`` for the CSS, ``fonts.gstatic.com`` for the files) and
-lets ``vercel.json`` drop both hosts from the Content-Security-Policy.
+Exit codes: 0 clean, 1 the committed output drifted, 2 the tool could not reach
+or parse upstream. ``--check`` has to be able to tell drift from a broken tool.
 
-Only the ``latin`` and ``latin-ext`` subsets are kept: the site is English, and
-``latin-ext`` covers accented characters in an operator's name. Each face keeps
-Google's ``unicode-range``, so a browser still downloads only the subsets the
-page actually uses.
+Rationale for self-hosting, the subset policy, and the variable-font naming rule
+live in one place: the Typography section of ``site/README.md``.
+
+Filenames carry a content hash, so ``vercel.json`` can serve them ``immutable``
+and a refreshed font can never be served stale from a browser cache.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import collections
 import hashlib
+import json
 import os
 import re
 import ssl
@@ -33,6 +34,8 @@ from pathlib import Path
 SITE_ROOT = Path(__file__).resolve().parent
 FONT_DIR = SITE_ROOT / "fonts"
 STYLESHEET = SITE_ROOT / "fonts.css"
+#: Not published: build_site.py reads it to emit the <link rel="preload"> tags.
+MANIFEST = SITE_ROOT / "fonts.manifest.json"
 
 # A modern desktop UA: the css2 API serves woff2 only to browsers it recognises,
 # and returns bulkier ttf to anything it does not.
@@ -40,32 +43,35 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
-# Must stay in step with the font stacks in styles.css.
+# Must stay in step with the font stacks in styles.css. Declaration order is the
+# order faces appear in the generated stylesheet.
 FAMILIES = {
     "IBM Plex Mono": (400, 500, 600),
-    "Libre Franklin": (700, 800),
     "Public Sans": (400, 500, 600),
+    "Libre Franklin": (700, 800),
 }
 WANTED_SUBSETS = ("latin", "latin-ext")
-SLUGS = {
-    "IBM Plex Mono": "ibm-plex-mono",
-    "Libre Franklin": "libre-franklin",
-    "Public Sans": "public-sans",
-}
-# Rendering order in the generated stylesheet.
-FAMILY_ORDER = ("IBM Plex Mono", "Public Sans", "Libre Franklin")
+#: Faces rendered in the first viewport of every page. ``latin`` only:
+#: latin-ext exists for characters most pages never show.
+PRELOAD = (
+    ("Libre Franklin", 800, "latin"),
+    ("Public Sans", 400, "latin"),
+    ("IBM Plex Mono", 400, "latin"),
+    ("IBM Plex Mono", 500, "latin"),
+    ("IBM Plex Mono", 600, "latin"),
+)
+HASH_LENGTH = 8
 
 STYLESHEET_HEADER = """/* ==========================================================================
    Self-hosted webfonts — same origin, no third-party request.
 
-   GENERATED FILE. Do not edit by hand: run `python3 vendor_fonts.py` in
-   site/ instead, and commit the result. The test suite asserts that every
-   src below resolves to a committed file and that no file is orphaned;
-   `vendor_fonts.py --check` additionally re-fetches upstream.
+   GENERATED FILE. Do not edit by hand: run `python3 vendor_fonts.py` in site/
+   and commit the result. The test suite asserts that every src below resolves
+   to a committed file and that no file is orphaned; `vendor_fonts.py --check`
+   additionally re-fetches upstream.
 
-   Libre Franklin and Public Sans are variable fonts: Google returns one file
-   per subset and varies the wght axis from font-weight, so several faces below
-   deliberately share a src.
+   Why this is vendored, and why some faces share a src: see the Typography
+   section of site/README.md.
    ========================================================================== */
 """
 
@@ -75,17 +81,21 @@ class VendorError(RuntimeError):
 
 
 def _ssl_context() -> ssl.SSLContext:
-    """Trust the standard CA-bundle overrides as well as the system store.
+    """Trust the system store, plus any CA bundle the environment names.
 
-    Corporate and sandboxed networks terminate TLS at a proxy and publish their
-    root via one of these variables; without it every fetch here fails.
+    OpenSSL already honours ``SSL_CERT_FILE`` when the default context loads.
+    ``REQUESTS_CA_BUNDLE``/``CURL_CA_BUNDLE`` are conventions it does not read,
+    so they are layered on with ``load_verify_locations``. Passing ``cafile=``
+    to ``create_default_context`` instead would *replace* the system roots with
+    a single corporate cert and break every fetch to a normal public host.
     """
 
-    for variable in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+    context = ssl.create_default_context()
+    for variable in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
         bundle = os.environ.get(variable, "").strip()
         if bundle and Path(bundle).is_file():
-            return ssl.create_default_context(cafile=bundle)
-    return ssl.create_default_context()
+            context.load_verify_locations(cafile=bundle)
+    return context
 
 
 def _get(url: str) -> bytes:
@@ -95,8 +105,24 @@ def _get(url: str) -> bytes:
             request, timeout=60, context=_ssl_context()
         ) as response:
             return response.read()
-    except (urllib.error.URLError, TimeoutError, ssl.SSLError) as error:
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError, OSError) as error:
         raise VendorError(f"could not fetch {url}: {error}") from error
+
+
+def _extract(pattern: str, block: str, what: str) -> str:
+    """Pull one field out of an @font-face block, or name the shape that changed."""
+
+    match = re.search(pattern, block)
+    if match is None:
+        raise VendorError(
+            f"upstream @font-face has no {what}; the css2 response shape "
+            f"changed (is USER_AGENT still recognised?): {block[:120]!r}"
+        )
+    return match.group(1)
+
+
+def _slug(family: str) -> str:
+    return family.lower().replace(" ", "-")
 
 
 def discover_faces() -> list[dict]:
@@ -117,32 +143,52 @@ def discover_faces() -> list[dict]:
             faces.append(
                 {
                     "family": family,
-                    "weight": int(re.search(r"font-weight:\s*(\d+)", block).group(1)),
+                    "weight": int(
+                        _extract(r"font-weight:\s*(\d+)", block, "font-weight")
+                    ),
                     "subset": subset,
-                    "url": re.search(r"url\((https://[^)]+\.woff2)\)", block).group(1),
-                    "range": re.search(r"unicode-range:\s*([^;]+);", block)
-                    .group(1)
-                    .strip(),
+                    "url": _extract(
+                        r"url\((https://[^)]+\.woff2)\)", block, "woff2 src"
+                    ),
+                    "range": _extract(
+                        r"unicode-range:\s*([^;]+);", block, "unicode-range"
+                    ).strip(),
                 }
             )
-    missing = {
-        (family, weight) for family, weights in FAMILIES.items() for weight in weights
-    } - {(face["family"], face["weight"]) for face in faces}
+
+    # Subset has to be part of the completeness check: a silently dropped
+    # latin-ext would otherwise pass here and then be deleted from the repo by
+    # write(), taking the site's accented-character coverage with it.
+    expected = {
+        (family, weight, subset)
+        for family, weights in FAMILIES.items()
+        for weight in weights
+        for subset in WANTED_SUBSETS
+    }
+    missing = expected - {
+        (face["family"], face["weight"], face["subset"]) for face in faces
+    }
     if missing:
         raise VendorError(f"upstream returned no face for: {sorted(missing)}")
     return faces
 
 
 def download(faces: list[dict]) -> dict[str, bytes]:
-    """Fetch every face and collapse byte-identical variable-font duplicates."""
+    """Fetch each distinct URL once and name files by content hash.
+
+    A variable family serves one file per subset for all its weights, so several
+    faces legitimately share a URL; fetching per face would pull the same bytes
+    repeatedly over separate TLS handshakes.
+    """
 
     payloads: dict[str, bytes] = {}
     for face in faces:
-        blob = _get(face["url"])
-        if blob[:4] != b"wOF2":
-            raise VendorError(f"{face['url']} is not woff2")
-        face["sha"] = hashlib.sha256(blob).hexdigest()
-        payloads[face["sha"]] = blob
+        if face["url"] not in payloads:
+            blob = _get(face["url"])
+            if blob[:4] != b"wOF2":
+                raise VendorError(f"{face['url']} is not woff2")
+            payloads[face["url"]] = blob
+        face["sha"] = hashlib.sha256(payloads[face["url"]]).hexdigest()
 
     grouped: dict[str, list[dict]] = collections.defaultdict(list)
     for face in faces:
@@ -150,26 +196,24 @@ def download(faces: list[dict]) -> dict[str, bytes]:
 
     files: dict[str, bytes] = {}
     for sha, group in grouped.items():
-        slug = SLUGS[group[0]["family"]]
-        subset = group[0]["subset"]
         # One file shared by several weights means a variable font; naming it
         # after a single weight would be a lie.
-        name = (
-            f"{slug}-{subset}.woff2"
-            if len({face["weight"] for face in group}) > 1
-            else f"{slug}-{group[0]['weight']}-{subset}.woff2"
-        )
+        stem = _slug(group[0]["family"])
+        if len({face["weight"] for face in group}) == 1:
+            stem = f"{stem}-{group[0]['weight']}"
+        name = f"{stem}-{group[0]['subset']}.{sha[:HASH_LENGTH]}.woff2"
         for face in group:
             face["file"] = name
-        files[name] = payloads[sha]
+        files[name] = payloads[group[0]["url"]]
     return files
 
 
 def render_stylesheet(faces: list[dict]) -> str:
+    families = list(FAMILIES)
     ordered = sorted(
         faces,
         key=lambda face: (
-            FAMILY_ORDER.index(face["family"]),
+            families.index(face["family"]),
             face["weight"],
             face["subset"],
         ),
@@ -189,23 +233,40 @@ def render_stylesheet(faces: list[dict]) -> str:
     return STYLESHEET_HEADER + "\n" + "\n".join(blocks)
 
 
-def vendor() -> tuple[dict[str, bytes], str]:
+def render_manifest(faces: list[dict]) -> str:
+    """Emit the preload list that build_site.py turns into <link> tags."""
+
+    by_key = {(f["family"], f["weight"], f["subset"]): f["file"] for f in faces}
+    preload: list[str] = []
+    for key in PRELOAD:
+        if key not in by_key:
+            raise VendorError(f"PRELOAD names a face that does not exist: {key}")
+        if by_key[key] not in preload:  # variable families share one file
+            preload.append(by_key[key])
+    return json.dumps({"preload": preload}, indent=2) + "\n"
+
+
+def vendor() -> tuple[dict[str, bytes], str, str]:
     faces = discover_faces()
     files = download(faces)
-    return files, render_stylesheet(faces)
+    # render_* read the "file" key that download() assigns, so order matters.
+    return files, render_stylesheet(faces), render_manifest(faces)
 
 
-def write(files: dict[str, bytes], stylesheet: str) -> None:
+def write(files: dict[str, bytes], stylesheet: str, manifest: str) -> None:
     FONT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, blob in files.items():
+        (FONT_DIR / name).write_bytes(blob)
+    # Delete only once every new file is on disk, so an interrupted run cannot
+    # leave the tree with a stylesheet pointing at files that no longer exist.
     for stale in FONT_DIR.glob("*.woff2"):
         if stale.name not in files:
             stale.unlink()
-    for name, blob in files.items():
-        (FONT_DIR / name).write_bytes(blob)
     STYLESHEET.write_text(stylesheet, encoding="utf-8")
+    MANIFEST.write_text(manifest, encoding="utf-8")
 
 
-def check(files: dict[str, bytes], stylesheet: str) -> list[str]:
+def check(files: dict[str, bytes], stylesheet: str, manifest: str) -> list[str]:
     problems: list[str] = []
     on_disk = {path.name for path in FONT_DIR.glob("*.woff2")}
     for extra in sorted(on_disk - set(files)):
@@ -216,10 +277,14 @@ def check(files: dict[str, bytes], stylesheet: str) -> list[str]:
             problems.append(f"fonts/{name} is missing")
         elif path.read_bytes() != blob:
             problems.append(f"fonts/{name} differs from upstream")
-    if not STYLESHEET.is_file():
-        problems.append("fonts.css is missing")
-    elif STYLESHEET.read_text(encoding="utf-8") != stylesheet:
-        problems.append("fonts.css is stale; re-run vendor_fonts.py")
+    for path, expected, label in (
+        (STYLESHEET, stylesheet, "fonts.css"),
+        (MANIFEST, manifest, "fonts.manifest.json"),
+    ):
+        if not path.is_file():
+            problems.append(f"{label} is missing")
+        elif path.read_text(encoding="utf-8") != expected:
+            problems.append(f"{label} is stale; re-run vendor_fonts.py")
     return problems
 
 
@@ -232,18 +297,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        files, stylesheet = vendor()
+        files, stylesheet, manifest = vendor()
     except VendorError as error:
         print(f"font vendoring failed: {error}", file=sys.stderr)
         return 2
 
     if args.check:
-        problems = check(files, stylesheet)
+        problems = check(files, stylesheet, manifest)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0
 
-    write(files, stylesheet)
+    write(files, stylesheet, manifest)
     total = sum(len(blob) for blob in files.values())
     print(f"vendored {len(files)} files ({total:,} bytes) into {FONT_DIR}")
     return 0

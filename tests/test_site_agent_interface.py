@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -867,7 +868,13 @@ def test_preloaded_fonts_exist_and_are_actually_used(tmp_path) -> None:
     assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
 
     stylesheet = (output / "fonts.css").read_text(encoding="utf-8")
-    for relative_path in ("index.html", "proof/index.html", "404.html"):
+
+    # The 404 page deliberately preloads nothing: it is noindex and is served
+    # overwhelmingly to scanners and stale links, so ~70KB of high-priority
+    # font fetches per bad URL buys nothing.
+    assert 'rel="preload"' not in (output / "404.html").read_text(encoding="utf-8")
+
+    for relative_path in ("index.html", "proof/index.html"):
         markup = (output / relative_path).read_text(encoding="utf-8")
         preloads = re.findall(r'<link rel="preload" href="(/fonts/[^"]+)"', markup)
         assert preloads, f"{relative_path} preloads no fonts"
@@ -881,6 +888,41 @@ def test_preloaded_fonts_exist_and_are_actually_used(tmp_path) -> None:
                 markup,
                 re.S,
             ), f"{href} preload is missing crossorigin"
+
+        # The mono family is static: each first-viewport weight is its own file,
+        # so preloading only one still leaves the nav links and section kickers
+        # swapping in late.
+        manifest = json.loads(
+            (SITE / "fonts.manifest.json").read_text(encoding="utf-8")
+        )
+        for weight in (400, 500, 600):
+            assert any(
+                name.startswith(f"ibm-plex-mono-{weight}-latin.")
+                for name in manifest["preload"]
+            ), f"IBM Plex Mono {weight} renders in the fold but is not preloaded"
+
+
+def test_font_filenames_are_content_hashed_so_immutable_is_safe() -> None:
+    """Unhashed names plus a long max-age would serve a refreshed font stale.
+
+    The manual `?v=` token the rest of the site uses cannot reach these URLs:
+    they live inside fonts.css and the generated preloads, not in hand-written
+    markup.
+    """
+    config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
+    rule = next(
+        entry for entry in config["headers"] if entry["source"].startswith("/fonts/")
+    )
+    cache = next(h["value"] for h in rule["headers"] if h["key"] == "Cache-Control")
+    assert "immutable" in cache
+
+    for path in (SITE / "fonts").glob("*.woff2"):
+        stem, _, extension = path.name.rpartition(".")
+        digest = stem.rsplit(".", 1)[1]
+        assert re.fullmatch(r"[0-9a-f]{8}", digest), f"{path.name} is not hashed"
+        assert hashlib.sha256(path.read_bytes()).hexdigest().startswith(digest), (
+            f"{path.name} does not match its own content hash"
+        )
 
 
 def teardown_module() -> None:
