@@ -22,6 +22,7 @@ These tests pin the recomposition that makes that true on the standard
 
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -37,6 +38,7 @@ from app.routers.mcp import ToolPermissionDenied
 from app.schemas.billing import ServiceCategory
 from app.schemas.policies import PolicyBundleCreate
 from app.services.human_approval import HumanApprovalService
+from app.services.mcp_generator import McpGenerator
 from app.services.policies import (
     create_policy_bundle,
     evaluate_wallet_policy,
@@ -732,6 +734,95 @@ def test_valid_zero_price_is_still_not_an_economic_action():
     assert (
         _priced_tool(credits_per_unit=0.0)["annotations"]["economicAction"] is False
     )
+
+
+def _strict_json(payload) -> str:
+    """Serialize rejecting NaN/Infinity — i.e. as a strict RFC 8259 client would.
+
+    ``json.dumps`` emits bare ``NaN``/``Infinity`` literals by default, which
+    Go's ``encoding/json`` and Rust's ``serde`` refuse; ``allow_nan=False``
+    surfaces that here instead of shipping an unparseable manifest.
+    """
+    import json
+
+    return json.dumps(payload, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "price_fields",
+    [
+        {"credits_per_unit": float("nan")},
+        {"credits_per_unit": float("inf")},
+        {"credits_per_unit": float("-inf")},
+        {"credits_per_unit": 2.0, "credits_per_unit_exact": "nan"},
+        {"credits_per_unit": 2.0, "credits_per_unit_exact": 10**400},
+        {"credits_per_unit": 0.0, "credits_per_unit_exact": "nan"},
+    ],
+)
+def test_public_manifest_stays_strict_json_for_malformed_prices(price_fields):
+    """One bad price must not make the WHOLE manifest unparseable.
+
+    NaN/Infinity are not valid JSON, so a strict client rejects the entire
+    document — every other tool's discovery breaks with it. Exercised through
+    the public generator, not the private converter.
+    """
+    registry = get_service_registry()
+    registry.register_local(
+        service_id="authority-malformed-price",
+        name="Malformed Price Tool",
+        description="Registry row carrying an unusable price",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda: {"ok": True},
+        unit_name="call",
+        **{k: v for k, v in price_fields.items() if k == "credits_per_unit"},
+    )
+    try:
+        record = registry.get_local("authority-malformed-price")
+        if "credits_per_unit_exact" in price_fields:
+            record["credits_per_unit_exact"] = price_fields["credits_per_unit_exact"]
+
+        manifest = McpGenerator().generate_tools_json()
+        # The whole manifest must serialize for a strict RFC 8259 client.
+        _strict_json(manifest)
+
+        ann = {t["name"]: t for t in manifest["tools"]}[
+            "authority-malformed-price"
+        ]["annotations"]
+        # The advertised price is finite, and an unusable exact price is
+        # omitted rather than published as garbage.
+        assert isinstance(ann["creditsPerCall"], float)
+        assert math.isfinite(ann["creditsPerCall"])
+        assert "creditsPerCallExact" not in ann
+        # Conservative: an unreadable price never reads as free.
+        assert ann["economicAction"] is True
+    finally:
+        registry.unregister_local("authority-malformed-price")
+
+
+def test_public_manifest_preserves_a_valid_exact_price():
+    """Normalization must not disturb a well-formed exact decimal."""
+    registry = get_service_registry()
+    registry.register_local(
+        service_id="authority-exact-price",
+        name="Exact Price Tool",
+        description="Registry row with a valid exact decimal price",
+        category=ServiceCategory.AGENT_COMMS,
+        func=lambda: {"ok": True},
+        credits_per_unit=2.5,
+        unit_name="call",
+    )
+    try:
+        registry.get_local("authority-exact-price")["credits_per_unit_exact"] = "2.50"
+        manifest = McpGenerator().generate_tools_json()
+        _strict_json(manifest)
+        ann = {t["name"]: t for t in manifest["tools"]}["authority-exact-price"][
+            "annotations"
+        ]
+        assert ann["creditsPerCall"] == 2.5
+        assert ann["creditsPerCallExact"] == "2.50"
+        assert ann["economicAction"] is True
+    finally:
+        registry.unregister_local("authority-exact-price")
 
 
 def test_approval_window_is_clamped_to_sentinel_bounds(monkeypatch):
