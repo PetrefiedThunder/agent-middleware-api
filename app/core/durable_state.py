@@ -526,15 +526,28 @@ class DurableStateStore:
             self._pg_pool = None
 
         if self._sqlite_conn is not None:
-            # Untrack first: the backstop is keyed on the connection object, and
-            # clearing the attribute below would leave nothing to look it up by.
-            # Doing it before the close also means a close that raises cannot
-            # strand a tracked connection.
-            self._unregister_sqlite_shutdown_backstop()
+            conn = self._sqlite_conn
             try:
-                await self._sqlite_conn.close()
+                await conn.close()
             except Exception:
                 logger.debug("Failed to close SQLite connection cleanly", exc_info=True)
+                # ``Connection.close`` stops the worker from a finally-block, so
+                # today it is released even on this path. Do not depend on that:
+                # it is an aiosqlite internal, and a leaked non-daemon worker
+                # blocks interpreter exit with no traceback. ``stop`` is
+                # idempotent enough to call after a close that already ran it.
+                try:
+                    conn.stop()
+                except Exception:
+                    logger.warning(
+                        "SQLite worker thread could not be stopped after a "
+                        "failed close; interpreter exit may block on it.",
+                        exc_info=True,
+                    )
+            # Untrack last, and unconditionally: the worker is released by now on
+            # either path, and leaving a dead entry in the registry would make
+            # the shutdown hook warn about a leak that did not happen.
+            self._unregister_sqlite_shutdown_backstop()
             self._sqlite_conn = None
 
         self._initialized = False

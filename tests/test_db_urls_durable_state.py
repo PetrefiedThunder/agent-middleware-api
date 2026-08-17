@@ -465,50 +465,81 @@ def test_shutdown_backstop_is_inert_in_a_forked_child(tmp_path, monkeypatch):
     reset_durable_state_for_tests()
 
 
+# Probes the three aiosqlite properties the backstop relies on. Runs in a
+# child process on purpose: if the contract regresses, the probe leaves a live
+# non-daemon worker behind, and in-process that would wedge pytest itself at
+# exit -- the very failure this suite exists to catch. Isolating it means a
+# broken contract is a reported failure, not a hung run.
+_CONTRACT_SCRIPT = """
+import asyncio, inspect, sys, threading
+import aiosqlite
+
+if inspect.iscoroutinefunction(aiosqlite.Connection.stop):
+    print("FAIL stop-is-async", flush=True)
+    raise SystemExit(1)
+
+async def _open():
+    return await aiosqlite.connect(":memory:")
+
+loop = asyncio.new_event_loop()
+try:
+    conn = loop.run_until_complete(_open())
+finally:
+    loop.close()
+asyncio.set_event_loop(None)
+
+if not conn._thread.is_alive():
+    print("FAIL worker-not-started", flush=True)
+    raise SystemExit(1)
+if conn._thread.daemon:
+    print("FAIL worker-is-daemon", flush=True)
+    raise SystemExit(1)
+
+# No running or current event loop here -- exactly the shutdown condition.
+conn.stop()
+conn._thread.join(timeout=10)
+if conn._thread.is_alive() or conn._thread in threading.enumerate():
+    print("FAIL stop-did-not-release-worker", flush=True)
+    raise SystemExit(1)
+
+print("CONTRACT_OK", flush=True)
+"""
+
+
 def test_aiosqlite_stop_contract_still_holds():
     """Pin the aiosqlite behaviour the backstop depends on, by behaviour.
 
     The shutdown hook calls ``Connection.stop`` from a context with no running
-    event loop. That works because ``stop`` is synchronous and falls back to a
-    ``None`` future when no loop is available. Both properties are internal to
-    aiosqlite and could change in a future release.
+    event loop. That works because ``stop`` is synchronous, the worker thread is
+    non-daemon, and ``stop`` releases it without a loop. All three are internal
+    to aiosqlite and could change in a future release.
 
-    Asserting them here rather than pinning a version keeps dependency upgrades
-    unblocked while making a silent behavioural regression impossible: if this
-    contract breaks, this test fails with a clear reason instead of CI hanging
-    for six hours.
+    Asserting them rather than pinning a version keeps dependency upgrades
+    unblocked while making a silent behavioural regression impossible: a broken
+    contract becomes a named failure instead of a six-hour CI hang.
     """
-    import asyncio as _asyncio
-    import inspect
-    import threading
+    import subprocess
+    import sys as _sys
 
-    import aiosqlite
-
-    assert not inspect.iscoroutinefunction(aiosqlite.Connection.stop), (
-        "aiosqlite.Connection.stop is no longer synchronous; the shutdown hook "
-        "cannot await it and the backstop needs rework"
-    )
-
-    async def _open():
-        return await aiosqlite.connect(":memory:")
-
-    loop = _asyncio.new_event_loop()
     try:
-        conn = loop.run_until_complete(_open())
-    finally:
-        loop.close()
-    _asyncio.set_event_loop(None)
+        proc = subprocess.run(
+            [_sys.executable, "-c", _CONTRACT_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # The child is killed by subprocess.run before this propagates, so a
+        # regressed contract cannot leak a worker thread into this process.
+        raise AssertionError(
+            "the aiosqlite contract probe hung; Connection.stop no longer "
+            f"releases the worker: {_as_text(exc.stdout)!r}"
+        ) from exc
 
-    assert conn._thread.is_alive()
-    assert not conn._thread.daemon, (
-        "aiosqlite's worker thread became a daemon; the hang this backstop "
-        "prevents may no longer exist and the mechanism can be reconsidered"
+    assert proc.returncode == 0, (
+        "the aiosqlite behaviour this backstop depends on has changed "
+        f"({proc.stdout.strip() or 'no marker'}); stderr={proc.stderr!r}"
     )
-
-    # No running or current event loop at this point -- the shutdown condition.
-    conn.stop()
-    conn._thread.join(timeout=10)
-    assert not conn._thread.is_alive(), (
-        "Connection.stop no longer releases the worker without an event loop"
+    assert "CONTRACT_OK" in proc.stdout, (
+        f"contract probe did not confirm the contract: {proc.stdout!r}"
     )
-    assert conn._thread not in threading.enumerate()
