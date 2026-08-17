@@ -525,7 +525,25 @@ class DurableStateStore:
                 logger.debug("Failed to close Postgres pool cleanly", exc_info=True)
             self._pg_pool = None
 
-        if self._sqlite_conn is not None:
+        if self._sqlite_conn is not None and self._sqlite_owner_pid not in (
+            None,
+            os.getpid(),
+        ):
+            # Inherited across fork(). The connection object came with us but its
+            # worker thread did not -- fork duplicates only the calling thread --
+            # so ``await conn.close()`` would block forever on a future nothing
+            # can resolve. The parent still owns the real connection, so the
+            # child must not touch it: drop the local references and stop.
+            # The registry entry is left alone; the shutdown hook already skips
+            # connections owned by another process.
+            logger.debug(
+                "Discarding a SQLite connection inherited from pid %s; "
+                "the owning process is responsible for closing it.",
+                self._sqlite_owner_pid,
+            )
+            self._sqlite_conn = None
+            self._sqlite_owner_pid = None
+        elif self._sqlite_conn is not None:
             conn = self._sqlite_conn
             released = True
             try:

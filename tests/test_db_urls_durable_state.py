@@ -595,3 +595,71 @@ def test_connection_stays_tracked_when_both_cleanup_paths_fail(tmp_path):
         reset_durable_state_for_tests()
 
     assert not conn._thread.is_alive()
+
+
+# Forks after the SQLite backend is live, then closes the store in the child.
+# fork() duplicates only the calling thread, so the child inherits the
+# Connection object but not its worker. Awaiting close() there blocks forever
+# on a future nothing can resolve. Runs in a subprocess so a regression is a
+# reported failure rather than a wedged suite.
+_FORK_CLOSE_SCRIPT = """
+import asyncio, os, sys
+sys.path.insert(0, {repo!r})
+os.environ["STATE_BACKEND"] = "sqlite"
+os.environ["SQLITE_URL"] = {db!r}
+os.environ["ENVIRONMENT"] = "development"
+
+from app.core.durable_state import close_durable_state, get_durable_state
+
+store = get_durable_state()
+asyncio.run(store.save_json("k", {{"v": 1}}))
+assert store.backend == "sqlite", store.backend
+
+pid = os.fork()
+if pid == 0:
+    # The child must not block trying to close a connection it does not own.
+    asyncio.run(close_durable_state())
+    print("CHILD_CLOSED", flush=True)
+    os._exit(0)
+
+_, status = os.waitpid(pid, 0)
+print("CHILD_STATUS", status, flush=True)
+asyncio.run(close_durable_state())
+print("PARENT_CLOSED", flush=True)
+"""
+
+
+def test_close_does_not_block_on_a_connection_inherited_across_fork(tmp_path):
+    """A forked child must not deadlock closing its parent's connection."""
+    import subprocess
+    import sys as _sys
+
+    script = _FORK_CLOSE_SCRIPT.format(
+        repo=str(Path(__file__).resolve().parent.parent),
+        db=str(tmp_path / "fork_close.db"),
+    )
+    env = {**os.environ}
+    env.pop("DATABASE_URL", None)
+    try:
+        proc = subprocess.run(
+            [_sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(
+            "closing a fork-inherited SQLite connection deadlocked: "
+            f"{_as_text(exc.stdout)!r}"
+        ) from exc
+
+    assert "CHILD_CLOSED" in proc.stdout, (
+        f"child never finished close_durable_state(): {proc.stdout!r} "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "CHILD_STATUS 0" in proc.stdout, f"child exited badly: {proc.stdout!r}"
+    assert "PARENT_CLOSED" in proc.stdout, (
+        f"parent could not close its own connection afterwards: {proc.stdout!r}"
+    )
+    assert proc.returncode == 0, f"unexpected exit code {proc.returncode}"
