@@ -543,3 +543,55 @@ def test_aiosqlite_stop_contract_still_holds():
     assert "CONTRACT_OK" in proc.stdout, (
         f"contract probe did not confirm the contract: {proc.stdout!r}"
     )
+
+
+def test_connection_stays_tracked_when_both_cleanup_paths_fail(tmp_path):
+    """A cleanup that fails outright must not remove the backstop.
+
+    close() falls back to stop() when the close raises. If that fallback also
+    raises, the worker thread may still be alive -- and that is precisely the
+    case where the shutdown hook must still be able to reach it. Untracking
+    there would strip the backstop from the one path that still needs it.
+    """
+    reset_durable_state_for_tests()
+    store = DurableStateStore()
+    store._state_backend = "sqlite"
+    store._sqlite_url = str(tmp_path / "cleanup_failure.db")
+
+    async def setup():
+        await store.save_json("k", {"v": 1})
+
+    asyncio.run(setup())
+    conn = store._sqlite_conn
+    assert conn is not None
+    assert id(conn) in _TRACKED_SQLITE_CONNECTIONS
+
+    real_stop = conn.stop
+
+    async def _boom_close(*_a, **_k):
+        raise RuntimeError("simulated close failure")
+
+    def _boom_stop(*_a, **_k):
+        raise RuntimeError("simulated stop failure")
+
+    conn.close = _boom_close
+    conn.stop = _boom_stop
+
+    try:
+        asyncio.run(store.close())
+
+        assert id(conn) in _TRACKED_SQLITE_CONNECTIONS, (
+            "both cleanup paths failed, so the connection must stay tracked for "
+            "the shutdown hook to retry"
+        )
+    finally:
+        # Unconditional: if the assertion above fails, the worker is still alive
+        # and untracked, so skipping this would hang the suite at exit instead
+        # of reporting the failure -- the same trap the contract probe had.
+        conn.stop = real_stop
+        _TRACKED_SQLITE_CONNECTIONS.pop(id(conn), None)
+        real_stop()
+        conn._thread.join(timeout=10)
+        reset_durable_state_for_tests()
+
+    assert not conn._thread.is_alive()

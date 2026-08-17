@@ -527,6 +527,7 @@ class DurableStateStore:
 
         if self._sqlite_conn is not None:
             conn = self._sqlite_conn
+            released = True
             try:
                 await conn.close()
             except Exception:
@@ -541,13 +542,17 @@ class DurableStateStore:
                 except Exception:
                     logger.warning(
                         "SQLite worker thread could not be stopped after a "
-                        "failed close; interpreter exit may block on it.",
+                        "failed close; leaving it tracked so the shutdown hook "
+                        "can try again before interpreter exit.",
                         exc_info=True,
                     )
-            # Untrack last, and unconditionally: the worker is released by now on
-            # either path, and leaving a dead entry in the registry would make
-            # the shutdown hook warn about a leak that did not happen.
-            self._unregister_sqlite_shutdown_backstop()
+                    released = False
+            if released:
+                # Untrack only once the worker is actually released. Keeping a
+                # dead entry would make the shutdown hook warn about a leak that
+                # did not happen; dropping a live one would remove the backstop
+                # from the single case that still needs it.
+                self._unregister_sqlite_shutdown_backstop()
             self._sqlite_conn = None
 
         self._initialized = False
