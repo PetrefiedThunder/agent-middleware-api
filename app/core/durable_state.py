@@ -80,9 +80,10 @@ _SQLITE_SHUTDOWN_HOOK_REGISTERED = False
 def _release_tracked_sqlite_connections() -> None:
     """Release worker threads for connections nobody closed."""
     current_pid = os.getpid()
-    for conn, owner_pid in list(_TRACKED_SQLITE_CONNECTIONS.values()):
+    for key, (conn, owner_pid) in list(_TRACKED_SQLITE_CONNECTIONS.items()):
         # Shutdown hooks are inherited across fork(). A child must never close
-        # a connection owned by its parent.
+        # a connection owned by its parent, and must leave the entry in place
+        # rather than dropping something it was not entitled to handle.
         if owner_pid != current_pid:
             continue
         logger.warning(
@@ -95,8 +96,14 @@ def _release_tracked_sqlite_connections() -> None:
             # with a ``None`` future. No loop has to survive until shutdown.
             conn.stop()
         except Exception:
-            logger.debug("Failed to stop SQLite worker at shutdown", exc_info=True)
-    _TRACKED_SQLITE_CONNECTIONS.clear()
+            # Warning, not debug: reaching here means the worker thread is still
+            # alive and interpreter exit is about to block on it.
+            logger.warning(
+                "Failed to stop SQLite worker at shutdown; interpreter exit "
+                "may block on it.",
+                exc_info=True,
+            )
+        _TRACKED_SQLITE_CONNECTIONS.pop(key, None)
 
 
 def _ensure_sqlite_shutdown_hook() -> None:
@@ -109,7 +116,14 @@ def _ensure_sqlite_shutdown_hook() -> None:
         register_early(_release_tracked_sqlite_connections)
     else:
         # No known CPython lacks it (3.9+), but degrade rather than crash on
-        # import if a future runtime drops the private hook.
+        # import if a future runtime drops the private hook. Say so loudly:
+        # plain ``atexit`` runs *after* the non-daemon join, so this fallback
+        # cannot actually prevent the hang — it only makes the leak visible.
+        logger.warning(
+            "threading._register_atexit is unavailable; falling back to atexit, "
+            "which runs too late to release a leaked SQLite worker thread. "
+            "Call close_durable_state() on shutdown to avoid a hang at exit."
+        )
         atexit.register(_release_tracked_sqlite_connections)
     _SQLITE_SHUTDOWN_HOOK_REGISTERED = True
 

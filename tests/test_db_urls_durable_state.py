@@ -312,7 +312,8 @@ def test_auto_without_urls_refuses_production_like(monkeypatch):
 # Opens the SQLite backend and exits WITHOUT calling close_durable_state().
 # Without the backstop this process never terminates.
 _LEAK_SCRIPT = """
-import asyncio, os, sys
+import asyncio, logging, os, sys
+logging.basicConfig(level=logging.WARNING)
 sys.path.insert(0, {repo!r})
 os.environ["STATE_BACKEND"] = "sqlite"
 os.environ["SQLITE_URL"] = {db!r}
@@ -331,10 +332,10 @@ print("WORK_DONE", flush=True)
 """
 
 
-def _run_leak_script(tmp_path, extra_env=None):
+def _run_leak_script(tmp_path):
     """Run the leaking script in a subprocess under a hard timeout.
 
-    Returns (returncode, stdout). A timeout is reported as returncode 124 to
+    Returns (returncode, stdout, stderr). A timeout is reported as 124 to
     match the shell convention used elsewhere in this repo's verification.
     """
     import subprocess
@@ -344,7 +345,7 @@ def _run_leak_script(tmp_path, extra_env=None):
         repo=str(Path(__file__).resolve().parent.parent),
         db=str(tmp_path / "atexit_probe.db"),
     )
-    env = {**os.environ, **(extra_env or {})}
+    env = {**os.environ}
     env.pop("DATABASE_URL", None)
     try:
         proc = subprocess.run(
@@ -355,8 +356,21 @@ def _run_leak_script(tmp_path, extra_env=None):
             env=env,
         )
     except subprocess.TimeoutExpired as exc:
-        return 124, (exc.stdout or b"").decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-    return proc.returncode, proc.stdout
+        # ``text=True`` does NOT apply on this path: CPython attaches the raw
+        # buffers to TimeoutExpired without decoding them, so these are bytes
+        # even though a completed run yields str. Decoding here keeps the
+        # timeout branch -- the one that reports a hang -- from dying with a
+        # TypeError instead of the assertion the caller is waiting to read.
+        return 124, _as_text(exc.stdout), _as_text(exc.stderr)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _as_text(stream) -> str:
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode(errors="replace")
+    return stream
 
 
 def test_process_exits_when_sqlite_state_is_never_closed(tmp_path):
@@ -366,13 +380,20 @@ def test_process_exits_when_sqlite_state_is_never_closed(tmp_path):
     log line reads identically whether the process exited or hung -- that
     ambiguity is exactly what let the original six-hour CI hang through.
     """
-    returncode, stdout = _run_leak_script(tmp_path)
+    returncode, stdout, stderr = _run_leak_script(tmp_path)
 
     assert "WORK_DONE" in stdout, f"script did not complete its work: {stdout!r}"
     assert returncode != 124, (
         "process hung at exit: the aiosqlite worker thread was never released"
     )
     assert returncode == 0, f"unexpected exit code {returncode}"
+    # Exit code alone proves termination, not *why*. A refactor that stopped
+    # opening the connection -- or daemonized the worker -- would keep the
+    # assertions above green while deleting the mechanism under test.
+    assert "was not closed" in stderr, (
+        "the process exited without the backstop running, so this test no "
+        f"longer proves the backstop is what released the thread: {stderr!r}"
+    )
 
 
 def test_clean_close_untracks_and_releases_the_worker_thread(tmp_path):
@@ -389,7 +410,9 @@ def test_clean_close_untracks_and_releases_the_worker_thread(tmp_path):
         assert store.backend == "sqlite"
         conn = store._sqlite_conn
         assert conn is not None
-        assert _TRACKED_SQLITE_CONNECTIONS, "backstop did not track the connection"
+        assert id(conn) in _TRACKED_SQLITE_CONNECTIONS, (
+            "backstop did not track the connection"
+        )
         await store.close()
         return conn
 
@@ -424,14 +447,68 @@ def test_shutdown_backstop_is_inert_in_a_forked_child(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "getpid", lambda: store._sqlite_owner_pid + 1)
     _release_tracked_sqlite_connections()
     assert conn._thread.is_alive(), "child closed a connection it does not own"
+    # A skipped entry must survive: the child had no right to drop it, and the
+    # owner still needs it to release the thread at its own shutdown.
+    assert id(conn) in _TRACKED_SQLITE_CONNECTIONS, (
+        "the child discarded a registry entry it was not entitled to handle"
+    )
 
-    # The real owner still releases it.
+    # The real owner still releases it -- no re-insertion needed.
     monkeypatch.undo()
-    _TRACKED_SQLITE_CONNECTIONS[id(conn)] = (conn, store._sqlite_owner_pid)
     _release_tracked_sqlite_connections()
     conn._thread.join(timeout=10)
     assert not conn._thread.is_alive()
+    assert id(conn) not in _TRACKED_SQLITE_CONNECTIONS
 
-    store._sqlite_conn = None
     store._unregister_sqlite_shutdown_backstop()
+    store._sqlite_conn = None
     reset_durable_state_for_tests()
+
+
+def test_aiosqlite_stop_contract_still_holds():
+    """Pin the aiosqlite behaviour the backstop depends on, by behaviour.
+
+    The shutdown hook calls ``Connection.stop`` from a context with no running
+    event loop. That works because ``stop`` is synchronous and falls back to a
+    ``None`` future when no loop is available. Both properties are internal to
+    aiosqlite and could change in a future release.
+
+    Asserting them here rather than pinning a version keeps dependency upgrades
+    unblocked while making a silent behavioural regression impossible: if this
+    contract breaks, this test fails with a clear reason instead of CI hanging
+    for six hours.
+    """
+    import asyncio as _asyncio
+    import inspect
+    import threading
+
+    import aiosqlite
+
+    assert not inspect.iscoroutinefunction(aiosqlite.Connection.stop), (
+        "aiosqlite.Connection.stop is no longer synchronous; the shutdown hook "
+        "cannot await it and the backstop needs rework"
+    )
+
+    async def _open():
+        return await aiosqlite.connect(":memory:")
+
+    loop = _asyncio.new_event_loop()
+    try:
+        conn = loop.run_until_complete(_open())
+    finally:
+        loop.close()
+    _asyncio.set_event_loop(None)
+
+    assert conn._thread.is_alive()
+    assert not conn._thread.daemon, (
+        "aiosqlite's worker thread became a daemon; the hang this backstop "
+        "prevents may no longer exist and the mechanism can be reconsidered"
+    )
+
+    # No running or current event loop at this point -- the shutdown condition.
+    conn.stop()
+    conn._thread.join(timeout=10)
+    assert not conn._thread.is_alive(), (
+        "Connection.stop no longer releases the worker without an event loop"
+    )
+    assert conn._thread not in threading.enumerate()
