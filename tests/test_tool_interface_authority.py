@@ -788,10 +788,14 @@ def test_public_manifest_stays_strict_json_for_malformed_prices(price_fields):
         ann = {t["name"]: t for t in manifest["tools"]}[
             "authority-malformed-price"
         ]["annotations"]
-        # The advertised price is finite, and an unusable exact price is
-        # omitted rather than published as garbage.
+        # The advertised price is the conservative fallback specifically —
+        # not merely "some finite number". Pinning the value catches a
+        # regression that reuses a declared 2.0 alongside a corrupt exact
+        # price, which a finiteness-only assertion would wave through.
         assert isinstance(ann["creditsPerCall"], float)
         assert math.isfinite(ann["creditsPerCall"])
+        assert ann["creditsPerCall"] == 1.0
+        # An unusable exact price is omitted rather than published as garbage.
         assert "creditsPerCallExact" not in ann
         # Conservative: an unreadable price never reads as free.
         assert ann["economicAction"] is True
