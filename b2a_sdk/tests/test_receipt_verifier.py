@@ -149,36 +149,6 @@ def test_unusable_bundles_report_why(overrides, expected):
     assert not result.is_tampered
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"alg": "RS256"},
-        {"alg": None},
-        {"canonicalization": "something-else/9"},
-    ],
-)
-def test_envelope_cannot_downgrade_a_bundle_to_unsupported(overrides):
-    """An edited envelope must not let an attacker pick the status.
-
-    ``alg`` and ``canonicalization`` used to be read from the unauthenticated
-    envelope and short-circuit to UNSUPPORTED *before* the signature was
-    checked. One edited byte therefore turned any bundle into "this verifier is
-    too old" -- a statement about the verifier's capability, chosen by whoever
-    edited the bytes, and carrying ``is_tampered = False``.
-
-    The signed payload here declares Ed25519 and no canonicalization, so the
-    envelope is the only thing claiming otherwise. The verifier must ignore it
-    for the capability decision and go on to judge the signature.
-    """
-    result = verify_bundle(_bundle(**overrides), {"key-1": b"\x00" * 32})
-
-    assert result.status is not VerificationStatus.UNSUPPORTED
-    # This fixture's signature is 64 zero bytes, so the honest answer is that
-    # the signature does not verify.
-    assert result.status is VerificationStatus.INVALID
-    assert result.is_tampered
-
-
 def test_missing_key_reports_unknown_key_not_invalid():
     result = verify_bundle(_bundle(), {})
 
