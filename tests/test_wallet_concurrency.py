@@ -1,0 +1,280 @@
+"""Lost-update proofs for the wallet provisioning and transfer debits.
+
+#305 converted the charge debit, the child reclaim, refunds, and the velocity
+counters to guarded updates. It left three: the sponsor provisioning debit,
+the parent delegation debit, and the transfer debit, all still reading a
+balance, deciding, and writing the decided value back. They rely on
+``SELECT ... FOR UPDATE`` to keep a second writer out of that window, and
+SQLAlchemy **silently drops** ``FOR UPDATE`` on SQLite, so on that engine the
+window is wide open.
+
+Ordinary concurrency does not reproduce it: SQLite serializes the write
+transactions, so two ``asyncio.gather``-ed operations simply take turns and
+the second one reads fresh data. What the dropped lock actually allows is
+narrower -- a competing writer committing *between* one operation's read and
+its write -- so these tests inject exactly that, by wrapping a call the
+operation already awaits inside that window and committing the competing
+write from it. Nothing about the assertion depends on the injection: the
+operation is left to decide on its own, and a decision made from the value it
+read rather than the value the row holds is what fails.
+
+They run on SQLite, because that is where the defect is reachable: the
+injection only works while the row lock is a no-op. Pointed at PostgreSQL the
+injected writer would block on the lock the operation under test genuinely
+holds, so they skip there. The PostgreSQL side of the same guarantee is
+covered by real concurrent operations in
+``tests/test_permit_postgres_concurrency.py``, and the paths #305 already
+fixed are covered by ``tests/test_wallet_ledger_integrity.py``.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from collections.abc import Awaitable, Callable
+from decimal import Decimal
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import update as sa_update
+
+from app.db.database import get_engine, get_session_factory
+from app.db.models import WalletModel
+from app.schemas.billing import WalletStatus
+from app.services.agent_money import get_agent_money
+from app.services.wallet_engine import WalletEngine
+
+_SKIP_REASON = (
+    "the read-to-write window these tests inject into is only open where "
+    "SELECT ... FOR UPDATE is dropped; on an engine that honours it the "
+    "injected writer would block on the lock the operation already holds"
+)
+
+# Checked before any database fixture runs: the PostgreSQL jobs point
+# DATABASE_URL at a real server, and even reaching a fixture there would open
+# connections this module has no use for.
+_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if _DATABASE_URL and not _DATABASE_URL.startswith("sqlite"):
+    pytest.skip(_SKIP_REASON, allow_module_level=True)
+
+pytestmark = pytest.mark.anyio
+
+
+def _skip_unless_sqlite() -> None:
+    """Skip where ``FOR UPDATE`` is honoured and the injection would block."""
+    engine = get_engine()
+    if engine is not None and engine.dialect.name != "sqlite":
+        pytest.skip(_SKIP_REASON)
+
+
+async def _balance(wallet_id: str) -> Decimal:
+    """Read a wallet balance in its own transaction."""
+    factory = get_session_factory()
+    async with factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        assert wallet is not None
+        return wallet.balance
+
+
+async def _commit_debit(wallet_id: str, amount: Decimal) -> None:
+    """Commit a debit from outside the operation under test."""
+    factory = get_session_factory()
+    async with factory() as session:
+        async with session.begin():
+            await session.execute(
+                sa_update(WalletModel)
+                .where(WalletModel.wallet_id == wallet_id)
+                .values(balance=WalletModel.balance - amount)
+            )
+
+
+def _interfere_once(
+    monkeypatch: pytest.MonkeyPatch,
+    attr: str,
+    interference: Callable[[], Awaitable[None]],
+    *,
+    before: bool = False,
+) -> None:
+    """Commit a competing write inside the operation's read-to-write window.
+
+    ``attr`` names a ``WalletEngine`` coroutine the operation under test
+    already awaits after loading the wallet and before writing it. This is the
+    window a working ``SELECT ... FOR UPDATE`` would hold closed and that
+    SQLite leaves open; the wrapper fires once, so only the first operation in
+    a test is raced. Pass ``before`` when the named call *is* the write, so
+    the competing commit still lands inside the window rather than after it.
+    """
+    original = getattr(WalletEngine, attr)
+    state = {"fired": False}
+
+    async def wrapper(self, *args, **kwargs):
+        if before and not state["fired"]:
+            state["fired"] = True
+            await interference()
+        result = await original(self, *args, **kwargs)
+        if not before and not state["fired"]:
+            state["fired"] = True
+            await interference()
+        return result
+
+    monkeypatch.setattr(WalletEngine, attr, wrapper)
+
+
+@pytest_asyncio.fixture
+async def sponsor_wallet(clean_database) -> str:
+    """A sponsor wallet with a known balance."""
+    _skip_unless_sqlite()
+    wallet = await get_agent_money().create_sponsor_wallet(
+        sponsor_name=f"Concurrency Sponsor {uuid.uuid4().hex[:8]}",
+        email="concurrency@example.com",
+        initial_credits=Decimal("1000"),
+        require_kyc=False,
+    )
+    return wallet.wallet_id
+
+
+async def test_delegation_refuses_a_parent_balance_that_moved_under_it(
+    sponsor_wallet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A child wallet must not be funded with credits the parent no longer has."""
+    money = get_agent_money()
+    parent = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("400"),
+    )
+    _interfere_once(
+        monkeypatch,
+        "ensure_wallet_not_expired",
+        lambda: _commit_debit(parent.wallet_id, Decimal("350")),
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await money.create_child_wallet(
+            parent_wallet_id=parent.wallet_id,
+            child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
+            budget_credits=Decimal("200"),
+            max_spend=Decimal("200"),
+        )
+
+    assert "insufficient" in str(excinfo.value).lower()
+    assert await _balance(parent.wallet_id) == Decimal("50")
+
+
+async def test_transfer_refuses_a_source_balance_that_moved_under_it(
+    sponsor_wallet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transfer must never pay out credits it did not take from the source.
+
+    A lost update here is worse than an overdraft: the destination is credited
+    from a debit that was rolled over by the competing writer, so the credits
+    exist on one side and not the other.
+    """
+    money = get_agent_money()
+    source = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"src-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("300"),
+    )
+    dest = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"dst-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("100"),
+    )
+    _interfere_once(
+        monkeypatch,
+        "ensure_wallet_not_expired",
+        lambda: _commit_debit(source.wallet_id, Decimal("250")),
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await money.transfer(
+            from_wallet_id=source.wallet_id,
+            to_wallet_id=dest.wallet_id,
+            amount=Decimal("200"),
+        )
+
+    assert "insufficient" in str(excinfo.value).lower()
+    assert await _balance(source.wallet_id) == Decimal("50")
+    assert await _balance(dest.wallet_id) == Decimal("100")
+
+
+async def test_sponsor_provisioning_refuses_a_balance_that_moved_under_it(
+    sponsor_wallet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two provisions must not hand out the same sponsor credits twice.
+
+    Unlike the paths above, this one awaits nothing between its read and its
+    write, so the window can only be entered at the write itself. That means
+    this test pins the guard's contract rather than reproducing the original
+    defect against the pre-fix code, which had no such seam -- the defect is
+    the same shape as the delegation debit it sits beside.
+    """
+    _interfere_once(
+        monkeypatch,
+        "_apply_balance_delta",
+        lambda: _commit_debit(sponsor_wallet, Decimal("900")),
+        before=True,
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await get_agent_money().create_agent_wallet(
+            sponsor_wallet_id=sponsor_wallet,
+            agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+            budget_credits=Decimal("500"),
+        )
+
+    assert "insufficient" in str(excinfo.value).lower()
+    # The competing debit stands; nothing was provisioned from credits that
+    # had already been spent.
+    assert await _balance(sponsor_wallet) == Decimal("100")
+
+
+async def _commit_freeze(wallet_id: str) -> None:
+    """Freeze a wallet from outside the operation under test."""
+    factory = get_session_factory()
+    async with factory() as session:
+        async with session.begin():
+            await session.execute(
+                sa_update(WalletModel)
+                .where(WalletModel.wallet_id == wallet_id)
+                .values(status=WalletStatus.FROZEN.value)
+            )
+
+
+async def test_delegation_refuses_a_parent_frozen_under_it(
+    sponsor_wallet: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freeze landing mid-operation must stop the delegation debit.
+
+    The parent's status is checked in Python and then awaited past, so a
+    freeze committed in that window is invisible to the check. Spending from
+    a frozen wallet is the failure the freeze exists to prevent, which is why
+    the status rides in the UPDATE alongside the balance rather than being
+    trusted from the read.
+    """
+    money = get_agent_money()
+    parent = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("400"),
+    )
+    _interfere_once(
+        monkeypatch,
+        "ensure_wallet_not_expired",
+        lambda: _commit_freeze(parent.wallet_id),
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await money.create_child_wallet(
+            parent_wallet_id=parent.wallet_id,
+            child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
+            budget_credits=Decimal("200"),
+            max_spend=Decimal("200"),
+        )
+
+    assert "frozen" in str(excinfo.value).lower()
+    # Nothing was spent out of the frozen wallet.
+    assert await _balance(parent.wallet_id) == Decimal("400")
+
+

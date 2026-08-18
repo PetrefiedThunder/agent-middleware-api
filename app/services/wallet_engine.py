@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -152,6 +152,93 @@ class WalletEngine:
             expires_at = await self._effective_expiry(session, wallet)
             return expires_at is not None and expires_at <= utc_now()
 
+    async def _apply_balance_delta(
+        self,
+        session: AsyncSession,
+        wallet: WalletModel,
+        *,
+        balance_delta: Decimal,
+        lifetime_debits_delta: Decimal = Decimal("0"),
+        lifetime_credits_delta: Decimal = Decimal("0"),
+        require_balance: Decimal | None = None,
+        require_child_cap_for: Decimal | None = None,
+        require_spendable: bool = False,
+    ) -> bool:
+        """Move a wallet balance with a guarded UPDATE, never a write-back.
+
+        The provisioning and transfer paths reached this module's checks the
+        same way the charge debit did before #305: read the balance, decide,
+        write the decided value back. ``SELECT ... FOR UPDATE`` is a silent
+        no-op on SQLite, so the lock those checks lean on is not always taken,
+        and the decision is made against a value another writer may already
+        have moved.
+
+        Restating each racing precondition in the WHERE clause makes the
+        database re-check it in the same statement as the write. Returns
+        whether the row was updated. The caller's ``wallet`` instance is
+        refreshed either way: ``synchronize_session=False`` bypasses the
+        identity map, and both the ``balance_after`` written onto ledger
+        entries and the errors raised on a lost race must reflect the row
+        rather than the stale read.
+        """
+        guards: list[ColumnElement[bool]] = [
+            cast(ColumnElement[bool], WalletModel.wallet_id == wallet.wallet_id)
+        ]
+        if require_balance is not None:
+            guards.append(
+                cast(ColumnElement[bool], WalletModel.balance >= require_balance)
+            )
+        if require_child_cap_for is not None:
+            # Compared against the row's own max_spend rather than a value read
+            # into Python, so a cap changed concurrently is honoured too.
+            # Non-child wallets and children with no cap are unconstrained.
+            guards.append(
+                cast(
+                    ColumnElement[bool],
+                    or_(
+                        cast(
+                            ColumnElement[bool],
+                            WalletModel.wallet_type != WalletType.CHILD.value,
+                        ),
+                        cast(Any, WalletModel.max_spend).is_(None),
+                        cast(
+                            ColumnElement[bool],
+                            WalletModel.lifetime_debits + require_child_cap_for
+                            <= cast(Any, WalletModel.max_spend),
+                        ),
+                    ),
+                )
+            )
+        if require_spendable:
+            guards.append(
+                cast(
+                    ColumnElement[bool],
+                    cast(Any, WalletModel.status).notin_(
+                        tuple(_NON_SPENDABLE_WALLET_STATUSES)
+                    ),
+                )
+            )
+
+        values: dict[str, Any] = {"balance": WalletModel.balance + balance_delta}
+        if lifetime_debits_delta:
+            values["lifetime_debits"] = (
+                WalletModel.lifetime_debits + lifetime_debits_delta
+            )
+        if lifetime_credits_delta:
+            values["lifetime_credits"] = (
+                WalletModel.lifetime_credits + lifetime_credits_delta
+            )
+        values["updated_at"] = utc_now()
+
+        applied = await session.execute(
+            sa_update(WalletModel)
+            .where(*guards)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        await session.refresh(wallet)
+        return (cast(Any, applied).rowcount or 0) == 1
+
     async def _lock_wallets_in_order(
         self, session: AsyncSession, wallet_ids: list[str]
     ) -> dict[str, WalletModel]:
@@ -274,16 +361,28 @@ class WalletEngine:
                         f"Sponsor wallet is {sponsor.status} and cannot provision "
                         "agent wallets"
                     )
-                if sponsor.balance < budget_credits:
+                # Deduct from sponsor. The balance and status checks above are
+                # a fast path; the guarded UPDATE is what makes them hold, so
+                # two concurrent provisions cannot hand out the same credits
+                # and a freeze landing in between is not outrun.
+                if not await self._apply_balance_delta(
+                    session,
+                    sponsor,
+                    balance_delta=-budget_credits,
+                    lifetime_debits_delta=budget_credits,
+                    require_balance=budget_credits,
+                    require_spendable=True,
+                ):
+                    if sponsor.status in _NON_SPENDABLE_WALLET_STATUSES:
+                        raise ValueError(
+                            f"Sponsor wallet is {sponsor.status} and cannot "
+                            "provision agent wallets"
+                        )
                     raise self._insufficient_funds_error(
                         sponsor_wallet_id,
                         sponsor.balance,
                         budget_credits,
                     )
-
-                # Deduct from sponsor
-                sponsor.balance -= budget_credits
-                sponsor.lifetime_debits += budget_credits
 
                 # Create agent wallet
                 agent_wallet_id = f"agt-{uuid.uuid4().hex[:12]}"
@@ -388,16 +487,36 @@ class WalletEngine:
                     and parent.lifetime_debits + budget_credits > parent.max_spend
                 ):
                     raise ValueError("Child wallet lifetime spend cap exceeded")
-                if parent.balance < budget_credits:
+
+                # Deduct from parent. Balance, spendable status, and the child
+                # lifetime cap all travel with the debit: two concurrent
+                # delegations must not both clear a limit only one of them
+                # fits inside.
+                if not await self._apply_balance_delta(
+                    session,
+                    parent,
+                    balance_delta=-budget_credits,
+                    lifetime_debits_delta=budget_credits,
+                    require_balance=budget_credits,
+                    require_spendable=True,
+                    require_child_cap_for=budget_credits,
+                ):
+                    if parent.status in _NON_SPENDABLE_WALLET_STATUSES:
+                        raise ValueError(
+                            f"Parent wallet is {parent.status} and cannot spawn "
+                            "child wallets"
+                        )
+                    if (
+                        parent.wallet_type == WalletType.CHILD.value
+                        and parent.max_spend
+                        and parent.lifetime_debits + budget_credits > parent.max_spend
+                    ):
+                        raise ValueError("Child wallet lifetime spend cap exceeded")
                     raise self._insufficient_funds_error(
                         parent_wallet_id,
                         parent.balance,
                         budget_credits,
                     )
-
-                # Deduct from parent
-                parent.balance -= budget_credits
-                parent.lifetime_debits += budget_credits
 
                 # Create child wallet
                 child_wallet_id = f"chd-{uuid.uuid4().hex[:12]}"
@@ -666,16 +785,40 @@ class WalletEngine:
                 ):
                     raise ValueError("Child wallet lifetime spend cap exceeded")
 
-                if source.balance < amount:
+                # Execute transfer. The debit is guarded on everything a
+                # concurrent writer could move, so the credit below only ever
+                # pays out credits this statement actually took from the
+                # source -- a lost update here would mint credits, landing
+                # them on the destination without removing them anywhere.
+                if not await self._apply_balance_delta(
+                    session,
+                    source,
+                    balance_delta=-amount,
+                    lifetime_debits_delta=amount,
+                    require_balance=amount,
+                    require_spendable=True,
+                    require_child_cap_for=amount,
+                ):
+                    if source.status in _NON_SPENDABLE_WALLET_STATUSES:
+                        raise ValueError(
+                            f"Source wallet is {source.status} and cannot "
+                            "transfer credits"
+                        )
+                    if (
+                        source.wallet_type == WalletType.CHILD.value
+                        and source.max_spend
+                        and source.lifetime_debits + amount > source.max_spend
+                    ):
+                        raise ValueError("Child wallet lifetime spend cap exceeded")
                     raise self._insufficient_funds_error(
                         from_wallet_id, source.balance, amount
                     )
-
-                # Execute transfer
-                source.balance -= amount
-                source.lifetime_debits += amount
-                dest.balance += amount
-                dest.lifetime_credits += amount
+                await self._apply_balance_delta(
+                    session,
+                    dest,
+                    balance_delta=amount,
+                    lifetime_credits_delta=amount,
+                )
 
                 # Create ledger entries on both sides
                 session.add(
