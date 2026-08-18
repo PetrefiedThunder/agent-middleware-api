@@ -67,6 +67,24 @@ def _stamp(value: datetime | None) -> str | None:
 # transient "database is locked"/"snapshot" conflict on the second writer; we
 # retry that with a small backoff. On PostgreSQL the row lock blocks instead of
 # raising, so the retry never triggers there.
+#
+# The guard takes one of two forms, and both are decided by the database rather
+# than by this process:
+#
+# * **Relative** — reservations and releases increment or decrement in place
+#   (``spent_credits + amount``), with the cap, the status and the expiry in
+#   the statement's own predicate. A row count other than 1 means the write
+#   lost, and the caller re-reads to classify *why* before reporting a reason.
+# * **Conditional on the observed value** — ``reconcile_budgets`` recomputes an
+#   absolute total from receipts, which has no relative form, so it commits
+#   only where the stored spend still equals the value that pass read. A
+#   concurrent reservation makes that predicate false and the repair is skipped
+#   rather than overwriting it. This is optimistic concurrency control: detect
+#   the lost race by affected-row count instead of holding a lock.
+#
+# The rule this encodes: no ``spent_credits`` value may be written from a number
+# this process read in an earlier statement without the database re-checking
+# that the number still holds.
 _PERMIT_WRITE_MAX_ATTEMPTS = 40
 
 
@@ -741,7 +759,11 @@ class PermitService:
                 async with session.begin():
                     now = utc_now()
                     # Atomic guarded reserve (see authorize_and_reserve): the cap
-                    # is enforced by the WHERE clause, not a read-then-write.
+                    # *and the expiry* are enforced by the WHERE clause, not a
+                    # read-then-write. Without the expiry predicate a permit that
+                    # is past ``expires_at`` but still ``active`` -- the sweeper
+                    # flips status lazily -- keeps accepting reservations, which
+                    # is authority outliving its own deadline.
                     reserved = await session.execute(
                         sa_update(PermitModel)
                         .where(
@@ -752,6 +774,10 @@ class PermitService:
                             cast(
                                 ColumnElement[bool],
                                 PermitModel.status == "active",
+                            ),
+                            cast(
+                                ColumnElement[bool],
+                                PermitModel.expires_at > now,
                             ),
                             cast(
                                 ColumnElement[bool],
@@ -769,6 +795,15 @@ class PermitService:
                         exists = await session.get(PermitModel, permit_id)
                         if exists is None:
                             raise PermitError("permit_not_found")
+                        # Classify in the same order as authorize_and_reserve:
+                        # status, then expiry, then budget. Reporting an expired
+                        # or revoked permit as "out of money" sends the operator
+                        # to top up a permit that more money cannot revive.
+                        await session.refresh(exists)
+                        if exists.status != "active":
+                            raise PermitError(f"permit_{exists.status}")
+                        if to_naive_utc(exists.expires_at) <= now:
+                            raise PermitError("permit_expired")
                         raise PermitError("permit_budget_exceeded")
 
                     # Budget percentage alerts, recomputed from the committed
@@ -857,18 +892,47 @@ class PermitService:
         async def _once() -> bool:
             async with factory() as session:
                 async with session.begin():
-                    attempt = await session.get(
-                        McpDispatchAttemptModel,
-                        attempt_id,
-                        with_for_update=True,
-                    )
+                    attempt = await session.get(McpDispatchAttemptModel, attempt_id)
                     if attempt is None:
                         raise PermitError("dispatch_attempt_not_found")
-                    if attempt.state != "returned_error":
-                        raise PermitError("dispatch_budget_release_state_invalid")
-                    if attempt.budget_released_at is not None:
-                        return False
                     now = utc_now()
+                    # Claim the checkpoint with a guarded UPDATE *before* moving
+                    # any budget. Reading ``budget_released_at`` and then writing
+                    # it is a read-modify-write: it was serialized only by
+                    # ``SELECT ... FOR UPDATE``, which is a silent no-op on
+                    # SQLite, so two concurrent callers both saw NULL, both
+                    # passed the check, and the reservation was released twice --
+                    # leaving the permit under-spent and able to over-spend its
+                    # cap later. The database now decides the winner: exactly one
+                    # transaction can flip NULL -> now.
+                    claimed = await session.execute(
+                        sa_update(McpDispatchAttemptModel)
+                        .where(
+                            cast(
+                                ColumnElement[bool],
+                                McpDispatchAttemptModel.attempt_id == attempt_id,
+                            ),
+                            cast(
+                                ColumnElement[bool],
+                                McpDispatchAttemptModel.state == "returned_error",
+                            ),
+                            cast(
+                                ColumnElement[bool],
+                                cast(
+                                    Any, McpDispatchAttemptModel.budget_released_at
+                                ).is_(None),
+                            ),
+                        )
+                        .values(budget_released_at=now, updated_at=now)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if (cast(Any, claimed).rowcount or 0) != 1:
+                        # Re-read to tell "already released" (a benign duplicate
+                        # call, False) from "wrong state" (a caller bug, raise).
+                        await session.refresh(attempt)
+                        if attempt.state != "returned_error":
+                            raise PermitError("dispatch_budget_release_state_invalid")
+                        return False
                     # Atomic clamped decrement so a concurrent reservation on the
                     # same permit is not clobbered by a read-modify-write here.
                     released = await session.execute(
@@ -899,9 +963,9 @@ class PermitService:
                     )
                     if (cast(Any, released).rowcount or 0) == 0:
                         raise PermitError("permit_not_found")
-                    attempt.budget_released_at = now
-                    attempt.updated_at = now
-                    session.add(attempt)
+                    # The checkpoint was already stamped by the guarded claim
+                    # above; writing it again through the ORM would re-issue it
+                    # from a row this session loaded before that UPDATE.
                 return True
 
         return await self._run_with_write_retry(_once)
@@ -1127,11 +1191,37 @@ class PermitService:
                         ),
                         Decimal("0"),
                     )
-                    if permit.spent_credits != consumed_decimal:
-                        permit.spent_credits = consumed_decimal
-                        permit.updated_at = utc_now()
-                        session.add(permit)
-                        corrected += 1
+                    observed = permit.spent_credits
+                    if observed != consumed_decimal:
+                        # This is an absolute set recomputed from receipts, not
+                        # an increment, so it cannot be expressed as a relative
+                        # guarded UPDATE. Guard it on the value this pass
+                        # actually observed instead: if a reservation landed
+                        # between the receipt scan and this write, the row no
+                        # longer matches and we correct nothing rather than
+                        # erasing that reservation. ``with_for_update()`` above
+                        # does not cover this on SQLite, where it is a no-op.
+                        # The skipped permit is simply re-examined next pass.
+                        repaired = await session.execute(
+                            sa_update(PermitModel)
+                            .where(
+                                cast(
+                                    ColumnElement[bool],
+                                    PermitModel.permit_id == permit.permit_id,
+                                ),
+                                cast(
+                                    ColumnElement[bool],
+                                    PermitModel.spent_credits == observed,
+                                ),
+                            )
+                            .values(
+                                spent_credits=consumed_decimal,
+                                updated_at=utc_now(),
+                            )
+                            .execution_options(synchronize_session=False)
+                        )
+                        if (cast(Any, repaired).rowcount or 0) == 1:
+                            corrected += 1
             await session.commit()
         return corrected
 

@@ -1010,3 +1010,86 @@ async def test_lost_commit_ack_recovery_no_double_charge(
     permit_after_retry = await get_permit_service().get_permit(permit["permit_id"])
     assert permit_after_retry is not None
     assert permit_after_retry.spent_credits == spent_after_first
+
+
+@pytest.mark.anyio
+async def test_dispatch_budget_release_is_once_only_under_a_stale_read(
+    client: AsyncClient,
+    clean_database,
+    monkeypatch,
+) -> None:
+    """Two callers that both observe an unreleased attempt must release once.
+
+    ``release_dispatch_budget_once`` decided whether it had already run by
+    reading ``budget_released_at`` and then writing it — a read-modify-write
+    serialized only by ``SELECT ... FOR UPDATE``. That lock is a silent no-op
+    on SQLite, so both callers saw NULL, both passed the check, and the
+    reservation was released twice: the permit ends up *under*-spent and can
+    then exceed the very cap it is meant to enforce.
+
+    The interleave is forced rather than raced. The first caller's read is
+    allowed to happen, a second caller then runs to completion, and only then
+    does the first caller reach its write — exactly the ordering the row lock
+    was supposed to prevent and does not on SQLite.
+    """
+    seed = await _seed_attempt(
+        client,
+        suffix="release-once-only",
+        state="returned_error",
+        result_payload={"error": "confirmed"},
+        error_code="upstream_returned_error",
+    )
+    permits = get_permit_service()
+    spent_before = (await permits.get_permit(seed.permit_id)).spent_credits
+    assert spent_before == CREDITS
+
+    import app.services.permits as permits_module
+
+    real_factory = get_session_factory()
+    state = {"fired": False, "second_result": None}
+
+    class _StaleReadSession:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def execute(self, *args, **kwargs):
+            # Fires after this caller's `session.get` of the attempt row and
+            # before its first write — the read-modify-write window.
+            if not state["fired"]:
+                state["fired"] = True
+                monkeypatch.setattr(
+                    permits_module, "get_session_factory", lambda: real_factory
+                )
+                state["second_result"] = await permits.release_dispatch_budget_once(
+                    seed.attempt_id
+                )
+            return await self._inner.execute(*args, **kwargs)
+
+    class _StaleReadFactory:
+        def __init__(self, cm):
+            self._cm = cm
+
+        async def __aenter__(self):
+            return _StaleReadSession(await self._cm.__aenter__())
+
+        async def __aexit__(self, *exc):
+            return await self._cm.__aexit__(*exc)
+
+    monkeypatch.setattr(
+        permits_module,
+        "get_session_factory",
+        lambda: (lambda: _StaleReadFactory(real_factory())),
+    )
+
+    first_result = await permits.release_dispatch_budget_once(seed.attempt_id)
+
+    assert state["fired"], "the interleave never ran — the test proved nothing"
+    # Exactly one caller may claim the release.
+    assert [first_result, state["second_result"]].count(True) == 1
+    # And the budget moved exactly once, not twice.
+    permit = await permits.get_permit(seed.permit_id)
+    assert permit is not None
+    assert permit.spent_credits == spent_before - CREDITS
