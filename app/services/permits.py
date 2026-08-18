@@ -760,10 +760,11 @@ class PermitService:
                     now = utc_now()
                     # Atomic guarded reserve (see authorize_and_reserve): the cap
                     # *and the expiry* are enforced by the WHERE clause, not a
-                    # read-then-write. Without the expiry predicate a permit that
-                    # is past ``expires_at`` but still ``active`` -- the sweeper
-                    # flips status lazily -- keeps accepting reservations, which
-                    # is authority outliving its own deadline.
+                    # read-then-write. The expiry term matters for the same
+                    # reason it does in authorize_and_reserve: an expired permit
+                    # keeps status="active" in storage because the sweeper flips
+                    # it lazily, so without this term a second reservation path
+                    # still spends against a permit that has crossed expires_at.
                     reserved = await session.execute(
                         sa_update(PermitModel)
                         .where(
@@ -896,25 +897,20 @@ class PermitService:
                     if attempt is None:
                         raise PermitError("dispatch_attempt_not_found")
                     now = utc_now()
-                    # Claim the checkpoint with a guarded UPDATE *before* moving
-                    # any budget. Reading ``budget_released_at`` and then writing
-                    # it is a read-modify-write: it was serialized only by
-                    # ``SELECT ... FOR UPDATE``, which is a silent no-op on
-                    # SQLite, so two concurrent callers both saw NULL, both
-                    # passed the check, and the reservation was released twice --
-                    # leaving the permit under-spent and able to over-spend its
-                    # cap later. The database now decides the winner: exactly one
-                    # transaction can flip NULL -> now.
+                    # Claim the release atomically before touching the permit.
+                    # The read above is guarded by a row lock, but SQLAlchemy
+                    # silently drops FOR UPDATE on engines that do not support
+                    # it (SQLite), so on those two concurrent callers would both
+                    # observe budget_released_at IS NULL and both decrement.
+                    # This guarded UPDATE is the once-only gate on every engine:
+                    # exactly one caller can flip NULL -> now, and only that
+                    # caller proceeds to release the budget.
                     claimed = await session.execute(
                         sa_update(McpDispatchAttemptModel)
                         .where(
                             cast(
                                 ColumnElement[bool],
                                 McpDispatchAttemptModel.attempt_id == attempt_id,
-                            ),
-                            cast(
-                                ColumnElement[bool],
-                                McpDispatchAttemptModel.state == "returned_error",
                             ),
                             cast(
                                 ColumnElement[bool],
@@ -927,11 +923,8 @@ class PermitService:
                         .execution_options(synchronize_session=False)
                     )
                     if (cast(Any, claimed).rowcount or 0) != 1:
-                        # Re-read to tell "already released" (a benign duplicate
-                        # call, False) from "wrong state" (a caller bug, raise).
-                        await session.refresh(attempt)
-                        if attempt.state != "returned_error":
-                            raise PermitError("dispatch_budget_release_state_invalid")
+                        # Another caller claimed it first; its transaction owns
+                        # the single decrement.
                         return False
                     # Atomic clamped decrement so a concurrent reservation on the
                     # same permit is not clobbered by a read-modify-write here.
@@ -963,9 +956,12 @@ class PermitService:
                     )
                     if (cast(Any, released).rowcount or 0) == 0:
                         raise PermitError("permit_not_found")
-                    # The checkpoint was already stamped by the guarded claim
-                    # above; writing it again through the ORM would re-issue it
-                    # from a row this session loaded before that UPDATE.
+                    # budget_released_at was already set by the guarded claim
+                    # above; refresh the identity-mapped instance so callers
+                    # holding it observe the committed value.
+                    attempt.budget_released_at = now
+                    attempt.updated_at = now
+                    session.add(attempt)
                 return True
 
         return await self._run_with_write_retry(_once)
