@@ -430,3 +430,36 @@ def test_shipped_defaults_are_strict():
         "TRUST_MODE_ENABLED": True,
         "ALLOW_LEGACY_UNPERMITTED_MCP": False,
     }
+
+
+@pytest.mark.anyio
+async def test_lifespan_refuses_a_sqlite_database_url_in_production(monkeypatch):
+    """The guard has to stop a real boot, not only pass a unit test.
+
+    ``validate_trust_mode_guardrails`` is called from ``lifespan``, so a
+    production deployment pointed at SQLite fails to start rather than serving
+    traffic with the row locks silently absent. Asserting the function in
+    isolation would not catch the guard being dropped from the startup path.
+    """
+    import app.main as main_module
+
+    monkeypatch.setattr(main_module.settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(main_module.settings, "TRUST_MODE_ENABLED", True)
+    monkeypatch.setattr(
+        main_module.settings,
+        "TRUST_SIGNING_PRIVATE_KEY_B64",
+        VALID_SIGNING_PRIVATE_KEY_B64,
+    )
+    monkeypatch.setattr(main_module.settings, "ALLOW_LEGACY_UNPERMITTED_MCP", False)
+    monkeypatch.setattr(main_module.settings, "ENABLE_PROOF_SURFACES", False)
+    monkeypatch.setattr(main_module.settings, "DEBUG", False)
+    monkeypatch.setattr(main_module.settings, "WEBAUTHN_ALLOW_MOCK", False)
+    monkeypatch.setattr(
+        main_module.settings, "DATABASE_URL", "sqlite+aiosqlite:///./trust.db"
+    )
+
+    with pytest.raises(TrustModeGuardrailError) as exc_info:
+        async with main_module.lifespan(main_module.app):
+            pytest.fail("lifespan must not start against SQLite in production")
+
+    assert "DATABASE_URL must not be SQLite" in str(exc_info.value)
