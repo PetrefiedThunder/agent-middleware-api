@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from sqlalchemy import or_, select, update as sa_update
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -236,8 +237,25 @@ class WalletEngine:
             .values(**values)
             .execution_options(synchronize_session=False)
         )
-        await session.refresh(wallet)
-        return (cast(Any, applied).rowcount or 0) == 1
+        matched = (cast(Any, applied).rowcount or 0) == 1
+        if matched:
+            # Only a matched row can be refreshed. Refreshing before checking
+            # would raise on a row that no longer exists, which is the one case
+            # the caller most needs reported as a plain miss.
+            await session.refresh(wallet)
+        else:
+            # A miss usually means a guard failed and the row is still there, so
+            # refresh to give the caller the committed values its error message
+            # is built from. A miss can also mean the row is gone, and then
+            # there is nothing to refresh -- keep the stale instance rather than
+            # letting SQLAlchemy raise over the caller's own error.
+            # ObjectDeletedError subclasses InvalidRequestError, so this catches
+            # both the deleted-row and the unrefreshable-instance cases.
+            try:
+                await session.refresh(wallet)
+            except InvalidRequestError:
+                pass
+        return matched
 
     async def _lock_wallets_in_order(
         self, session: AsyncSession, wallet_ids: list[str]
