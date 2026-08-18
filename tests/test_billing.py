@@ -1162,3 +1162,156 @@ async def test_rejected_charge_does_not_inflate_velocity_counters(
         # All three rejected charges were reversed out of the counters.
         assert wallet.daily_spent == _D("0")
         assert wallet.hourly_spent == _D("0")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("units", "expected_status"),
+    [
+        ("0", 422),
+        ("-5", 422),
+        ("abc", 422),
+        ("", 422),
+        ("NaN", 422),
+        ("Infinity", 422),
+    ],
+)
+async def test_charge_rejects_malformed_units_without_touching_the_wallet(
+    client, api_headers, clean_database, units: str, expected_status: int
+):
+    """A rejected charge must leave the balance and the ledger exactly as found.
+
+    ``units`` is declared ``gt=0``, so zero and negatives are refused — a
+    negative would otherwise invert the debit into a credit, which is a way to
+    mint money through the metering endpoint. ``NaN`` and ``Infinity`` are
+    valid JSON-adjacent float spellings that Python's ``float()`` accepts, and
+    either would poison the balance arithmetic irrecoverably, so they are
+    pinned alongside the obviously malformed cases.
+    """
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Malformed Units",
+            "email": "malformed-units@t.com",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    sponsor_id = sponsor_resp.json()["wallet_id"]
+    agent_resp = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor_id,
+            "agent_id": "malformed-units-bot",
+            "budget_credits": 5000,
+        },
+        headers=api_headers,
+    )
+    agent_wallet_id = agent_resp.json()["wallet_id"]
+
+    before = await client.get(
+        f"/v1/billing/wallets/{agent_wallet_id}", headers=api_headers
+    )
+    opening = before.json()["balance_exact"]
+
+    resp = await client.post(
+        f"/v1/billing/charge?wallet_id={agent_wallet_id}"
+        f"&service=iot_bridge&units={units}",
+        headers=api_headers,
+    )
+    assert resp.status_code == expected_status, resp.text
+
+    after = await client.get(
+        f"/v1/billing/wallets/{agent_wallet_id}", headers=api_headers
+    )
+    assert after.json()["balance_exact"] == opening
+    ledger_resp = await client.get(
+        f"/v1/billing/ledger/{agent_wallet_id}", headers=api_headers
+    )
+    assert [e for e in ledger_resp.json()["entries"] if e["action"] == "debit"] == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("units", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")])
+async def test_billing_engine_refuses_non_finite_units(units):
+    """The engine refuses non-finite units, not only the HTTP boundary.
+
+    The governed MCP path and the SDK reach ``charge`` without passing the
+    billing router's query validation, so the guard has to live where every
+    caller meets.
+    """
+    from app.schemas.billing import ServiceCategory
+    from app.services.agent_money import get_agent_money
+
+    with pytest.raises(ValueError, match="finite"):
+        await get_agent_money().charge(
+            wallet_id="wal-irrelevant",
+            service_category=ServiceCategory.IOT_BRIDGE,
+            units=units,
+            request_path="/non-finite",
+        )
+
+
+@pytest.mark.anyio
+async def test_charge_against_an_unknown_wallet_creates_nothing(
+    client, api_headers, clean_database
+):
+    """An unknown wallet is refused, and leaves no ledger entry behind.
+
+    The bootstrap key can operate on any wallet, so authorization does not
+    stop this one — the wallet lookup has to. Asserting the ledger stays empty
+    matters as much as the status code: a debit written against an id with no
+    wallet row is an entry nothing will ever reconcile.
+    """
+    unknown = "wal-does-not-exist-000000"
+
+    resp = await client.post(
+        f"/v1/billing/charge?wallet_id={unknown}&service=iot_bridge&units=1",
+        headers=api_headers,
+    )
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"]["error"] == "wallet_not_found"
+
+    ledger_resp = await client.get(
+        f"/v1/billing/ledger/{unknown}", headers=api_headers
+    )
+    if ledger_resp.status_code == 200:
+        assert ledger_resp.json()["entries"] == []
+
+
+@pytest.mark.anyio
+async def test_charge_without_a_service_category_is_refused(
+    client, api_headers, clean_database
+):
+    """Neither ``service`` nor ``service_category`` given: no pricing applies."""
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "No Category",
+            "email": "no-category@t.com",
+            "initial_credits": 1000,
+        },
+        headers=api_headers,
+    )
+    sponsor_id = sponsor_resp.json()["wallet_id"]
+    agent_resp = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor_id,
+            "agent_id": "no-category-bot",
+            "budget_credits": 500,
+        },
+        headers=api_headers,
+    )
+    agent_wallet_id = agent_resp.json()["wallet_id"]
+
+    resp = await client.post(
+        f"/v1/billing/charge?wallet_id={agent_wallet_id}&units=1",
+        headers=api_headers,
+    )
+    assert resp.status_code in (400, 422), resp.text
+
+    ledger_resp = await client.get(
+        f"/v1/billing/ledger/{agent_wallet_id}", headers=api_headers
+    )
+    assert [e for e in ledger_resp.json()["entries"] if e["action"] == "debit"] == []

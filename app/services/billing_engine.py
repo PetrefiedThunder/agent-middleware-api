@@ -577,6 +577,17 @@ class BillingEngine:
         If dry_run=True, simulates the charge without affecting real balance
         or triggering velocity monitoring. Uses the shadow ledger for tracking.
         """
+        # Non-finite units are refused here, not only at the HTTP boundary.
+        # This is the choke point every caller passes through -- the governed
+        # MCP path and the SDK reach it without going near the billing router
+        # -- and ``Decimal("Infinity")`` survives every arithmetic step below
+        # until ``charge_amount - compute_cost`` raises InvalidOperation. A
+        # non-finite amount that instead reached a write would sit in the
+        # ledger permanently: no reconciliation can subtract infinity back
+        # out, and every balance derived from it is NaN thereafter.
+        if not units.is_finite():
+            raise ValueError(f"units must be a finite number, got {units}")
+
         pricing = self._default_pricing.get(service_category)
         if not pricing:
             raise ValueError(f"No pricing for {service_category.value}")

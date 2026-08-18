@@ -548,7 +548,19 @@ async def charge_wallet(
         None,
         description="Service category (alias for service_category)",
     ),
-    units: float = Query(1.0, gt=0, description="Number of units consumed"),
+    units: float = Query(
+        1.0,
+        gt=0,
+        # ``gt=0`` alone lets an infinite value through -- it is a valid
+        # float and it is greater than zero -- and metering then computes
+        # ``Decimal("Infinity") - Decimal("Infinity")``, which raises
+        # InvalidOperation and answers 500. The crash is the lucky outcome:
+        # an infinite units count that reached a write would put a
+        # non-finite amount in the ledger, which no reconciliation can undo.
+        # (A not-a-number value is already refused: it fails ``gt=0``.)
+        allow_inf_nan=False,
+        description="Number of units consumed",
+    ),
     request_path: str | None = None,
     description: str | None = None,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
@@ -701,6 +713,35 @@ async def charge_wallet(
         )
         await _complete_idempotency(result.model_dump(mode="json"), 200)
         return result
+    except WalletNotFoundError as e:
+        # Every other endpoint in this router answers 404 for an unknown
+        # wallet; this one let the exception escape as a 500, which reads as
+        # "the server is broken" rather than "that wallet does not exist" and
+        # sends a caller retrying a typo down the wrong path entirely.
+        await _record_billing_governance(
+            event="billing.charge",
+            auth=auth,
+            wallet_id=wallet_id,
+            service_category=category.value,
+            endpoint=endpoint,
+            request_id=request_id,
+            ok=False,
+            error="wallet_not_found",
+            metadata={"units": units, "request_path": request_path},
+        )
+        not_found_detail = {
+            "error": "wallet_not_found",
+            "wallet_id": wallet_id,
+            "message": str(e),
+        }
+        await _complete_idempotency(
+            {"detail": not_found_detail},
+            status.HTTP_404_NOT_FOUND,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=not_found_detail,
+        )
     except WalletFrozenError as e:
         if category:
             await _record_billing_governance(
