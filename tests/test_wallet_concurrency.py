@@ -41,7 +41,7 @@ from sqlalchemy import update as sa_update
 from app.db.database import get_engine, get_session_factory
 from app.db.models import WalletModel
 from app.schemas.billing import WalletStatus
-from app.services.agent_money import get_agent_money
+from app.services.agent_money import InsufficientFundsError, get_agent_money
 from app.services.wallet_engine import WalletEngine
 
 _SKIP_REASON = (
@@ -149,7 +149,7 @@ async def test_delegation_refuses_a_parent_balance_that_moved_under_it(
         lambda: _commit_debit(parent.wallet_id, Decimal("350")),
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(InsufficientFundsError) as excinfo:
         await money.create_child_wallet(
             parent_wallet_id=parent.wallet_id,
             child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
@@ -187,7 +187,7 @@ async def test_transfer_refuses_a_source_balance_that_moved_under_it(
         lambda: _commit_debit(source.wallet_id, Decimal("250")),
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(InsufficientFundsError) as excinfo:
         await money.transfer(
             from_wallet_id=source.wallet_id,
             to_wallet_id=dest.wallet_id,
@@ -217,7 +217,7 @@ async def test_sponsor_provisioning_refuses_a_balance_that_moved_under_it(
         before=True,
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(InsufficientFundsError) as excinfo:
         await get_agent_money().create_agent_wallet(
             sponsor_wallet_id=sponsor_wallet,
             agent_id=f"agent-{uuid.uuid4().hex[:8]}",
@@ -265,7 +265,7 @@ async def test_delegation_refuses_a_parent_frozen_under_it(
         lambda: _commit_freeze(parent.wallet_id),
     )
 
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         await money.create_child_wallet(
             parent_wallet_id=parent.wallet_id,
             child_agent_id=f"child-{uuid.uuid4().hex[:8]}",

@@ -1463,8 +1463,12 @@ async def test_concurrent_provisioning_never_overdraws_in_postgres() -> None:
 
     results = await asyncio.gather(*(provision(i) for i in range(6)))
     granted = [r for r in results if not isinstance(r, Exception)]
+    refused = [r for r in results if isinstance(r, Exception)]
 
     assert len(granted) == 4
+    # A pool timeout or a deadlock would otherwise count as a refusal and the
+    # split would come out right for the wrong reason.
+    assert all("insufficient" in str(exc).lower() for exc in refused), refused
     assert await _wallet_balance(sponsor_id) == Decimal("0")
 
 
@@ -1502,8 +1506,10 @@ async def test_concurrent_transfers_conserve_credits_in_postgres() -> None:
 
     results = await asyncio.gather(*(move() for _ in range(5)))
     moved = len([r for r in results if not isinstance(r, Exception)])
+    refused = [r for r in results if isinstance(r, Exception)]
 
     assert moved == 3
+    assert all("insufficient" in str(exc).lower() for exc in refused), refused
     source_balance = await _wallet_balance(source.wallet_id)
     dest_balance = await _wallet_balance(dest.wallet_id)
     assert source_balance == Decimal("300") - Decimal("100") * moved
@@ -1538,7 +1544,13 @@ async def test_concurrent_reclaims_credit_the_parent_once_in_postgres() -> None:
 
     results = await asyncio.gather(*(reclaim() for _ in range(3)))
     succeeded = [r for r in results if not isinstance(r, Exception)]
+    refused = [r for r in results if isinstance(r, Exception)]
 
     assert len(succeeded) == 1
+    # The losers must lose the claim, not fail for some unrelated reason.
+    assert all(
+        "already closed" in str(exc).lower() or "balance changed" in str(exc).lower()
+        for exc in refused
+    ), refused
     assert await _wallet_balance(parent.wallet_id) == parent_before + Decimal("150")
     assert await _wallet_balance(child.wallet_id) == Decimal("0")

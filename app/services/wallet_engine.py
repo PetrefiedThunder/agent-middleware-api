@@ -813,12 +813,18 @@ class WalletEngine:
                     raise self._insufficient_funds_error(
                         from_wallet_id, source.balance, amount
                     )
-                await self._apply_balance_delta(
+                # The debit is already applied in this transaction, so a credit
+                # that matches no row would leave the transfer reporting success
+                # with the credits on neither side. Only ``wallet_id`` guards
+                # this write, so a miss means the destination row is gone --
+                # abort rather than commit half a transfer.
+                if not await self._apply_balance_delta(
                     session,
                     dest,
                     balance_delta=amount,
                     lifetime_credits_delta=amount,
-                )
+                ):
+                    raise self._wallet_not_found_error(to_wallet_id)
 
                 # Create ledger entries on both sides
                 session.add(
