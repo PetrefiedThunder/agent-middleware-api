@@ -17,6 +17,7 @@ from app.core.trust_mode import (
 
 
 VALID_SIGNING_PRIVATE_KEY_B64 = base64.b64encode(bytes(range(32))).decode()
+VALID_PRODUCTION_DATABASE_URL = "postgresql+asyncpg://user:pw@db.internal:5432/trust"
 
 
 @pytest.mark.parametrize(
@@ -153,6 +154,7 @@ def test_settings_wrapper_uses_environment_field():
         ENABLE_DEV_KEY_SELF_PROVISION=False,
         DEBUG=False,
         WEBAUTHN_ALLOW_MOCK=False,
+        DATABASE_URL=VALID_PRODUCTION_DATABASE_URL,
     )
 
     validate_trust_mode_guardrails(settings)
@@ -184,6 +186,7 @@ def test_public_mcp_accepts_shared_rate_limiter_in_production():
         enable_public_mcp_endpoint=True,
         redis_url="redis://redis.internal:6379/0",
         public_url="https://api.example.com",
+        database_url=VALID_PRODUCTION_DATABASE_URL,
     )
 
 
@@ -201,6 +204,105 @@ def test_public_mcp_requires_public_origin_in_production():
         )
 
     assert "PUBLIC_URL" in str(exc_info.value)
+
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "sqlite+aiosqlite:///./trust.db",
+        "sqlite:///./trust.db",
+        "SQLite+aiosqlite:///./trust.db",
+        "sqlite+aiosqlite:///:memory:",
+    ],
+)
+def test_production_refuses_a_sqlite_database_url(database_url: str):
+    """SQLite in production is refused at boot, not discovered under load.
+
+    SQLAlchemy silently drops ``SELECT ... FOR UPDATE`` on SQLite, so every
+    guarded money and permit path loses the serialization it is written to
+    rely on. The in-memory spellings are refused too: they are no safer, and
+    they additionally lose the ledger on restart.
+    """
+    with pytest.raises(TrustModeGuardrailError) as exc_info:
+        validate_trust_mode_config(
+            environment="production",
+            trust_mode_enabled=True,
+            signing_private_key_b64=VALID_SIGNING_PRIVATE_KEY_B64,
+            allow_legacy_unpermitted_mcp=False,
+            enable_proof_surfaces=False,
+            database_url=database_url,
+        )
+
+    message = str(exc_info.value)
+    assert "DATABASE_URL must not be SQLite" in message
+    assert "FOR UPDATE" in message
+
+
+def test_production_refuses_a_missing_database_url():
+    with pytest.raises(TrustModeGuardrailError) as exc_info:
+        validate_trust_mode_config(
+            environment="production",
+            trust_mode_enabled=True,
+            signing_private_key_b64=VALID_SIGNING_PRIVATE_KEY_B64,
+            allow_legacy_unpermitted_mcp=False,
+            enable_proof_surfaces=False,
+            database_url="   ",
+        )
+
+    assert "DATABASE_URL must be set" in str(exc_info.value)
+
+
+def test_a_redis_state_backend_does_not_excuse_a_sqlite_database_url():
+    """The residual hole this guard exists to close.
+
+    ``app/core/durable_state.py`` already refuses SQLite, but it governs the
+    key/value *state store*. A deployment with ``STATE_BACKEND=redis`` and a
+    ``REDIS_URL`` satisfies that check completely while ``DATABASE_URL`` stays
+    SQLite -- and the wallet, permit, and ledger writes run against the ORM
+    engine that URL builds, not against the state store. Passing the state
+    check must not carry the ORM engine with it.
+    """
+    with pytest.raises(TrustModeGuardrailError) as exc_info:
+        validate_trust_mode_config(
+            environment="production",
+            trust_mode_enabled=True,
+            signing_private_key_b64=VALID_SIGNING_PRIVATE_KEY_B64,
+            allow_legacy_unpermitted_mcp=False,
+            enable_proof_surfaces=False,
+            redis_url="redis://redis.internal:6379/0",
+            database_url="sqlite+aiosqlite:///./trust.db",
+        )
+
+    assert "DATABASE_URL must not be SQLite" in str(exc_info.value)
+
+
+def test_production_accepts_a_postgres_database_url():
+    validate_trust_mode_config(
+        environment="production",
+        trust_mode_enabled=True,
+        signing_private_key_b64=VALID_SIGNING_PRIVATE_KEY_B64,
+        allow_legacy_unpermitted_mcp=False,
+        enable_proof_surfaces=False,
+        database_url=VALID_PRODUCTION_DATABASE_URL,
+    )
+
+
+@pytest.mark.parametrize("environment", ["", "local", "development", "test", "ci"])
+def test_local_environments_still_accept_sqlite(environment: str):
+    """The guard must not make local development impossible.
+
+    A SQLite ``DATABASE_URL`` is the standard local value and the default the
+    test suite itself runs on; refusing it outside production-like
+    environments would break every developer and this suite with them.
+    """
+    validate_trust_mode_config(
+        environment=environment,
+        trust_mode_enabled=True,
+        signing_private_key_b64="",
+        allow_legacy_unpermitted_mcp=True,
+        database_url="sqlite+aiosqlite:///./test.db",
+    )
 
 
 def test_describe_permissive_returns_none_when_strict():

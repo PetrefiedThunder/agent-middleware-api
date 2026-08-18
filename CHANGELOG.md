@@ -11,6 +11,26 @@ The next release consolidates the accumulated trust-plane and public-product
 work as `v1.3.0`. Create that tag only from the exact commit that passes the
 full release gate; do not backfill a final `v1.2.0` tag.
 
+### 🔒 Production refuses a SQLite `DATABASE_URL` at boot
+
+- **The premise behind eleven of the twelve audit findings no longer holds.**
+  Those findings were live because `SELECT ... FOR UPDATE` is a silent no-op on
+  SQLite and nothing refused SQLite in production. `validate_trust_mode_config`
+  now refuses a SQLite `DATABASE_URL` — file *and* in-memory spellings — in
+  production-like environments, and refuses an empty one, since wallets,
+  permits, receipts, and the ledger are relational and `get_engine()` returns
+  `None` without it.
+- This is a **separate control** from the `STATE_BACKEND` guard added in #304.
+  That one governs the key/value durable-state store; this one governs the ORM
+  engine the money and permit paths actually write through. The gap between
+  them was reachable: `STATE_BACKEND=redis` with a `REDIS_URL` satisfies the
+  state check completely while `DATABASE_URL` stays SQLite, which is precisely
+  the posture `tests/test_trust_mode_guardrails.py::test_a_redis_state_backend_does_not_excuse_a_sqlite_database_url`
+  now pins.
+- Local development is untouched: SQLite remains the standard value outside
+  production-like environments, and a regression test asserts it stays
+  accepted there.
+
 ### 🔌 Standard `/mcp` endpoint now served by the official MCP SDK
 
 - **The opt-in `POST /mcp` endpoint no longer hand-rolls JSON-RPC.** The
