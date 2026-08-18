@@ -896,6 +896,16 @@ class PermitService:
                     attempt = await session.get(McpDispatchAttemptModel, attempt_id)
                     if attempt is None:
                         raise PermitError("dispatch_attempt_not_found")
+                    # Only a terminal returned_error attempt has a reservation
+                    # to give back. Releasing budget for a prepared or
+                    # dispatched attempt frees credits that attempt may still
+                    # go on to spend, so the cap would be enforced against a
+                    # reservation that no longer exists. This pre-check is the
+                    # contract; the guarded claim below is the once-only gate.
+                    if attempt.state != "returned_error":
+                        raise PermitError("dispatch_budget_release_state_invalid")
+                    if attempt.budget_released_at is not None:
+                        return False
                     now = utc_now()
                     # Claim the release atomically before touching the permit.
                     # The read above is guarded by a row lock, but SQLAlchemy

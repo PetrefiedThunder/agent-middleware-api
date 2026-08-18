@@ -160,9 +160,13 @@ async def test_a_concurrent_charge_cannot_vanish_from_the_balance(
     )
 
     assert state.get("fired"), "the interleave never ran — the test proved nothing"
+    # Money must actually have moved, or conservation is trivially satisfied by
+    # two refusals and the test proves nothing.
+    debited = await _debits(wallet_id)
+    assert debited > Decimal("0"), "no debit was recorded — no money moved"
     # Whatever mix of success and refusal the two charges produced, the balance
     # must account for exactly the debits the ledger actually recorded.
-    assert await _balance(wallet_id) == Decimal("10") - await _debits(wallet_id)
+    assert await _balance(wallet_id) == Decimal("10") - debited
     # And it may never go negative.
     assert await _balance(wallet_id) >= Decimal("0")
 
@@ -285,3 +289,74 @@ async def test_concurrent_charges_cannot_exceed_a_child_wallet_spend_cap(
     assert state.get("fired"), "the interleave never ran — the test proved nothing"
     # Whatever mix of success and refusal, the delegated ceiling holds.
     assert await _debits(child_id) <= Decimal("2")
+
+
+@pytest.mark.anyio
+async def test_a_rejected_charge_does_not_erase_another_charges_velocity(
+    client, clean_database, monkeypatch
+):
+    """Reversing one charge's velocity must not undo another's increment.
+
+    When a charge is rejected after the velocity monitor already committed its
+    increment, `reverse_velocity_record()` backs that increment out. It did so
+    by reading `hourly_spent`/`daily_spent` and writing back read-charge — a
+    read-modify-write, in the same function whose debit this PR had already
+    converted to a guarded UPDATE. A charge committing in between is erased.
+
+    That matters more than a skewed metric: these counters are what the spend
+    cap and the anomaly auto-freeze are measured against. Losing an increment
+    under-counts spend and quietly raises the ceiling; losing a *reversal*
+    over-counts it and throttles a caller who never spent the money.
+
+    Honest limit on what this proves: unlike the other tests in this file, it
+    passes against the unfixed source as well. The only reversal branch this
+    interleave can reliably reach is the lost-race one, and that branch calls
+    ``session.refresh(wallet)`` first, which happens to make the stale read
+    benign there. The five branches that reverse *without* a refresh are the
+    exposed ones, and they need a rejection this harness cannot force on the
+    same wallet the concurrent charge must succeed on. So treat this as a
+    forward-looking invariant guard, not as a demonstration of the defect.
+    """
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    # Enough for the concurrent charge to succeed, nothing for the outer one:
+    # the outer charge is rejected and must reverse only its own increment.
+    await _set_balance(wallet_id, Decimal("1.5"))
+
+    money = get_agent_money()
+    real_factory = get_session_factory()
+    state: dict = {}
+
+    async def _concurrent_charge() -> None:
+        state["second"] = await money.charge(
+            wallet_id=wallet_id,
+            service_category=ServiceCategory.AGENT_COMMS,
+            units=Decimal("1"),
+            request_path="/velocity-b",
+        )
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_session_factory",
+        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+    )
+
+    state["first"] = await money.charge(
+        wallet_id=wallet_id,
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path="/velocity-a",
+    )
+
+    assert state.get("fired"), "the interleave never ran — the test proved nothing"
+    debited = await _debits(wallet_id)
+    assert debited > Decimal("0"), "no debit was recorded — no money moved"
+
+    # The surviving charge's velocity increment must still be on the books.
+    factory = get_session_factory()
+    async with factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        assert wallet is not None
+        assert wallet.daily_spent >= debited, (
+            "a rejected charge's reversal erased a concurrent charge's increment"
+        )

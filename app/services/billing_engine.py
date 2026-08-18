@@ -262,15 +262,34 @@ class BillingEngine:
             # wallet is absent, so there is nothing to reverse here.
             raise self._wallet_not_found_error(wallet_id)
 
-        def reverse_velocity_record() -> None:
+        async def reverse_velocity_record() -> None:
             # The velocity monitor committed these counters before this
             # transaction acquired the wallet lock. A rejected debit must
             # reverse exactly that increment.
-            wallet.hourly_spent = max(Decimal("0"), wallet.hourly_spent - charge_amount)
-            wallet.daily_spent = max(Decimal("0"), wallet.daily_spent - charge_amount)
+            #
+            # Relative, in one statement, for the same reason the increment in
+            # velocity_monitor is: reading a counter and writing back
+            # read-charge is a read-modify-write, and these counters are what
+            # the spend cap and the anomaly auto-freeze are measured against.
+            # A lost reversal here leaves the wallet permanently over-counted,
+            # which throttles a caller that never spent the money.
+            await session.execute(
+                sa_update(WalletModel)
+                .where(cast(ColumnElement[bool], WalletModel.wallet_id == wallet_id))
+                .values(
+                    hourly_spent=clamped_decrement(
+                        WalletModel.hourly_spent, charge_amount
+                    ),
+                    daily_spent=clamped_decrement(
+                        WalletModel.daily_spent, charge_amount
+                    ),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await session.refresh(wallet)
 
         if wallet.status in _NON_SPENDABLE_WALLET_STATUSES:
-            reverse_velocity_record()
+            await reverse_velocity_record()
             return InsufficientFundsResponse(
                 error=(
                     "wallet_frozen"
@@ -291,7 +310,7 @@ class BillingEngine:
         try:
             await self._wallet_engine.ensure_wallet_not_expired(session, wallet)
         except WalletExpiredError:
-            reverse_velocity_record()
+            await reverse_velocity_record()
             return InsufficientFundsResponse(
                 error="wallet_expired",
                 wallet_id=wallet_id,
@@ -310,7 +329,7 @@ class BillingEngine:
             if new_debits > wallet.max_spend:
                 remaining = wallet.max_spend - wallet.lifetime_debits
                 shortfall = charge_amount - remaining
-                reverse_velocity_record()
+                await reverse_velocity_record()
                 return InsufficientFundsResponse(
                     wallet_id=wallet_id,
                     current_balance=float(wallet.balance),
@@ -327,7 +346,7 @@ class BillingEngine:
             prior_daily_spent = wallet.daily_spent - charge_amount
             remaining = wallet.daily_limit - prior_daily_spent
             shortfall = charge_amount - remaining
-            reverse_velocity_record()
+            await reverse_velocity_record()
             return InsufficientFundsResponse(
                 wallet_id=wallet_id,
                 current_balance=float(wallet.balance),
@@ -342,7 +361,7 @@ class BillingEngine:
 
         if wallet.balance < charge_amount:
             shortfall = charge_amount - wallet.balance
-            reverse_velocity_record()
+            await reverse_velocity_record()
             return InsufficientFundsResponse(
                 wallet_id=wallet_id,
                 current_balance=float(wallet.balance),
@@ -404,7 +423,7 @@ class BillingEngine:
             # debited, so each case is reported exactly as failing the
             # corresponding check above would have reported it.
             await session.refresh(wallet)
-            reverse_velocity_record()
+            await reverse_velocity_record()
             max_spend = wallet.max_spend
             if (
                 wallet.wallet_type == WalletType.CHILD.value

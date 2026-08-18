@@ -1412,10 +1412,14 @@ async def _orphan_debit_body(client, provisioned, *, idem, crash):
             )
         ).scalar_one_or_none()
 
-    if record is None or record.ledger_entry_id is not None:
-        pytest.skip(
-            "this build does not leave the charge/checkpoint window observable"
-        )
+    # Assert the premise rather than skipping on it. A skip here would let a
+    # broken injection pass silently: the whole point is that a debit committed
+    # while the checkpoint did not, and if that state was never produced the
+    # test proves nothing about the reconciler.
+    assert record is not None, "no idempotency record — the crash injection missed"
+    assert record.ledger_entry_id is None, (
+        "the checkpoint landed, so the orphaned-debit window was never entered"
+    )
 
     await _age_idempotency_record(provisioned["agent_wallet_id"], idempotency_key)
 

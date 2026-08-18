@@ -34,7 +34,7 @@ from app.services.mcp_dispatch_attempts import get_mcp_dispatch_attempt_service
 from app.services.mcp_dispatch_reconciliation import (
     get_mcp_dispatch_reconciliation_service,
 )
-from app.services.permits import get_permit_service
+from app.services.permits import PermitError, get_permit_service
 from app.services.receipts import get_receipt_service
 from tests.test_trust_helpers import create_tool_permit, provision_agent_wallet
 
@@ -1088,7 +1088,9 @@ async def test_dispatch_budget_release_is_once_only_under_a_stale_read(
         error_code="upstream_returned_error",
     )
     permits = get_permit_service()
-    spent_before = (await permits.get_permit(seed.permit_id)).spent_credits
+    seeded_permit = await permits.get_permit(seed.permit_id)
+    assert seeded_permit is not None
+    spent_before = seeded_permit.spent_credits
     assert spent_before == CREDITS
 
     import app.services.permits as permits_module
@@ -1141,3 +1143,45 @@ async def test_dispatch_budget_release_is_once_only_under_a_stale_read(
     permit = await permits.get_permit(seed.permit_id)
     assert permit is not None
     assert permit.spent_credits == spent_before - CREDITS
+
+
+@pytest.mark.anyio
+async def test_release_dispatch_budget_rejects_a_missing_attempt(
+    client: AsyncClient,
+    clean_database,
+) -> None:
+    """An unknown attempt id must not move budget."""
+    with pytest.raises(PermitError) as excinfo:
+        await get_permit_service().release_dispatch_budget_once("att-does-not-exist")
+    assert excinfo.value.reason == "dispatch_attempt_not_found"
+
+
+@pytest.mark.anyio
+async def test_release_dispatch_budget_rejects_a_non_terminal_attempt(
+    client: AsyncClient,
+    clean_database,
+) -> None:
+    """Only a terminal ``returned_error`` attempt has a reservation to release.
+
+    A ``dispatched`` attempt may still complete and consume its credits. Giving
+    its reservation back early would leave the permit enforcing a cap against a
+    reservation that no longer exists, so the same permit could fund the
+    in-flight call twice over.
+    """
+    seed = await _seed_attempt(
+        client,
+        suffix="release-non-terminal",
+        state="dispatched",
+    )
+    permits = get_permit_service()
+    before = await permits.get_permit(seed.permit_id)
+    assert before is not None
+
+    with pytest.raises(PermitError) as excinfo:
+        await permits.release_dispatch_budget_once(seed.attempt_id)
+    assert excinfo.value.reason == "dispatch_budget_release_state_invalid"
+
+    # And no budget moved on the way to the refusal.
+    after = await permits.get_permit(seed.permit_id)
+    assert after is not None
+    assert after.spent_credits == before.spent_credits

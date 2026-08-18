@@ -29,7 +29,7 @@ from app.services.idempotency import (
     IdempotencyReplay,
     get_idempotency_service,
 )
-from app.services.permits import get_permit_service
+from app.services.permits import PermitError, get_permit_service
 from app.services.receipts import get_receipt_service
 
 logger = logging.getLogger(__name__)
@@ -240,8 +240,11 @@ async def complete_awi_http_governed(
     """Reserve permit budget, charge wallet, write receipt, complete idempotency.
 
     The order is load-bearing and is stated here in the order the code runs.
-    The reservation is taken **first**, so every later failure path compensates
-    by releasing it — which is exactly what the error handlers below do.
+    The reservation is taken **first**, so a later failure compensates by
+    releasing it — with one deliberate exception: on ``ChargeCreditMismatchError``
+    the wallet has already been debited, so the reservation is *retained* rather
+    than released. Releasing it there would free budget the caller has in fact
+    spent.
     An earlier revision of this line named the charge first; anyone reasoning
     about crash compensation from that reading would have had the direction of
     the required rollback backwards.
@@ -254,7 +257,32 @@ async def complete_awi_http_governed(
     money = money or get_agent_money()
     permits = get_permit_service()
     idem = get_idempotency_service()
-    await permits.reserve_budget(ctx.permit_id, ctx.credits)
+    try:
+        await permits.reserve_budget(ctx.permit_id, ctx.credits)
+    except PermitError as exc:
+        # A permit that expired or was revoked between validation and this
+        # reservation is a *denial*, not a server fault. Nothing was reserved
+        # and nothing was charged, so the caller gets the same 403 shape the
+        # up-front validation would have produced. Without this the PermitError
+        # escaped uncaught and the route answered 500, which tells an operator
+        # the service is broken when in fact the permit did its job.
+        await abort_awi_http_governed(
+            ctx,
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_payload={
+                "error": exc.reason,
+                "message": exc.reason,
+                "tool": ctx.tool_name,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": exc.reason,
+                "message": exc.reason,
+                "tool": ctx.tool_name,
+            },
+        ) from exc
 
     unit_price = DEFAULT_PRICING[ServiceCategory.AGENT_COMMS][1]
     charge_units = ctx.credits / unit_price if unit_price else Decimal("1")

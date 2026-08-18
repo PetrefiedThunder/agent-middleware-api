@@ -22,6 +22,7 @@ from app.db.models import (
     McpDispatchAttemptModel,
     ReceiptModel,
 )
+from app.schemas.billing import LedgerAction
 from app.services.signing_keys import sha256_hex
 
 GOVERNED_MCP_IDEMPOTENCY_ENDPOINT = "/mcp/invoke"
@@ -690,6 +691,15 @@ class IdempotencyService:
                                 cast(
                                     ColumnElement[bool],
                                     LedgerEntryModel.operation_key == record.record_id,
+                                ),
+                                # Adopt only an actual debit. The operation key
+                                # is unique per wallet, but naming the action
+                                # keeps a future credit sharing that key from
+                                # being mistaken for the charge we are
+                                # recovering.
+                                cast(
+                                    ColumnElement[bool],
+                                    LedgerEntryModel.action == LedgerAction.DEBIT.value,
                                 ),
                             )
                         )
