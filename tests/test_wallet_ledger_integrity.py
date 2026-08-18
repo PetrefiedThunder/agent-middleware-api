@@ -564,3 +564,91 @@ async def test_a_concurrent_charge_cannot_erase_a_reconciled_refund(
     second = _exact_amount(state["second"])
     assert second > Decimal("0"), "the concurrent charge did not move money"
     assert await _balance(wallet_id) == opening - second + charged
+
+
+@pytest.mark.anyio
+async def test_a_period_rollover_is_not_charged_for_a_rejected_charge(
+    client, clean_database, monkeypatch
+):
+    """A reversal must not decrement a period the charge never contributed to.
+
+    ``check_and_record_charge`` commits the velocity increment before the
+    debit transaction takes the wallet, so a rejected debit has to compensate
+    it. The counters roll over on their own schedule, though, and a rollover
+    landing in between zeroes the counter this charge added to. Reversing
+    against the *new* period takes credits off a total that belongs to live
+    spend by other callers.
+
+    The direction matters. An over-count throttles a caller who did not spend
+    and heals at the next rollover; an under-count silently raises the
+    effective spend cap and delays the anomaly auto-freeze, which are the two
+    controls these counters exist to drive. So the reversal is guarded on the
+    period marker it was recorded against and skipped when that no longer
+    holds.
+    """
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    await _set_balance(wallet_id, Decimal("100"))
+
+    money = get_agent_money()
+    real_factory = get_session_factory()
+    state: dict = {}
+
+    async def _roll_the_period_and_freeze() -> None:
+        """The hourly and daily windows roll, then the wallet is frozen.
+
+        The freeze is what makes the debit reject, so the reversal runs. The
+        rollover is backdated past both windows and the counters are set to a
+        known live figure, standing in for spend by other callers in the new
+        period.
+        """
+        async with real_factory() as s:
+            async with s.begin():
+                wallet = await s.get(WalletModel, wallet_id)
+                assert wallet is not None
+                now = utc_now()
+                wallet.hourly_reset_at = now
+                wallet.daily_reset_at = now
+                wallet.hourly_spent = Decimal("7")
+                wallet.daily_spent = Decimal("9")
+                wallet.status = "frozen"
+                s.add(wallet)
+
+    # Put the wallet in an old period so the charge's own increment is
+    # recorded against a marker the hook below then replaces.
+    async with real_factory() as session:
+        async with session.begin():
+            wallet = await session.get(WalletModel, wallet_id)
+            assert wallet is not None
+            stale = utc_now() - timedelta(days=2)
+            wallet.hourly_reset_at = stale
+            wallet.daily_reset_at = stale
+            session.add(wallet)
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_session_factory",
+        _interleaving_factory(real_factory, _roll_the_period_and_freeze, state, fire_on=1),
+    )
+
+    result = await money.charge(
+        wallet_id=wallet_id,
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path="/rollover-reversal",
+    )
+
+    assert state.get("fired"), "the interleave never ran — the test proved nothing"
+    assert not hasattr(result, "entry_id"), f"a frozen wallet was debited: {result}"
+
+    async with real_factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        assert wallet is not None
+        # The new period's counters are untouched: this charge never added to
+        # them, so it has nothing to take back from them.
+        assert wallet.hourly_spent == Decimal("7")
+        assert wallet.daily_spent == Decimal("9")

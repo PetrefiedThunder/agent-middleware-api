@@ -249,6 +249,8 @@ class BillingEngine:
         request_path: str | None,
         description: str,
         operation_key: str | None,
+        velocity_hourly_reset_at: datetime | None = None,
+        velocity_daily_reset_at: datetime | None = None,
     ) -> LedgerEntry | InsufficientFundsResponse:
         result = await session.execute(
             select(WalletModel)
@@ -273,19 +275,48 @@ class BillingEngine:
             # the spend cap and the anomaly auto-freeze are measured against.
             # A lost reversal here leaves the wallet permanently over-counted,
             # which throttles a caller that never spent the money.
-            await session.execute(
-                sa_update(WalletModel)
-                .where(cast(ColumnElement[bool], WalletModel.wallet_id == wallet_id))
-                .values(
-                    hourly_spent=clamped_decrement(
-                        WalletModel.hourly_spent, charge_amount
-                    ),
-                    daily_spent=clamped_decrement(
-                        WalletModel.daily_spent, charge_amount
-                    ),
-                )
-                .execution_options(synchronize_session=False)
+            #
+            # Each counter is reversed under its own period marker, because
+            # the two roll over on independent schedules. If the hourly period
+            # rolled between the increment and this reversal, the counter this
+            # charge added to has already been zeroed and the current one
+            # belongs to a period the charge never touched -- decrementing it
+            # would under-count live spend, which is the failure direction that
+            # actually matters here: an over-count throttles a caller who did
+            # not spend, an under-count silently raises the cap and delays the
+            # auto-freeze. A predicate covering both markers at once would be
+            # wrong for the same reason: a rolled daily period would suppress
+            # an hourly reversal that is still owed.
+            reversals = (
+                (
+                    "hourly_spent",
+                    WalletModel.hourly_reset_at,
+                    velocity_hourly_reset_at,
+                    WalletModel.hourly_spent,
+                ),
+                (
+                    "daily_spent",
+                    WalletModel.daily_reset_at,
+                    velocity_daily_reset_at,
+                    WalletModel.daily_spent,
+                ),
             )
+            for column_name, marker_column, recorded_marker, counter in reversals:
+                predicates: list[Any] = [
+                    cast(ColumnElement[bool], WalletModel.wallet_id == wallet_id)
+                ]
+                if recorded_marker is not None:
+                    predicates.append(
+                        cast(ColumnElement[bool], marker_column == recorded_marker)
+                    )
+                await session.execute(
+                    sa_update(WalletModel)
+                    .where(*predicates)
+                    .values(
+                        **{column_name: clamped_decrement(counter, charge_amount)}
+                    )
+                    .execution_options(synchronize_session=False)
+                )
             await session.refresh(wallet)
 
         if wallet.status in _NON_SPENDABLE_WALLET_STATUSES:
@@ -619,7 +650,7 @@ class BillingEngine:
                             )
                             return ledger_entry_model_to_schema(existing_entry)
 
-                    await velocity_monitor.check_and_record_charge(
+                    velocity = await velocity_monitor.check_and_record_charge(
                         wallet_id, charge_amount
                     )
 
@@ -636,6 +667,14 @@ class BillingEngine:
                         request_path=request_path,
                         description=description,
                         operation_key=operation_key,
+                        # Which period the increment landed in, so a reversal
+                        # cannot decrement a later one.
+                        velocity_hourly_reset_at=getattr(
+                            velocity, "hourly_reset_at", None
+                        ),
+                        velocity_daily_reset_at=getattr(
+                            velocity, "daily_reset_at", None
+                        ),
                     )
         except IntegrityError:
             if operation_key is None:
