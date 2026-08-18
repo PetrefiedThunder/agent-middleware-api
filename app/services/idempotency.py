@@ -568,6 +568,16 @@ class IdempotencyService:
                                     ColumnElement[bool],
                                     LedgerEntryModel.operation_key == record.record_id,
                                 ),
+                                # Compensation proof means money left the
+                                # wallet. The wallet/operation-key uniqueness
+                                # constraint already makes a same-key credit
+                                # impossible alongside the debit, but stating
+                                # the direction here means this pass can never
+                                # adopt a credit as evidence of a charge.
+                                cast(
+                                    ColumnElement[bool],
+                                    LedgerEntryModel.amount < 0,
+                                ),
                             )
                         )
                     ).scalar_one_or_none()

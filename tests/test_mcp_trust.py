@@ -10,7 +10,12 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.db.database import get_session_factory
-from app.db.models import IdempotencyRecordModel, ReceiptModel, WalletModel
+from app.db.models import (
+    IdempotencyRecordModel,
+    LedgerEntryModel,
+    ReceiptModel,
+    WalletModel,
+)
 from app.main import app
 from app.schemas.billing import ServiceCategory
 from app.services.idempotency import (
@@ -1479,3 +1484,51 @@ async def test_reconcile_flags_orphaned_local_debit_without_a_receipt(
         assert (repaired, needs_review) == (0, 1)
     finally:
         get_service_registry().unregister_local("crash-before-link-tool-review")
+
+
+@pytest.mark.anyio
+async def test_reconcile_refuses_a_credit_as_compensation_proof(
+    client, clean_database
+):
+    """Only a debit proves the local charge happened.
+
+    The linking pass adopts a ledger entry as evidence that money moved under
+    this identity. A credit carrying the same operation key proves the
+    opposite, so it must not be linked -- the record stays exactly as found
+    and reconciliation reports nothing, the same as when no entry exists.
+    """
+    provisioned = await provision_agent_wallet(client)
+    try:
+        idempotency_key = await _invoke_local_governed_tool(
+            client, provisioned, suffix="credit"
+        )
+        record_id = await _simulate_crash_before_ledger_link(
+            provisioned["agent_wallet_id"], idempotency_key, drop_receipt=False
+        )
+
+        factory = get_session_factory()
+        async with factory() as session:
+            entry = (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.operation_key == record_id
+                    )
+                )
+            ).scalar_one()
+            # Same key, opposite direction: a refund-shaped row, not a charge.
+            entry.amount = abs(entry.amount)
+            entry.action = "credit"
+            session.add(entry)
+            await session.commit()
+
+        idem = get_idempotency_service()
+        repaired, needs_review = await idem.reconcile_stuck_records(idle_seconds=900)
+        assert (repaired, needs_review) == (0, 0)
+
+        async with factory() as session:
+            record = await session.get(IdempotencyRecordModel, record_id)
+            assert record is not None
+            assert record.ledger_entry_id is None
+            assert record.response_json is None
+    finally:
+        get_service_registry().unregister_local("crash-before-link-tool-credit")
