@@ -360,3 +360,51 @@ async def test_a_rejected_charge_does_not_erase_another_charges_velocity(
         assert wallet.daily_spent >= debited, (
             "a rejected charge's reversal erased a concurrent charge's increment"
         )
+
+
+@pytest.mark.anyio
+async def test_a_wallet_frozen_mid_charge_is_not_debited(
+    client, clean_database, monkeypatch
+):
+    """A freeze landing after the read must still stop the debit.
+
+    ``charge`` checks ``wallet.status`` against the row it loaded at the top of
+    the transaction and writes several statements later. A freeze committing in
+    between was invisible to that check, so the debit went through — and a
+    freeze is the control that exists precisely to stop spending *now*, not at
+    the next request. Spendability therefore travels with the debit.
+    """
+    provisioned = await provision_agent_wallet(client)
+    wallet_id = provisioned["agent_wallet_id"]
+    await _set_balance(wallet_id, Decimal("100"))
+
+    money = get_agent_money()
+    real_factory = get_session_factory()
+    state: dict = {}
+
+    async def _freeze_the_wallet() -> None:
+        async with real_factory() as s:
+            async with s.begin():
+                wallet = await s.get(WalletModel, wallet_id)
+                assert wallet is not None
+                wallet.status = "frozen"
+                s.add(wallet)
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_session_factory",
+        _interleaving_factory(real_factory, _freeze_the_wallet, state, fire_on=1),
+    )
+
+    result = await money.charge(
+        wallet_id=wallet_id,
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path="/freeze-race",
+    )
+
+    assert state.get("fired"), "the interleave never ran — the test proved nothing"
+    # Refused, and nothing debited.
+    assert not hasattr(result, "entry_id"), f"a frozen wallet was debited: {result}"
+    assert await _debits(wallet_id) == Decimal("0")
+    assert await _balance(wallet_id) == Decimal("100")

@@ -409,6 +409,16 @@ class BillingEngine:
                         ),
                     ),
                 ),
+                # Spendability travels with the debit too. The status check
+                # above reads a value loaded before this statement, so a freeze
+                # landing in between would otherwise still be debited -- the
+                # freeze exists precisely to stop that.
+                cast(
+                    ColumnElement[bool],
+                    cast(Any, WalletModel.status).notin_(
+                        tuple(_NON_SPENDABLE_WALLET_STATUSES)
+                    ),
+                ),
             )
             .values(
                 balance=WalletModel.balance - charge_amount,
@@ -424,6 +434,25 @@ class BillingEngine:
             # corresponding check above would have reported it.
             await session.refresh(wallet)
             await reverse_velocity_record()
+            if wallet.status in _NON_SPENDABLE_WALLET_STATUSES:
+                # A freeze landed between the read and the write. Report it as
+                # the freeze it is, not as an empty balance.
+                return InsufficientFundsResponse(
+                    error=(
+                        "wallet_frozen"
+                        if wallet.status == WalletStatus.FROZEN.value
+                        else "insufficient_funds"
+                    ),
+                    wallet_id=wallet_id,
+                    current_balance=float(wallet.balance),
+                    current_balance_exact=str(wallet.balance),
+                    required_amount=float(charge_amount),
+                    required_amount_exact=str(charge_amount),
+                    shortfall=float(charge_amount),
+                    shortfall_exact=str(charge_amount),
+                    top_up_url="",
+                    message="Wallet is not spendable.",
+                )
             max_spend = wallet.max_spend
             if (
                 wallet.wallet_type == WalletType.CHILD.value

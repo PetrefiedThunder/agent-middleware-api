@@ -260,28 +260,41 @@ async def complete_awi_http_governed(
     try:
         await permits.reserve_budget(ctx.permit_id, ctx.credits)
     except PermitError as exc:
-        # A permit that expired or was revoked between validation and this
-        # reservation is a *denial*, not a server fault. Nothing was reserved
-        # and nothing was charged, so the caller gets the same 403 shape the
-        # up-front validation would have produced. Without this the PermitError
-        # escaped uncaught and the route answered 500, which tells an operator
-        # the service is broken when in fact the permit did its job.
+        detail = {
+            "error": exc.reason,
+            "message": exc.reason,
+            "tool": ctx.tool_name,
+        }
+        if exc.reason == "permit_write_contended":
+            # Transient: the guarded write lost to contention and exhausted its
+            # retries. Nothing was reserved and nothing was charged, so the key
+            # must stay usable -- *completing* the record here would freeze a
+            # momentary database conflict into a permanent stored denial that
+            # every retry of that idempotency key replays, long after the
+            # contention cleared. Release the key and answer 503 instead.
+            await idem.abandon(
+                wallet_id=ctx.wallet_id,
+                endpoint=ctx.endpoint,
+                idempotency_key=ctx.idempotency_key,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=detail,
+            ) from exc
+        # Terminal: a permit that expired or was revoked between validation and
+        # this reservation is a *denial*, not a server fault. Nothing was
+        # reserved and nothing was charged, so the caller gets the same 403
+        # shape the up-front validation would have produced. Without this the
+        # PermitError escaped uncaught and the route answered 500, which tells
+        # an operator the service is broken when in fact the permit did its job.
         await abort_awi_http_governed(
             ctx,
             status_code=status.HTTP_403_FORBIDDEN,
-            error_payload={
-                "error": exc.reason,
-                "message": exc.reason,
-                "tool": ctx.tool_name,
-            },
+            error_payload=detail,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "error": exc.reason,
-                "message": exc.reason,
-                "tool": ctx.tool_name,
-            },
+            detail=detail,
         ) from exc
 
     unit_price = DEFAULT_PRICING[ServiceCategory.AGENT_COMMS][1]

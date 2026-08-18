@@ -18,11 +18,9 @@ from app.core.time import utc_now
 from app.db.database import get_session_factory
 from app.db.models import (
     IdempotencyRecordModel,
-    LedgerEntryModel,
     McpDispatchAttemptModel,
     ReceiptModel,
 )
-from app.schemas.billing import LedgerAction
 from app.services.signing_keys import sha256_hex
 
 GOVERNED_MCP_IDEMPOTENCY_ENDPOINT = "/mcp/invoke"
@@ -615,107 +613,6 @@ class IdempotencyService:
                     session.add(record)
                     repaired += 1
 
-                # Third pass: a governed call that is NOT upstream MCP, whose
-                # debit committed but whose checkpoint never landed.
-                #
-                # ``money.charge()`` commits in its own transaction and
-                # ``mark_charged()`` runs in a separate one, so a crash between
-                # them leaves the wallet debited while the record still reads
-                # ``ledger_entry_id IS NULL``. Such a record matched *neither*
-                # pass above: the first requires ``operation_kind ==
-                # "upstream_mcp"``, the second requires a non-NULL
-                # ``ledger_entry_id``. It therefore sat forever and, because
-                # nothing counted it, ``needs_review`` stayed 0 -- an orphaned
-                # debit that no operator was ever told about. Unlike the
-                # read-modify-write defects elsewhere in this codebase, this one
-                # does not depend on a row lock being a no-op: it is exposed on
-                # PostgreSQL too.
-                #
-                # The debit is recoverable because governed charges carry
-                # ``operation_key = record_id``. Adopting it restores the
-                # checkpoint the crash lost, which lets the pass above resolve
-                # the record into a real replay on the next run.
-                orphaned = (
-                    (
-                        await session.execute(
-                            select(IdempotencyRecordModel)
-                            .where(
-                                cast(
-                                    ColumnElement[bool],
-                                    cast(Any, IdempotencyRecordModel.response_json).is_(
-                                        None
-                                    ),
-                                ),
-                                cast(
-                                    ColumnElement[bool],
-                                    cast(
-                                        Any, IdempotencyRecordModel.ledger_entry_id
-                                    ).is_(None),
-                                ),
-                                cast(
-                                    ColumnElement[bool],
-                                    or_(
-                                        cast(
-                                            ColumnElement[bool],
-                                            IdempotencyRecordModel.operation_kind
-                                            != "upstream_mcp",
-                                        ),
-                                        cast(
-                                            ColumnElement[bool],
-                                            cast(
-                                                Any,
-                                                IdempotencyRecordModel.operation_kind,
-                                            ).is_(None),
-                                        ),
-                                    ),
-                                ),
-                                cast(
-                                    ColumnElement[bool],
-                                    IdempotencyRecordModel.created_at < cutoff,
-                                ),
-                            )
-                            .with_for_update()
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                for record in orphaned:
-                    debit = (
-                        await session.execute(
-                            select(LedgerEntryModel).where(
-                                cast(
-                                    ColumnElement[bool],
-                                    LedgerEntryModel.wallet_id == record.wallet_id,
-                                ),
-                                cast(
-                                    ColumnElement[bool],
-                                    LedgerEntryModel.operation_key == record.record_id,
-                                ),
-                                # Adopt only an actual debit. The operation key
-                                # is unique per wallet, but naming the action
-                                # keeps a future credit sharing that key from
-                                # being mistaken for the charge we are
-                                # recovering.
-                                cast(
-                                    ColumnElement[bool],
-                                    LedgerEntryModel.action == LedgerAction.DEBIT.value,
-                                ),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if debit is None:
-                        # No debit ever committed, so there is nothing orphaned
-                        # here. Leave the record alone: the effect-free cleanup
-                        # above is deliberately scoped to the one identity whose
-                        # ordering makes deletion provably safe.
-                        continue
-                    record.ledger_entry_id = debit.entry_id
-                    session.add(record)
-                    # Surface it. The money has moved and the caller has no
-                    # replayable answer, which is precisely the state an
-                    # operator needs to see rather than a silent zero.
-                    needs_review += 1
         return repaired, needs_review
 
 
