@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import or_, select, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -368,6 +368,28 @@ class BillingEngine:
             .where(
                 cast(ColumnElement[bool], WalletModel.wallet_id == wallet_id),
                 cast(ColumnElement[bool], WalletModel.balance >= charge_amount),
+                # The delegated child-wallet lifetime cap has to travel with the
+                # debit for the same reason the balance does. Checking
+                # ``lifetime_debits + charge_amount <= max_spend`` above and
+                # incrementing here would let two concurrent charges both clear
+                # a cap only one of them fits inside, pushing a delegated wallet
+                # past the spend ceiling its parent granted it. Non-child
+                # wallets, and children with no cap set, are unconstrained.
+                cast(
+                    ColumnElement[bool],
+                    or_(
+                        cast(
+                            ColumnElement[bool],
+                            WalletModel.wallet_type != WalletType.CHILD.value,
+                        ),
+                        cast(Any, WalletModel.max_spend).is_(None),
+                        cast(
+                            ColumnElement[bool],
+                            WalletModel.lifetime_debits + charge_amount
+                            <= cast(Any, WalletModel.max_spend),
+                        ),
+                    ),
+                ),
             )
             .values(
                 balance=WalletModel.balance - charge_amount,
@@ -377,12 +399,31 @@ class BillingEngine:
             .execution_options(synchronize_session=False)
         )
         if (cast(Any, debited).rowcount or 0) != 1:
-            # Lost the race: another charge took the funds after our check.
-            # Nothing was debited, so this is the same outcome as failing the
-            # check above and is reported identically.
+            # Lost the race: a concurrent charge took the funds, or consumed the
+            # child's remaining cap, after our checks passed. Nothing was
+            # debited, so each case is reported exactly as failing the
+            # corresponding check above would have reported it.
             await session.refresh(wallet)
-            shortfall = charge_amount - wallet.balance
             reverse_velocity_record()
+            max_spend = wallet.max_spend
+            if (
+                wallet.wallet_type == WalletType.CHILD.value
+                and max_spend is not None
+                and wallet.lifetime_debits + charge_amount > max_spend
+            ):
+                remaining = max_spend - wallet.lifetime_debits
+                return InsufficientFundsResponse(
+                    wallet_id=wallet_id,
+                    current_balance=float(wallet.balance),
+                    current_balance_exact=str(wallet.balance),
+                    required_amount=float(charge_amount),
+                    required_amount_exact=str(charge_amount),
+                    shortfall=float(charge_amount - remaining),
+                    shortfall_exact=str(charge_amount - remaining),
+                    top_up_url="/v1/billing/top-up/prepare",
+                    message="Child wallet lifetime spend cap exceeded.",
+                )
+            shortfall = charge_amount - wallet.balance
             return InsufficientFundsResponse(
                 wallet_id=wallet_id,
                 current_balance=float(wallet.balance),

@@ -237,7 +237,15 @@ async def complete_awi_http_governed(
     response_payload: dict[str, Any],
     money: AgentMoney | None = None,
 ) -> dict[str, Any]:
-    """Charge wallet, reserve permit budget, write receipt, complete idempotency."""
+    """Reserve permit budget, charge wallet, write receipt, complete idempotency.
+
+    The order is load-bearing and is stated here in the order the code runs.
+    The reservation is taken **first**, so every later failure path compensates
+    by releasing it — which is exactly what the error handlers below do.
+    An earlier revision of this line named the charge first; anyone reasoning
+    about crash compensation from that reading would have had the direction of
+    the required rollback backwards.
+    """
     if ctx.replay_response is not None:
         return ctx.replay_response
 

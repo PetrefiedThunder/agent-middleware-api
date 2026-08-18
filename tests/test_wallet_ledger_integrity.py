@@ -226,3 +226,62 @@ async def test_reclaiming_a_child_twice_cannot_mint_credits(
     # The parent may gain exactly what the child held, never twice.
     assert await _balance(parent_id) == parent_before + child_before
     assert await _balance(child_id) == Decimal("0")
+
+
+@pytest.mark.anyio
+async def test_concurrent_charges_cannot_exceed_a_child_wallet_spend_cap(
+    client, clean_database, monkeypatch
+):
+    """A delegated child may not be pushed past the cap its parent granted.
+
+    ``lifetime_debits + charge_amount <= max_spend`` was checked against a
+    value read earlier and the increment happened several statements later, so
+    two concurrent charges both cleared a cap only one of them fits inside.
+    The child then spends more than the authority it was delegated — which is
+    the whole point of ``max_spend``, not an accounting detail.
+
+    Raised by review on #305 after the balance guard landed: the balance and
+    the cap are two separate predicates, and fixing one does not carry the
+    other.
+    """
+    money = get_agent_money()
+    provisioned = await provision_agent_wallet(client)
+    parent_id = provisioned["agent_wallet_id"]
+    await _set_balance(parent_id, Decimal("1000"))
+    child = await money.create_child_wallet(
+        parent_wallet_id=parent_id,
+        child_agent_id="cap-race-child",
+        budget_credits=Decimal("100"),
+        # Plenty of balance, but only enough cap for a single charge.
+        max_spend=Decimal("2"),
+        task_description="cap-race",
+    )
+    child_id = child.wallet_id
+
+    real_factory = get_session_factory()
+    state: dict = {}
+
+    async def _concurrent_charge() -> None:
+        state["second"] = await money.charge(
+            wallet_id=child_id,
+            service_category=ServiceCategory.AGENT_COMMS,
+            units=Decimal("1"),
+            request_path="/cap-race-b",
+        )
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_session_factory",
+        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+    )
+
+    state["first"] = await money.charge(
+        wallet_id=child_id,
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path="/cap-race-a",
+    )
+
+    assert state.get("fired"), "the interleave never ran — the test proved nothing"
+    # Whatever mix of success and refusal, the delegated ceiling holds.
+    assert await _debits(child_id) <= Decimal("2")

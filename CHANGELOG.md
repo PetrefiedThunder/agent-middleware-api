@@ -317,6 +317,25 @@ full release gate; do not backfill a final `v1.2.0` tag.
 
 ### 🔒 Security
 
+- **An orphaned local debit is no longer invisible.** `money.charge()` commits
+  in its own transaction and `mark_charged()` runs in a separate one, so a
+  crash between them leaves the wallet debited while the idempotency record
+  still reads `ledger_entry_id IS NULL`. Such a record matched **neither**
+  reconciler pass — the effect-free cleanup requires
+  `operation_kind == "upstream_mcp"`, the charged-but-stuck repair requires a
+  non-NULL `ledger_entry_id` — so it sat forever and `needs_review` stayed 0.
+  Money had moved and no operator was ever told. **Unlike the read-modify-write
+  fixes below, this one does not depend on a row lock being a no-op: it is
+  exposed on PostgreSQL too.** Governed charges carry
+  `operation_key = record_id`, so the debit is still findable; the reconciler
+  now adopts it and raises it for review.
+- **The child-wallet lifetime spend cap is enforced by the database.**
+  `lifetime_debits + charge_amount <= max_spend` was checked against an earlier
+  read while the increment happened later, so concurrent charges could push a
+  delegated wallet past the ceiling its parent granted. The cap now travels
+  with the debit as its own predicate. (Raised by review on #305 — the balance
+  guard and the cap are separate predicates, and fixing one did not carry the
+  other.)
 - **Every wallet money move is now decided by the database too.** The same
   read-modify-write shape as the permit fixes below, in the paths that hold
   actual credits. All were serialized only by `SELECT ... FOR UPDATE`, a
