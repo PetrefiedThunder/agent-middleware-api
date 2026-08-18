@@ -4,8 +4,8 @@ Typed async client for the governed MCP trust loop:
 
 `discover → authenticate → authorize → invoke → meter → receipt → audit → govern`
 
-CI builds version `0.4.0` as wheel and source artifacts. Pushing the
-`python-sdk-v0.4.0` tag attaches them to a GitHub release. The package is not
+CI builds version `0.5.0` as wheel and source artifacts. Pushing the
+`python-sdk-v0.5.0` tag attaches them to a GitHub release. The package is not
 published to PyPI.
 
 ## Installation
@@ -13,7 +13,7 @@ published to PyPI.
 Install a downloaded release wheel:
 
 ```bash
-python -m pip install ./b2a_sdk-0.4.0-py3-none-any.whl
+python -m pip install ./b2a_sdk-0.5.0-py3-none-any.whl
 ```
 
 For repository development:
