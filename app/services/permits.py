@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,6 +24,8 @@ from app.db.models import (
 )
 from app.schemas.trust import PermitCreateRequest, PermitResponse
 from app.services.signing_keys import get_signing_key_service
+
+logger = logging.getLogger(__name__)
 
 
 class PermitError(RuntimeError):
@@ -994,7 +997,13 @@ class PermitService:
         reclaiming their budget can never enable an over-spend. A crashed
         reservation on a still-active permit is left conservatively in place
         (the agent can spend *less* than authorized, never more) and is
-        reclaimed once the permit expires. Returns the number corrected.
+        reclaimed once the permit expires.
+
+        Returns the number of permits corrected. A permit whose guarded repair
+        matched no row -- a concurrent reservation moved ``spent_credits``
+        between the receipt scan and the write -- is *not* counted, is left
+        exactly as found, and is re-examined on the next pass; those skips are
+        logged rather than returned, so the count stays a count of writes.
         """
         from app.db.models import (
             IdempotencyRecordModel,
@@ -1011,6 +1020,7 @@ class PermitService:
         cutoff = now - timedelta(seconds=idle_seconds)
         factory = get_session_factory()
         corrected = 0
+        skipped = 0
         async with factory() as session:
             async with session.begin():
                 stale = (
@@ -1228,7 +1238,23 @@ class PermitService:
                         )
                         if (cast(Any, repaired).rowcount or 0) == 1:
                             corrected += 1
+                        else:
+                            skipped += 1
             await session.commit()
+        if skipped:
+            # A skipped permit is not a failure and needs no operator action --
+            # it is re-examined on the next pass, and the guard is the whole
+            # point (a concurrent reservation landed, so this pass's recomputed
+            # figure is already out of date). It is logged because the return
+            # value counts only repairs: without this line a pass that skipped
+            # every permit is indistinguishable from a pass that found nothing
+            # to repair, and a permit that never stops being skipped -- the
+            # signature of a hot permit under sustained contention -- would
+            # never surface anywhere.
+            logger.info(
+                "permit_budget_reconcile_skipped",
+                extra={"skipped": skipped, "corrected": corrected},
+            )
         return corrected
 
     async def verify_signature(self, model: PermitModel) -> bool:

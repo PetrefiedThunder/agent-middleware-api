@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -215,9 +216,38 @@ async def test_reconcile_budgets_does_not_erase_a_concurrent_reservation(
         lambda: (lambda: _InterleavingFactory(real_factory())),
     )
 
+    # Observe the service's own logger object rather than stdlib capture:
+    # tests/test_migrations.py runs Alembic in-process, and migrations/env.py
+    # calls logging.config.fileConfig, which disables every logger created
+    # before it -- app.services.permits included. That is a test-ordering
+    # artifact (production runs migrations in a separate process, see
+    # scripts/docker_entrypoint.sh), but it makes handler- or caplog-based
+    # capture depend on which test ran first. Recording the call itself does
+    # not.
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _RecordingLogger:
+        def __getattr__(self, name):
+            return getattr(permits_module.logger, name)
+
+        def info(self, event, *args, **kwargs):
+            calls.append((event, kwargs.get("extra") or {}))
+
+    monkeypatch.setattr(permits_module, "logger", _RecordingLogger())
+
     corrected = await get_permit_service().reconcile_budgets(idle_seconds=1)
 
     # The concurrent value survives; the stale repair is skipped, not applied.
     assert fired["done"], "the interleave never ran — the test proved nothing"
     assert await _spent(permit.permit_id) == Decimal("9")
     assert corrected == 0
+
+    # A skip is correct, but it must not be silent: the return value counts
+    # only writes, so a pass that skipped everything and a pass that found
+    # nothing to do are the same number. The log is what tells them apart.
+    skips = [
+        extra for event, extra in calls if event == "permit_budget_reconcile_skipped"
+    ]
+    assert skips, "the skipped repair was not reported anywhere"
+    assert skips[0].get("skipped") == 1
+    assert skips[0].get("corrected") == 0

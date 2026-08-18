@@ -24,6 +24,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from ..db.database import get_session_factory
 from ..db.models import BillingAlertModel, LedgerEntryModel, WalletModel
 from ..core.config import get_settings
+from ..core.time import utc_now
 from ..schemas.billing import AlertSeverity, AlertType, WalletStatus
 from .agent_money import WalletNotFoundError
 
@@ -421,6 +422,15 @@ class StripeIntegration:
                         .values(
                             balance=WalletModel.balance - refund_delta,
                             lifetime_debits=WalletModel.lifetime_debits + refund_delta,
+                            # WalletModel.updated_at has a default but no
+                            # onupdate, and a Core UPDATE bypasses the ORM
+                            # attribute write, so nothing advances it here
+                            # unless it is set. A fiat clawback is the most
+                            # consequential balance move the wallet sees; it
+                            # must not be the one that leaves the row looking
+                            # untouched. Every other balance-moving wallet
+                            # UPDATE in this codebase sets it.
+                            updated_at=utc_now(),
                         )
                         .execution_options(synchronize_session=False)
                     )
