@@ -317,6 +317,35 @@ full release gate; do not backfill a final `v1.2.0` tag.
 
 ### 🔒 Security
 
+- **Every wallet money move is now decided by the database too.** The same
+  read-modify-write shape as the permit fixes below, in the paths that hold
+  actual credits. All were serialized only by `SELECT ... FOR UPDATE`, a
+  silent no-op on SQLite:
+  - `charge` read the balance, checked it, and several statements later wrote
+    back `balance - amount` computed from that read. A charge committing in
+    between was **overwritten**: the ledger recorded the debit but the balance
+    never reflected it, so that request was served for free and the books
+    stopped balancing. The debit is now one guarded UPDATE that repeats
+    `balance >= amount` as its own predicate.
+  - `reclaim_child_wallet` read the child's balance, zeroed the child, and
+    credited the parent by the amount it had read. Two concurrent reclaims
+    each credited the parent in full — **minting credits that never existed**.
+    The child's balance is now claimed by a guarded UPDATE before any of it
+    reaches the parent.
+  - Refund credits (`refund_charge`, and the operator repair in
+    `refund_reconciliation`) wrote absolute totals, so one of two concurrent
+    refunds was lost outright — the customer's money.
+  - The velocity counters `hourly_spent` / `daily_spent` accumulated by
+    read-modify-write. Under-counting there does not skew a metric; it is what
+    the spend cap and the anomaly auto-freeze are measured against, so **both
+    controls silently stopped firing** exactly when spend was most concurrent.
+  - The Stripe cumulative-refund clawback wrote a balance derived from an
+    earlier read, against fiat Stripe had already returned.
+  - `refund_reconciliation` also mutated `permit.spent_credits` directly,
+    outside the module that guarantees every such write is guarded. That
+    guarantee is only as good as its weakest caller.
+  - New `app/db/sql_expressions.py` holds the shared clamped-decrement
+    expression, so the safe form is defined once rather than re-derived.
 - **Every permit budget write is now decided by the database, not by a value
   this process read earlier.** Three paths in `permits.py` wrote
   `spent_credits` from a stale read, serialized only by `SELECT ... FOR

@@ -13,12 +13,13 @@ Architecture:
 import json
 import logging
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from uuid import uuid4
 
 import stripe
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..db.database import get_session_factory
 from ..db.models import BillingAlertModel, LedgerEntryModel, WalletModel
@@ -402,8 +403,30 @@ class StripeIntegration:
                             payment_intent_id,
                         )
                         return
-                    wallet.balance -= refund_delta
-                    wallet.lifetime_debits += refund_delta
+                    # Apply the clawback relatively, in one statement. The
+                    # cumulative arithmetic above already makes *this* event
+                    # idempotent, but the write itself was still a
+                    # read-modify-write: a charge landing on the same sponsor
+                    # wallet between the read and the write is silently erased,
+                    # and here that discrepancy is against real fiat Stripe has
+                    # already returned.
+                    await session.execute(
+                        sa_update(WalletModel)
+                        .where(
+                            cast(
+                                ColumnElement[bool],
+                                WalletModel.wallet_id == credit_entry.wallet_id,
+                            )
+                        )
+                        .values(
+                            balance=WalletModel.balance - refund_delta,
+                            lifetime_debits=WalletModel.lifetime_debits + refund_delta,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                    # The liability and freeze decision below turn on the
+                    # balance this clawback produced, so read it back first.
+                    await session.refresh(wallet)
                     refund_liability = max(Decimal("0"), -wallet.balance)
                     wallet_status_before_refund = wallet.status
                     wallet_frozen_for_liability = False

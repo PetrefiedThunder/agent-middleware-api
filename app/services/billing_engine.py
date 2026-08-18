@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -21,6 +21,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from ..core.config import Settings
 from ..core.time import utc_now
 from ..db.converters import billing_alert_model_to_schema, ledger_entry_model_to_schema
+from ..db.sql_expressions import clamped_decrement
 from ..db.models import (
     BillingAlertModel,
     IdempotencyRecordModel,
@@ -353,9 +354,50 @@ class BillingEngine:
                 top_up_url="/v1/billing/top-up/prepare",
             )
 
-        wallet.balance -= charge_amount
-        wallet.lifetime_debits += charge_amount
-        wallet.updated_at = utc_now()
+        # Apply the debit as a single guarded UPDATE. The balance check above is
+        # a fast path for the common case; it is *not* what makes the debit
+        # safe, because reading the balance in one statement and writing it in
+        # another is a read-modify-write. ``SELECT ... FOR UPDATE`` above is a
+        # silent no-op on SQLite, so two concurrent charges both read the same
+        # balance, both clear the check, and both decrement -- the wallet is
+        # overdrawn by the second charge and the service is delivered twice.
+        # Repeating ``balance >= charge_amount`` inside the statement makes the
+        # database, not this process, decide whether the funds were there.
+        debited = await session.execute(
+            sa_update(WalletModel)
+            .where(
+                cast(ColumnElement[bool], WalletModel.wallet_id == wallet_id),
+                cast(ColumnElement[bool], WalletModel.balance >= charge_amount),
+            )
+            .values(
+                balance=WalletModel.balance - charge_amount,
+                lifetime_debits=WalletModel.lifetime_debits + charge_amount,
+                updated_at=utc_now(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if (cast(Any, debited).rowcount or 0) != 1:
+            # Lost the race: another charge took the funds after our check.
+            # Nothing was debited, so this is the same outcome as failing the
+            # check above and is reported identically.
+            await session.refresh(wallet)
+            shortfall = charge_amount - wallet.balance
+            reverse_velocity_record()
+            return InsufficientFundsResponse(
+                wallet_id=wallet_id,
+                current_balance=float(wallet.balance),
+                current_balance_exact=str(wallet.balance),
+                required_amount=float(charge_amount),
+                required_amount_exact=str(charge_amount),
+                shortfall=float(shortfall),
+                shortfall_exact=str(shortfall),
+                top_up_url="/v1/billing/top-up/prepare",
+            )
+        # The guarded UPDATE bypassed the identity map, so the in-memory wallet
+        # still holds the pre-debit balance. Re-read it before anything derives
+        # a number from it -- the ledger's ``balance_after`` in particular has
+        # to be the balance this debit actually produced.
+        await session.refresh(wallet)
 
         entry = LedgerEntryModel(
             entry_id=str(uuid.uuid4()),
@@ -608,18 +650,25 @@ class BillingEngine:
                     return ledger_entry_model_to_schema(existing_refund)
 
                 refund_amount = abs(charge_entry.amount)
-                wallet.balance += refund_amount
-                wallet.lifetime_debits = max(
-                    Decimal("0"),
-                    wallet.lifetime_debits - refund_amount,
-                )
+                # Credit relatively, in one statement, for the same reason the
+                # debit does. Two refunds for *different* charges landing
+                # together each read the same balance and each write their own
+                # total, so one credit is silently lost -- and a lost credit is
+                # the customer's money. The duplicate-refund guard above does
+                # not help here: these are distinct, legitimate refunds.
+                refund_values: dict[str, Any] = {
+                    "balance": WalletModel.balance + refund_amount,
+                    "lifetime_debits": clamped_decrement(
+                        WalletModel.lifetime_debits, refund_amount
+                    ),
+                    "updated_at": utc_now(),
+                }
                 if _timestamp_in_current_period(
                     charge_entry.timestamp,
                     wallet.hourly_reset_at,
                 ):
-                    wallet.hourly_spent = max(
-                        Decimal("0"),
-                        wallet.hourly_spent - refund_amount,
+                    refund_values["hourly_spent"] = clamped_decrement(
+                        WalletModel.hourly_spent, refund_amount
                     )
                 if _timestamp_in_current_period(
                     charge_entry.timestamp,
@@ -627,11 +676,22 @@ class BillingEngine:
                 ):
                     # daily_spent is incremented exactly once per charge (by the
                     # velocity monitor), so reverse exactly one increment.
-                    wallet.daily_spent = max(
-                        Decimal("0"),
-                        wallet.daily_spent - refund_amount,
+                    refund_values["daily_spent"] = clamped_decrement(
+                        WalletModel.daily_spent, refund_amount
                     )
-                wallet.updated_at = utc_now()
+                await session.execute(
+                    sa_update(WalletModel)
+                    .where(
+                        cast(
+                            ColumnElement[bool], WalletModel.wallet_id == wallet_id
+                        )
+                    )
+                    .values(**refund_values)
+                    .execution_options(synchronize_session=False)
+                )
+                # ``balance_after`` below must be the balance this refund
+                # produced, not the one read before it.
+                await session.refresh(wallet)
 
                 entry = LedgerEntryModel(
                     entry_id=refund_entry_id,
