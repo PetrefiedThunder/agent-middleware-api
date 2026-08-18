@@ -31,6 +31,33 @@ full release gate; do not backfill a final `v1.2.0` tag.
   production-like environments, and a regression test asserts it stays
   accepted there.
 
+### 🧾 Metering and velocity hardening
+
+- **A rejected charge no longer decrements a velocity period it never
+  contributed to.** The hourly and daily counters roll over independently, and
+  a rollover between the increment and its reversal left the reversal taking
+  credits off the *new* period's total. Each counter is now reversed under the
+  period marker it was recorded against, separately, so a rolled daily window
+  cannot suppress an hourly reversal that is still owed. The direction is the
+  point: an over-count throttles a caller who did not spend and heals at the
+  next rollover, while an under-count silently raises the effective spend cap
+  and delays the anomaly auto-freeze.
+- **`/v1/billing/charge` answers 404 for an unknown wallet** instead of letting
+  `WalletNotFoundError` escape as a 500 — the six other endpoints in that
+  router already did.
+- **Non-finite `units` are refused**, at the query boundary
+  (`allow_inf_nan=False`) and again in `BillingEngine.charge`, which the
+  governed MCP path and the SDK reach without passing the router. `gt=0` does
+  not exclude an infinite float, and one reaching a write would put a
+  non-finite amount in the ledger that no reconciliation can remove.
+- **Four guarded writes from the previous release gained the regression tests
+  they shipped without**: the `refund_charge` credit, `_apply_refund`, the
+  operator refund's permit release, and the Stripe fiat clawback. Each was
+  confirmed to fail against the read-modify-write it replaced.
+- Tests that force a concurrent writer into an open transaction are now skipped
+  when `DATABASE_URL` names a real-locking engine. They depend on the lock
+  being a no-op; against a real one they would hang rather than fail.
+
 ### 🔌 Standard `/mcp` endpoint now served by the official MCP SDK
 
 - **The opt-in `POST /mcp` endpoint no longer hand-rolls JSON-RPC.** The
