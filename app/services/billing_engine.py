@@ -448,10 +448,13 @@ class BillingEngine:
                     current_balance_exact=str(wallet.balance),
                     required_amount=float(charge_amount),
                     required_amount_exact=str(charge_amount),
-                    shortfall=float(charge_amount),
-                    shortfall_exact=str(charge_amount),
+                    # A freeze blocks spending regardless of balance, so this
+                    # is not a balance deficit -- matching the non-race frozen
+                    # path above, which also reports zero.
+                    shortfall=0.0,
+                    shortfall_exact="0",
                     top_up_url="",
-                    message="Wallet is not spendable.",
+                    message=f"Wallet is {wallet.status} and cannot be charged.",
                 )
             max_spend = wallet.max_spend
             if (

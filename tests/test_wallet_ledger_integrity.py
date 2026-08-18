@@ -406,5 +406,9 @@ async def test_a_wallet_frozen_mid_charge_is_not_debited(
     assert state.get("fired"), "the interleave never ran — the test proved nothing"
     # Refused, and nothing debited.
     assert not hasattr(result, "entry_id"), f"a frozen wallet was debited: {result}"
+    # A freeze is not a balance deficit: the refusal must not report a shortfall.
+    assert getattr(result, "error", None) == "wallet_frozen"
+    assert result.shortfall == 0.0
+    assert result.shortfall_exact == "0"
     assert await _debits(wallet_id) == Decimal("0")
     assert await _balance(wallet_id) == Decimal("100")
