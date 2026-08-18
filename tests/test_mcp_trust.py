@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.db.database import get_session_factory
-from app.db.models import IdempotencyRecordModel, WalletModel
+from app.db.models import IdempotencyRecordModel, ReceiptModel, WalletModel
 from app.main import app
 from app.schemas.billing import ServiceCategory
 from app.services.idempotency import (
@@ -1327,3 +1327,155 @@ async def test_insufficient_funds_returns_receipt_and_replays_without_charge(
             assert wallet.lifetime_debits == lifetime_debits_before
     finally:
         registry.unregister_local("broke-guard-tool")
+
+
+async def _simulate_crash_before_ledger_link(
+    wallet_id: str, idempotency_key: str, *, drop_receipt: bool
+) -> str:
+    """Reproduce the crash window between the committed debit and the link.
+
+    A governed local call charges with ``operation_key=record_id`` and only
+    afterwards writes ``ledger_entry_id`` onto the idempotency record. A crash
+    in that gap leaves the debit committed and the record unlinked, which is
+    the state this helper recreates from a call that actually completed.
+    Returns the record id.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        record = (
+            await session.execute(
+                select(IdempotencyRecordModel).where(
+                    IdempotencyRecordModel.wallet_id == wallet_id,
+                    IdempotencyRecordModel.endpoint
+                    == GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+                    IdempotencyRecordModel.idempotency_key == idempotency_key,
+                )
+            )
+        ).scalar_one()
+        record_id = record.record_id
+        # The debit stays committed and still carries operation_key=record_id.
+        record.response_json = None
+        record.response_reference = None
+        record.ledger_entry_id = None
+        record.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        session.add(record)
+        if drop_receipt:
+            for receipt in (
+                (
+                    await session.execute(
+                        select(ReceiptModel).where(
+                            ReceiptModel.idempotency_record_id == record_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            ):
+                await session.delete(receipt)
+        await session.commit()
+    return record_id
+
+
+async def _invoke_local_governed_tool(client, provisioned, *, suffix: str) -> str:
+    """Drive one successful governed local tool call; returns its idem key.
+
+    The caller is responsible for unregistering ``crash-before-link-tool-*``;
+    leaving it registered leaks into unrelated tool-listing tests.
+    """
+    registry = get_service_registry()
+    tool = f"crash-before-link-tool-{suffix}"
+
+    def _tool() -> dict:
+        return {"ok": True}
+
+    registry.register_local(
+        service_id=tool,
+        name="Crash Before Link Tool",
+        description="Governed trust reconciliation test tool",
+        category=ServiceCategory.AGENT_COMMS,
+        func=_tool,
+        credits_per_unit=2.0,
+        unit_name="call",
+    )
+    permit = await create_tool_permit(
+        client,
+        wallet_id=provisioned["agent_wallet_id"],
+        key_id=provisioned["key_id"],
+        tool_name=tool,
+        idem_key=f"crash-before-link-permit-{suffix}",
+    )
+    idempotency_key = f"crash-before-link-invoke-{suffix}"
+    resp = await client.post(
+        "/mcp/messages",
+        json={
+            "jsonrpc": "2.0",
+            "id": f"crash-before-link-{suffix}",
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": {},
+                "mcpContext": {
+                    "wallet_id": provisioned["agent_wallet_id"],
+                    "permit_id": permit["permit_id"],
+                    "idempotency_key": idempotency_key,
+                },
+            },
+        },
+        headers=provisioned["agent_headers"],
+    )
+    assert resp.status_code == 200
+    return idempotency_key
+
+
+@pytest.mark.anyio
+async def test_reconcile_links_orphaned_local_debit_and_repairs_it(
+    client, clean_database
+):
+    """A local governed crash before the ledger link must not be invisible.
+
+    The unstarted pass is scoped to operation_kind="upstream_mcp" and the
+    stuck pass requires ledger_entry_id IS NOT NULL, so a local record with a
+    committed debit and no link matched neither: it stuck forever and
+    needs_review stayed 0. The debit carries operation_key=record_id, so the
+    reconciler can adopt it and repair from the receipt.
+    """
+    provisioned = await provision_agent_wallet(client)
+    try:
+        idempotency_key = await _invoke_local_governed_tool(
+            client, provisioned, suffix="repair"
+        )
+        await _simulate_crash_before_ledger_link(
+            provisioned["agent_wallet_id"], idempotency_key, drop_receipt=False
+        )
+
+        idem = get_idempotency_service()
+        repaired, needs_review = await idem.reconcile_stuck_records(idle_seconds=900)
+        assert (repaired, needs_review) == (1, 0)
+    finally:
+        get_service_registry().unregister_local("crash-before-link-tool-repair")
+
+
+@pytest.mark.anyio
+async def test_reconcile_flags_orphaned_local_debit_without_a_receipt(
+    client, clean_database
+):
+    """The same crash window with no receipt yet must be surfaced, not lost.
+
+    This is the case that most needs an operator: real money moved and there
+    is no evidence row to rebuild the response from. It previously counted
+    zero on both sides, so nothing ever revealed it.
+    """
+    provisioned = await provision_agent_wallet(client)
+    try:
+        idempotency_key = await _invoke_local_governed_tool(
+            client, provisioned, suffix="review"
+        )
+        await _simulate_crash_before_ledger_link(
+            provisioned["agent_wallet_id"], idempotency_key, drop_receipt=True
+        )
+
+        idem = get_idempotency_service()
+        repaired, needs_review = await idem.reconcile_stuck_records(idle_seconds=900)
+        assert (repaired, needs_review) == (0, 1)
+    finally:
+        get_service_registry().unregister_local("crash-before-link-tool-review")
