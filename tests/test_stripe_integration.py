@@ -14,6 +14,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.time import utc_now
+from tests.conftest import requires_sqlite_row_lock_noop
 from app.main import app
 from app.services.stripe_integration import StripeIntegration, StripeSettlementError
 
@@ -487,6 +488,7 @@ class TestStripeWebhookIdempotency:
                 f"{wallet.updated_at}, the value set before it ran"
             )
 
+    @requires_sqlite_row_lock_noop
     @pytest.mark.anyio
     async def test_a_concurrent_charge_cannot_vanish_under_a_refund_clawback(
         self, client, sponsor_wallet, api_headers, monkeypatch

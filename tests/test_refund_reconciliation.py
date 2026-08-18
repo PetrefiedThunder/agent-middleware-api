@@ -25,6 +25,7 @@ from app.services.refund_reconciliation import (
 )
 from app.services.receipts import ReceiptService
 from app.services.service_registry import get_service_registry
+from tests.conftest import requires_sqlite_row_lock_noop
 from tests.test_trust_helpers import (
     BOOTSTRAP_HEADERS,
     create_tool_permit,
@@ -758,6 +759,7 @@ async def test_tampered_signed_receipt_cannot_authorize_refund(
     assert all(entry["action"] != "refund" for entry in ledger.json()["entries"])
 
 
+@requires_sqlite_row_lock_noop
 @pytest.mark.anyio
 async def test_operator_refund_release_cannot_erase_a_concurrent_reservation(
     client,

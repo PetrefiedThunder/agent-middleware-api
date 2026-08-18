@@ -30,6 +30,7 @@ from app.main import app
 from app.schemas.trust import PermitCreateRequest
 from app.services.permits import PermitError, get_permit_service
 from tests.test_trust_helpers import provision_agent_wallet
+from tests.conftest import requires_sqlite_row_lock_noop
 
 
 @pytest.fixture
@@ -140,6 +141,7 @@ async def test_reserve_budget_still_denies_a_genuine_cap_breach(
     assert await _spent(permit.permit_id) == Decimal("4")
 
 
+@requires_sqlite_row_lock_noop
 @pytest.mark.anyio
 async def test_reconcile_budgets_does_not_erase_a_concurrent_reservation(
     client, clean_database, enforce_naive_utc_datetime_columns, monkeypatch

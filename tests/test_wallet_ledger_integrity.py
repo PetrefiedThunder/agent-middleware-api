@@ -31,6 +31,14 @@ from app.schemas.billing import ServiceCategory
 from app.services.agent_money import get_agent_money
 from tests.test_trust_helpers import provision_agent_wallet
 
+from tests.conftest import requires_sqlite_row_lock_noop
+
+# Every test in this module forces a concurrent writer into an open
+# transaction, which is only a *concurrent* writer while the row lock is a
+# no-op. See the marker's definition for why these are skipped rather than
+# adapted on other engines.
+pytestmark = requires_sqlite_row_lock_noop
+
 
 @pytest.fixture
 async def client():

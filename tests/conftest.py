@@ -125,6 +125,35 @@ os.environ.setdefault("ALLOW_LEGACY_UNPERMITTED_MCP", "true")
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "1000000")
 
 
+def running_on_sqlite() -> bool:
+    """True when this run's ``DATABASE_URL`` names SQLite.
+
+    ``DATABASE_URL`` above is a ``setdefault``, so exporting one before pytest
+    points the whole suite at another engine. Tests that force a concurrent
+    writer into the middle of an open transaction need to know: on SQLite the
+    surrounding ``SELECT ... FOR UPDATE`` is a silent no-op and the second
+    writer proceeds, which is exactly the condition those tests exist to
+    exercise. On PostgreSQL the lock is real, so the second writer waits for a
+    transaction that cannot commit until the second writer returns, and the
+    test hangs rather than fails.
+    """
+    from app.core.db_urls import is_sqlite_url
+
+    return is_sqlite_url(os.environ.get("DATABASE_URL", ""))
+
+
+#: Guard for tests whose interleave depends on the row lock being a no-op.
+#: They are skipped, not adapted: their subject is what happens when nothing
+#: serializes the writers, which is not a state PostgreSQL can be put into.
+requires_sqlite_row_lock_noop = pytest.mark.skipif(
+    not running_on_sqlite(),
+    reason=(
+        "forces a concurrent writer inside an open transaction; needs the "
+        "SQLite no-op row lock, and would deadlock against a real one"
+    ),
+)
+
+
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
