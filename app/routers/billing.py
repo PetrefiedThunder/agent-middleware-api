@@ -62,6 +62,47 @@ def _require_wallet_access(auth: AuthContext, wallet_id: str) -> None:
     auth.require_wallet_access(wallet_id)
 
 
+def _session_not_found(session_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "error": "session_not_found",
+            "message": f"Session {session_id} not found",
+        },
+    )
+
+
+async def _load_owned_dry_run_session(
+    shadow_ledger, session_id: str, auth: AuthContext
+):
+    """Load a dry-run session, or 404 — whether it is missing or not the caller's.
+
+    Every dry-run session endpoint used to look the session up, 404 if it was
+    absent, and only then call ``_require_wallet_access``. That order makes the
+    surface an oracle: a caller holding any valid wallet-scoped key gets 404 for
+    an invented session id and 403 for a real one, so the two are
+    distinguishable without any access at all.
+
+    Worse, the 403 body carries ``session.wallet_id`` — the *owning* wallet —
+    so probing another tenant's session id disclosed that tenant's wallet id
+    outright. Session ids are UUID4 and cannot be enumerated, but an id learned
+    from a log, a trace, or a shared URL was enough.
+
+    A session the caller may not see is now indistinguishable from one that
+    does not exist. Authorized callers are unaffected.
+    """
+    session = await shadow_ledger.get_session(session_id)
+    if not session:
+        raise _session_not_found(session_id)
+    try:
+        _require_wallet_access(auth, session.wallet_id)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            raise _session_not_found(session_id) from None
+        raise
+    return session
+
+
 @dataclass
 class _IdempotencyGuard:
     """Opt-in replay protection for a state-changing money endpoint.
@@ -1364,18 +1405,7 @@ async def get_dry_run_session(
 ):
     """Get the current state of a dry-run session."""
     shadow_ledger = get_shadow_ledger()
-    session = await shadow_ledger.get_session(session_id)
-
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": "session_not_found",
-                "message": f"Session {session_id} not found",
-            },
-        )
-
-    _require_wallet_access(auth, session.wallet_id)
+    session = await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     return {
         "session_id": session.session_id,
         "wallet_id": session.wallet_id,
@@ -1411,16 +1441,7 @@ async def end_dry_run_session(
 ):
     """End a dry-run session and return summary."""
     shadow_ledger = get_shadow_ledger()
-    session = await shadow_ledger.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": "session_not_found",
-                "message": f"Session {session_id} not found",
-            },
-        )
-    _require_wallet_access(auth, session.wallet_id)
+    await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     summary = await shadow_ledger.end_session(session_id)
     if summary is None:
         # Session existed above but is gone by the time we tried to end it
@@ -1467,16 +1488,7 @@ async def commit_dry_run_session(
     The session is ended after committing.
     """
     shadow_ledger = get_shadow_ledger()
-    session = await shadow_ledger.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": "session_not_found",
-                "message": f"Session {session_id} not found",
-            },
-        )
-    _require_wallet_access(auth, session.wallet_id)
+    await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     result = await shadow_ledger.commit_session(session_id, money)
 
     return {
@@ -1513,16 +1525,7 @@ async def revert_dry_run_session(
     The session is ended after reverting.
     """
     shadow_ledger = get_shadow_ledger()
-    session = await shadow_ledger.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": "session_not_found",
-                "message": f"Session {session_id} not found",
-            },
-        )
-    _require_wallet_access(auth, session.wallet_id)
+    await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     result = await shadow_ledger.revert_session(session_id)
 
     return {
@@ -1556,16 +1559,7 @@ async def simulate_charge(
 
     if session_id:
         shadow_ledger = get_shadow_ledger()
-        session = await shadow_ledger.get_session(session_id)
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": "session_not_found",
-                    "message": f"Session {session_id} not found",
-                },
-            )
-        _require_wallet_access(auth, session.wallet_id)
+        session = await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
         result = await shadow_ledger.simulate_charge(
             session_id=session_id,
             service_category=request.service,

@@ -31,6 +31,22 @@ full release gate; do not backfill a final `v1.2.0` tag.
   production-like environments, and a regression test asserts it stays
   accepted there.
 
+### 🔒 A dry-run session no longer confirms another tenant's session exists
+
+- **`403` where a `404` was due.** Every `/v1/billing/dry-run/session`
+  endpoint looked the session up first and checked wallet access second, so a
+  caller holding any valid wallet-scoped key got `404` for an invented session
+  id and `403` for a real one — enough to tell them apart with no access at
+  all. The `403` body also carried the session's *owning* `wallet_id`,
+  disclosing another tenant's wallet id outright.
+- A session the caller may not see now answers exactly as one that does not
+  exist, on all five endpoints that accept a session id (`GET`, `DELETE`,
+  `commit`, `revert`, and `dry-run/charge`). Authorized callers are
+  unaffected — a regression test pins that the owner still reads its own
+  session.
+- Session ids are UUID4 and cannot be enumerated, so exploiting this needed an
+  id learned elsewhere (a log, a trace, a shared URL).
+
 ### 🧾 Metering and velocity hardening
 
 - **A rejected charge no longer decrements a velocity period it never

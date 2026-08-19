@@ -1502,3 +1502,116 @@ async def test_charge_without_a_service_category_is_refused(
         f"/v1/billing/ledger/{agent_wallet_id}", headers=api_headers
     )
     assert [e for e in ledger_resp.json()["entries"] if e["action"] == "debit"] == []
+
+
+
+@pytest.mark.anyio
+async def test_dry_run_session_does_not_leak_another_tenants_session(
+    client, api_headers, clean_database
+):
+    """A session belonging to another wallet answers as if it did not exist.
+
+    The dry-run session endpoints look the session up first and check wallet
+    access second. Reporting those two failures differently made the surface an
+    oracle: a caller holding any valid wallet-scoped key got 404 for an
+    invented session id and 403 for a real one, so the two were
+    distinguishable with no access at all. The 403 body also carried
+    ``session.wallet_id`` — the *owning* wallet — so probing another tenant's
+    session id disclosed that tenant's wallet id outright.
+
+    Session ids are UUID4 and cannot be enumerated, so the exposure needs an id
+    learned some other way (a log, a trace, a shared URL). That is a narrow
+    door, not a closed one, and the repository requires that tenant A cannot
+    reach tenant B's data.
+    """
+    tenant_a = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Tenant A",
+            "email": "tenant-a-sessions@t.com",
+            "initial_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_a = tenant_a.json()["wallet_id"]
+    tenant_b = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Tenant B",
+            "email": "tenant-b-sessions@t.com",
+            "initial_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_b = tenant_b.json()["wallet_id"]
+
+    key_resp = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_a, "key_name": "tenant-a-key"},
+        headers=api_headers,
+    )
+    assert key_resp.status_code == 201, key_resp.text
+    a_headers = {"X-API-Key": key_resp.json()["api_key"]}
+
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": wallet_b},
+        headers=api_headers,
+    )
+    assert session_resp.status_code == 201, session_resp.text
+    b_session = session_resp.json()["session_id"]
+    unknown_session = "sess-does-not-exist"
+
+    # Every endpoint that takes a session id, on the same terms. `charge` is
+    # included because it reaches the same lookup through a body field rather
+    # than a path parameter.
+    probes = (
+        ("GET", "/v1/billing/dry-run/session/{sid}", None),
+        ("DELETE", "/v1/billing/dry-run/session/{sid}", None),
+        ("POST", "/v1/billing/dry-run/session/{sid}/commit", {}),
+        ("POST", "/v1/billing/dry-run/session/{sid}/revert", {}),
+    )
+    for method, template, body in probes:
+        responses = []
+        for sid in (b_session, unknown_session):
+            kwargs = {"headers": a_headers}
+            if body is not None:
+                kwargs["json"] = body
+            responses.append(
+                await client.request(method, template.format(sid=sid), **kwargs)
+            )
+        theirs, absent = responses
+        assert theirs.status_code == 404, f"{method} {template}: {theirs.text}"
+        assert absent.status_code == 404, f"{method} {template}: {absent.text}"
+        assert theirs.json()["detail"]["error"] == "session_not_found"
+        # The owning wallet must not appear anywhere in the refusal.
+        assert wallet_b not in theirs.text, f"{method} {template} leaked wallet_b"
+
+    for sid in (b_session, unknown_session):
+        charge = await client.post(
+            "/v1/billing/dry-run/charge",
+            json={
+                "wallet_id": wallet_a,
+                "service": "iot_bridge",
+                "units": 1,
+                "dry_run_session_id": sid,
+            },
+            headers=a_headers,
+        )
+        assert charge.status_code == 404, charge.text
+        assert charge.json()["detail"]["error"] == "session_not_found"
+        assert wallet_b not in charge.text
+
+    # The owner is unaffected: a wallet-scoped key still reaches its own
+    # session. Without this the fix could "pass" by refusing everyone.
+    own_key = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_b, "key_name": "tenant-b-key"},
+        headers=api_headers,
+    )
+    b_headers = {"X-API-Key": own_key.json()["api_key"]}
+    own = await client.get(
+        f"/v1/billing/dry-run/session/{b_session}", headers=b_headers
+    )
+    assert own.status_code == 200, own.text
+    assert own.json()["wallet_id"] == wallet_b
