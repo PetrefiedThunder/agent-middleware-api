@@ -1578,3 +1578,41 @@ def test_arcade_pauses_the_particle_field_rather_than_racing_it() -> None:
         "wave.js no longer observes its canvas, so hiding it would leave the "
         "renderer running behind the arcade"
     )
+
+
+def test_arcade_modal_contains_focus_and_input() -> None:
+    """The waiting room must own the keyboard while it is open — and only then.
+
+    Three regressions this pins, all found in review of the first cut:
+
+    * Starting a cabinet hides the button that had focus. Without somewhere
+      inside the dialog to put it, focus falls to ``body`` and the next Tab
+      lands on the page's skip link — which is a body-level sibling of the
+      landmarks this makes inert, and paints *above* the overlay.
+    * Space is the fire button during play, but on the menus it is how a
+      keyboard user presses a cabinet or PLAY AGAIN. Swallowing it there makes
+      the arcade mouse-only.
+    * ``frame()`` clears ``rafId`` on entry, so a ``startLoop()`` called from
+      inside it (the boot screen's hand-off to cabinet select) passes the
+      "already running" guard and a second loop starts that ``stopLoop()``
+      cannot reach.
+    """
+
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+
+    assert re.search(r'setAttribute\("tabindex", "0"\)', arcade), (
+        "the cabinet screen is not focusable, so focus has nowhere to go when "
+        "starting a cabinet hides the cabinet buttons"
+    )
+    assert 'querySelector(".skip-link")' in arcade, (
+        "the skip link is not made inert with the rest of the page; it is the "
+        "one tabbable control that sits outside the inert landmarks"
+    )
+    assert re.search(r'if \(screen !== "play"\) return;', arcade), (
+        "game keys are captured on the menus too, so Space cannot activate a "
+        "focused cabinet button"
+    )
+    assert re.search(r"screen !== \"over\" && !rafId", arcade), (
+        "the frame loop reschedules without checking whether something else "
+        "already did, which double-schedules requestAnimationFrame"
+    )

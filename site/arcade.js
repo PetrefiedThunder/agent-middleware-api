@@ -963,6 +963,18 @@
   var lastFocus = null;
   var announceTimer = 0;
 
+  var swipeFrom = null;
+  /* A tap's pointerdown and pointerup can both land inside one animation
+     frame, and the simulation only samples input once per fixed step — so a
+     raw "true on down, false on up" fire would be invisible to the game about
+     as often as not. A tap therefore latches fire for a few steps, and the
+     three sources (key held, pointer held, tap pulse) are tracked separately
+     so releasing one cannot cancel another. */
+  var FIRE_PULSE_STEPS = 4;
+  var pointerHeld = false;
+  var pointerFireSteps = 0;
+  var keyFire = false;
+
   var input = {
     left: false,
     right: false,
@@ -1050,7 +1062,11 @@
     nodes.stage.appendChild(hud);
 
     nodes.canvas = el("canvas", "arcade-canvas");
-    nodes.canvas.setAttribute("role", "img");
+    // Focusable and role="application": the running cabinet consumes arrow
+    // keys and space itself, and focus has to land somewhere inside the
+    // dialog when the cabinet-select buttons are hidden on start.
+    nodes.canvas.setAttribute("role", "application");
+    nodes.canvas.setAttribute("tabindex", "0");
     nodes.canvas.setAttribute("aria-label", "Arcade cabinet screen");
     nodes.stage.appendChild(nodes.canvas);
 
@@ -1077,25 +1093,102 @@
     doc.body.appendChild(overlay);
 
     nodes.ctx = nodes.canvas.getContext("2d");
-    overlay.addEventListener("keydown", trapFocus);
     nodes.canvas.addEventListener("pointermove", onPointer);
-    nodes.canvas.addEventListener("pointerdown", onPointer);
+    nodes.canvas.addEventListener("pointerdown", onPointerDown);
+    nodes.canvas.addEventListener("pointerup", releasePointer);
+    nodes.canvas.addEventListener("pointercancel", releasePointer);
     nodes.canvas.addEventListener("pointerleave", function () {
+      releasePointer();
       input.pointerX = null;
       input.pointerY = null;
     });
   }
 
-  function onPointer(event) {
+  /* ---- pointer and touch -------------------------------------------------
+
+     A phone has no arrow keys and no space bar, so the pointer has to carry
+     all three verbs: position (drag), fire (tap), and direction (swipe). The
+     cabinets that read a position prefer pointerX/pointerY over the direction
+     flags, so latching a swipe direction here cannot fight a drag there. */
+  var SWIPE_MIN = 10; // logical px before a drag counts as a swipe
+
+  function canvasPoint(event) {
     var rect = nodes.canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    input.pointerX = ((event.clientX - rect.left) / rect.width) * W;
-    input.pointerY = ((event.clientY - rect.top) / rect.height) * H;
+    if (!rect.width || !rect.height) return null;
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * W,
+      y: ((event.clientY - rect.top) / rect.height) * H
+    };
   }
 
+  function clearDirections() {
+    input.left = false;
+    input.right = false;
+    input.up = false;
+    input.down = false;
+  }
+
+  function onPointerDown(event) {
+    var point = canvasPoint(event);
+    if (!point) return;
+    input.pointerX = point.x;
+    input.pointerY = point.y;
+    swipeFrom = point;
+    // A tap is the fire button: it denies a scope and serves a request.
+    pointerHeld = true;
+    pointerFireSteps = FIRE_PULSE_STEPS;
+    input.fire = true;
+    if (screen === "play" && nodes.canvas.focus) nodes.canvas.focus();
+  }
+
+  function onPointer(event) {
+    var point = canvasPoint(event);
+    if (!point) return;
+    input.pointerX = point.x;
+    input.pointerY = point.y;
+    if (!swipeFrom) return;
+    var dx = point.x - swipeFrom.x;
+    var dy = point.y - swipeFrom.y;
+    if (Math.abs(dx) < SWIPE_MIN && Math.abs(dy) < SWIPE_MIN) return;
+    // Latch the dominant axis and re-anchor, so a long drag can turn more
+    // than once. Cabinets that steer by held direction read this; the rest
+    // ignore it in favour of the position above.
+    clearDirections();
+    if (Math.abs(dx) > Math.abs(dy)) {
+      input[dx > 0 ? "right" : "left"] = true;
+    } else {
+      input[dy > 0 ? "down" : "up"] = true;
+    }
+    swipeFrom = point;
+  }
+
+  function releasePointer() {
+    swipeFrom = null;
+    pointerHeld = false;
+    if (!keyFire && pointerFireSteps <= 0) input.fire = false;
+  }
+
+  /* Run once per simulation step, before the cabinet reads input, so a tap's
+     pulse is measured in steps the game actually took rather than in
+     wall-clock time it may have slept through. */
+  function advanceInput() {
+    if (pointerFireSteps > 0) {
+      pointerFireSteps -= 1;
+      if (pointerFireSteps === 0 && !pointerHeld && !keyFire) input.fire = false;
+    }
+  }
+
+  /* ---- focus containment -------------------------------------------------
+
+     The page's skip link sits at body level, outside the regions this makes
+     inert, and above the overlay in the stacking order, so a Tab that escaped
+     would land on a control the visitor cannot even see. Containment is
+     therefore handled at the document, not on the overlay: once focus is out
+     — which happens whenever starting a cabinet hides the button that had it
+     — an overlay-scoped listener would never run again. */
   function focusables() {
     return Array.prototype.filter.call(
-      overlay.querySelectorAll("button, a[href]"),
+      overlay.querySelectorAll("button, a[href], canvas[tabindex]"),
       function (node) {
         return !node.disabled && node.offsetParent !== null;
       }
@@ -1103,11 +1196,15 @@
   }
 
   function trapFocus(event) {
-    if (event.key !== "Tab") return;
     var list = focusables();
     if (!list.length) return;
     var first = list[0];
     var last = list[list.length - 1];
+    if (!overlay.contains(doc.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+      return;
+    }
     if (event.shiftKey && doc.activeElement === first) {
       event.preventDefault();
       last.focus();
@@ -1166,7 +1263,11 @@
   }
 
   function setBackgroundInert(on) {
+    // The skip link is a body-level sibling rather than part of any of these
+    // landmarks, so listing only the landmarks would leave exactly one
+    // tabbable control outside the dialog.
     var regions = [
+      doc.querySelector(".skip-link"),
       doc.querySelector(".site-nav"),
       doc.getElementById("main"),
       doc.querySelector(".site-footer")
@@ -1252,12 +1353,35 @@
     nodes.over.hidden = true;
     nodes.stage.hidden = false;
     nodes.hudName.textContent = cabinet.name;
-    nodes.hint.textContent = cabinet.controls + " · P pause · ESC exit";
+    nodes.hint.textContent =
+      cabinet.controls + touchHint(cabinet) + " · P pause · ESC exit";
     nodes.canvas.setAttribute("aria-label", cabinet.name + " — " + cabinet.tagline);
     resizeCanvas();
     updateHud();
+    clearDirections();
+    clearPointerAim();
+    input.fire = false;
+    pointerHeld = false;
+    pointerFireSteps = 0;
+    keyFire = false;
+    // Starting a cabinet hides the button that had focus, which would drop
+    // focus to the body and let the next Tab leave the dialog. The screen
+    // itself takes it instead — it is the control now.
+    nodes.canvas.focus();
     startLoop();
     announce(cabinet.name + " started. " + cabinet.controls);
+  }
+
+  /* Touch verbs differ per cabinet, and a phone visitor has no way to guess
+     them from a line that only names keys. */
+  function touchHint(cabinet) {
+    var coarse =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+    if (!coarse) return "";
+    if (cabinet.id === "append-only") return " · or swipe to steer";
+    if (cabinet.id === "race-condition") return " · or drag to move";
+    return " · or drag to move, tap to fire";
   }
 
   function updateHud() {
@@ -1335,6 +1459,7 @@
         accumulator += dt;
         var steps = 0;
         while (accumulator >= STEP && steps < MAX_CATCHUP) {
+          advanceInput();
           game.update(STEP, input);
           accumulator -= STEP;
           steps += 1;
@@ -1357,7 +1482,13 @@
       }
     }
 
-    if (isOpen && screen !== "over") rafId = window.requestAnimationFrame(frame);
+    // Only reschedule if nothing already did. tickBoot's hand-off to the
+    // select screen calls startLoop() from inside this very frame, where
+    // rafId has already been zeroed — without this guard that leaves two
+    // loops running and stopLoop() able to cancel only the newer one.
+    if (isOpen && screen !== "over" && !rafId) {
+      rafId = window.requestAnimationFrame(frame);
+    }
   }
 
   function render() {
@@ -1413,6 +1544,10 @@
 
   function onKeyDown(event) {
     if (!isOpen) return;
+    if (event.key === "Tab") {
+      trapFocus(event);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       closeArcade();
@@ -1425,18 +1560,42 @@
       return;
     }
     var slot = KEYS[event.key];
-    if (slot) {
-      // Arrow keys and space scroll the page underneath otherwise.
-      event.preventDefault();
-      input[slot] = true;
-      input.pointerX = null;
-      input.pointerY = null;
-    }
+    if (!slot) return;
+    // Only a running cabinet claims the game keys. On the menus they belong
+    // to the browser, or Space could never choose a cabinet or press PLAY
+    // AGAIN — both of which are buttons the keyboard has to be able to
+    // activate.
+    if (screen !== "play") return;
+    var onControl =
+      event.target &&
+      typeof event.target.closest === "function" &&
+      event.target.closest("button, a[href]");
+    if (slot === "fire" && onControl) return;
+    // Arrow keys and space scroll the page underneath otherwise.
+    event.preventDefault();
+    if (slot === "fire") keyFire = true;
+    input[slot] = true;
+    clearPointerAim();
+  }
+
+  /* Keyboard reclaims aim from the pointer: a cabinet that reads pointerX
+     would otherwise pin the player where the mouse was last seen. */
+  function clearPointerAim() {
+    input.pointerX = null;
+    input.pointerY = null;
+    swipeFrom = null;
   }
 
   function onKeyUp(event) {
     var slot = KEYS[event.key];
-    if (slot) input[slot] = false;
+    if (!slot) return;
+    if (slot === "fire") {
+      keyFire = false;
+      // A pointer may still be holding fire, or a tap's pulse may still be
+      // owed steps; releasing the key must not cancel either.
+      if (pointerHeld || pointerFireSteps > 0) return;
+    }
+    input[slot] = false;
   }
 
   doc.addEventListener("keydown", onKeyDown);
@@ -1492,6 +1651,7 @@
     step: function (count) {
       var n = count || 1;
       for (var i = 0; i < n && game && !game.over; i += 1) {
+        advanceInput();
         game.update(STEP, input);
       }
       if (game && nodes.ctx) {
@@ -1510,7 +1670,18 @@
         lives: game ? game.lives : 0,
         over: game ? game.over : false,
         paused: paused,
-        reducedMotion: prefersStaticMotion()
+        reducedMotion: prefersStaticMotion(),
+        // What the cabinet is actually being told, so a check can prove a tap
+        // or a swipe arrived rather than inferring it from a score.
+        keys: {
+          left: input.left,
+          right: input.right,
+          up: input.up,
+          down: input.down,
+          fire: input.fire,
+          pointerX: input.pointerX,
+          pointerY: input.pointerY
+        }
       };
     }
   };
