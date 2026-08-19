@@ -1869,3 +1869,108 @@ async def test_revert_does_not_claim_success_after_a_concurrent_commit(
     assert resp.json()["detail"]["error"] == "session_not_found"
     # Nothing in the refusal may claim the revert happened.
     assert "reverted" not in resp.text
+
+
+@pytest.mark.anyio
+async def test_a_simulated_charge_cannot_resurrect_a_claimed_session(
+    client, api_headers, clean_database
+):
+    """A simulation must not write back a session a terminal operation claimed.
+
+    ``simulate_charge`` reads the session, mutates it, and writes it back. A
+    commit claiming in between used to leave that write-back facing a session
+    that no longer exists, with two symptoms by engine:
+
+    * **Redis** — the unconditional ``setex`` *recreated* the key, with every
+      simulated charge intact. The committed session came back to life and
+      could be committed again, applying the same charges to the real wallet
+      twice. This is the production configuration.
+    * **memory** — ``self._memory_store[session_id]`` raised ``KeyError``,
+      which escaped the router as a 500.
+
+    Both now refuse: the write is conditional on the session still existing
+    (``xx=True`` on Redis, a ``.get()`` guard in memory) and the caller is told
+    the session is gone, which the router answers as 404 like every other
+    session-gone path.
+
+    Only the memory symptom is exercised here. The Redis path has no fake
+    client in this suite and adding one is a dependency this test does not
+    justify, so that half is argued from the same code path rather than run.
+    """
+    from app.services import shadow_ledger as shadow_ledger_module
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Resurrect",
+            "email": "resurrect-session@t.com",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    agent = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor.json()["wallet_id"],
+            "agent_id": "resurrect-bot",
+            "budget_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_id = agent.json()["wallet_id"]
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    assert session_resp.status_code == 201, session_resp.text
+    session_id = session_resp.json()["session_id"]
+
+    ledger = shadow_ledger_module.get_shadow_ledger()
+    original_get_redis = ledger._get_redis
+    state: dict = {"calls": 0}
+
+    async def commit_at_the_write_back():
+        """Claim the session at the seam between the read and the write.
+
+        Through the router the lookups are: (1) the ownership check's
+        ``get_session``, (2) ``simulate_charge``'s own ``get_session``, and
+        (3) the write-back. Only the third lands the commit *after* the read
+        and the mutation, which is the sole window where the write-back can
+        resurrect anything -- firing earlier just reproduces the ordinary
+        missing-session path, which already answered 404 before this fix.
+        """
+        state["calls"] += 1
+        if state["calls"] == 3 and "fired" not in state:
+            state["fired"] = True
+            state["commit"] = await ledger.commit_session(session_id, get_agent_money())
+        return await original_get_redis()
+
+    ledger._get_redis = commit_at_the_write_back
+    try:
+        resp = await client.post(
+            "/v1/billing/dry-run/charge",
+            json={
+                "wallet_id": wallet_id,
+                "service": "iot_bridge",
+                "units": 2,
+                "dry_run_session_id": session_id,
+            },
+            headers=api_headers,
+        )
+    finally:
+        ledger._get_redis = original_get_redis
+
+    assert "fired" in state, "the commit never landed; the window was missed"
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"]["error"] == "session_not_found"
+
+    # The session stays dead. If the write-back had resurrected it, it would
+    # still be committable — and its charges applied to the wallet twice.
+    assert await ledger.get_session(session_id) is None
+    recommit = await client.post(
+        f"/v1/billing/dry-run/session/{session_id}/commit",
+        json={},
+        headers=api_headers,
+    )
+    assert recommit.status_code == 404, recommit.text

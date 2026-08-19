@@ -439,13 +439,29 @@ class ShadowLedger:
                     ],
                     "created_at": session.created_at.isoformat(),
                 }
-                await redis_client.setex(
+                # ``xx=True``: write only if the key still exists. A terminal
+                # operation (commit/end/revert) can claim the session between
+                # the read above and this write, and an unconditional ``setex``
+                # would *recreate* it -- with every simulated charge intact,
+                # so it could be committed a second time and the same charges
+                # applied to the real wallet twice.
+                wrote = await redis_client.set(
                     await self._session_key(session_id),
-                    SESSION_TTL_SECONDS,
                     json.dumps(session_data),
+                    ex=SESSION_TTL_SECONDS,
+                    xx=True,
                 )
+                if not wrote:
+                    raise ValueError(f"Session not found: {session_id}")
             else:
-                self._memory_store[session_id]["session"] = session
+                # Same window, different symptom: the claim popped the entry,
+                # so ``self._memory_store[session_id]`` raised ``KeyError`` and
+                # escaped the router as a 500. Refuse the same way the Redis
+                # path does rather than resurrecting or crashing.
+                entry = self._memory_store.get(session_id)
+                if entry is None:
+                    raise ValueError(f"Session not found: {session_id}")
+                entry["session"] = session
 
             logger.debug(
                 f"Simulated charge {charge_id}: {charge_amount} credits "

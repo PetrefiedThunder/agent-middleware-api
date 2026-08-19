@@ -1578,17 +1578,27 @@ async def simulate_charge(
     if session_id:
         shadow_ledger = get_shadow_ledger()
         session = await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
-        result = await shadow_ledger.simulate_charge(
-            session_id=session_id,
-            service_category=request.service,
-            units=request.units,
-            description=request.description or "",
-            blocked_reason=(
-                "wallet_expired"
-                if await money.wallet_is_expired(session.wallet_id)
-                else None
-            ),
-        )
+        try:
+            result = await shadow_ledger.simulate_charge(
+                session_id=session_id,
+                service_category=request.service,
+                units=request.units,
+                description=request.description or "",
+                blocked_reason=(
+                    "wallet_expired"
+                    if await money.wallet_is_expired(session.wallet_id)
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            # The session was claimed by a terminal operation between the
+            # ownership check and the simulation's write-back. Answered like
+            # every other session-gone path here rather than escaping as a
+            # 500 -- which is what the ``KeyError`` from the memory store used
+            # to do.
+            if "Session not found" not in str(exc):
+                raise
+            raise _session_not_found(session_id) from None
         await _record_billing_governance(
             event="billing.dry_run",
             auth=auth,
