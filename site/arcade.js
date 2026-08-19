@@ -1655,8 +1655,19 @@
     close: closeArcade,
     start: startGame,
     select: showSelect,
+    /* Buttons only. pointerX/pointerY live on the same object but hold a
+       number or null, and coercing them with !! would pin a cabinet's player
+       at the clamp floor instead of the requested position — use aim(). */
     press: function (name, down) {
-      if (Object.prototype.hasOwnProperty.call(input, name)) input[name] = !!down;
+      if (name === "pointerX" || name === "pointerY") return false;
+      if (!Object.prototype.hasOwnProperty.call(input, name)) return false;
+      input[name] = !!down;
+      if (name === "fire") keyFire = !!down;
+      return true;
+    },
+    aim: function (x, y) {
+      input.pointerX = typeof x === "number" ? x : null;
+      input.pointerY = typeof y === "number" ? y : null;
     },
     /* Advance the simulation deterministically, bypassing wall-clock timing so
        automated checks never race a frame budget. */

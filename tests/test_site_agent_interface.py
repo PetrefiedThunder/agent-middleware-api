@@ -1451,12 +1451,20 @@ def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
         "a button inside no form still defaults to submit in some engines"
     )
 
-    # Both assets ship, carry the shared cache token, and are cached like every
-    # other static asset.
+    # Both assets ship, are cached like every other static asset, and carry the
+    # *same* token the rest of the page does. Merely requiring some token would
+    # let the arcade sit on a stale one through a bump and serve week-old bytes
+    # to returning visitors — which is the exact failure the manual token
+    # exists to prevent. Comparing against styles.css rather than hard-coding
+    # the current value keeps this from being one more literal to bump.
+    shared_token = re.search(r'href="/styles\.css\?v=([^"]+)"', markup)
+    assert shared_token, "index.html no longer references /styles.css with a token"
     for asset in ("/arcade.js", "/arcade.css"):
-        assert re.search(
-            rf'(?:src|href)="{re.escape(asset)}\?v=[^"]+"', markup
-        ), f"index.html does not reference {asset} with a cache token"
+        expected = f'{asset}?v={shared_token.group(1)}"'
+        assert f'src="{expected}' in markup or f'href="{expected}' in markup, (
+            f"index.html does not reference {asset} with the page's "
+            f"?v={shared_token.group(1)} cache token"
+        )
         assert (output / asset.lstrip("/")).is_file(), f"{asset} was not published"
 
     config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
@@ -1471,6 +1479,27 @@ def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
     )
     assert any("arcade.css" in source for source in cached_sources), (
         "arcade.css has no long-lived cache rule"
+    )
+
+    # Negative paths for the ?arcade= entry point. pytest cannot execute the
+    # renderer, so what is asserted here are the guards those paths depend on;
+    # the behaviour itself is exercised in a browser (all four cabinet ids open
+    # their cabinet, 1/true open the selector, an unknown id falls back to the
+    # selector rather than a blank stage, and an empty or absent value leaves
+    # the arcade closed and the funnel untouched).
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+    assert 'if (!cabinet) return;' in arcade, (
+        "startGame does not guard an unknown cabinet id, so ?arcade=<typo> "
+        "would strand the visitor on an empty stage"
+    )
+    assert 'requested !== "1" && requested !== "true"' in arcade, (
+        "?arcade=1 no longer just opens the arcade at cabinet select"
+    )
+    # The debug handle must not let a caller coerce an aim into a boolean:
+    # pointerX/pointerY hold a number or null, and !!160 would pin a cabinet's
+    # player at its clamp floor instead of the requested position.
+    assert 'if (name === "pointerX" || name === "pointerY") return false;' in arcade, (
+        "press() still accepts the pointer axes, which it would coerce to a boolean"
     )
 
     # Landing page only: the proof and comparison pages are where a buyer is
