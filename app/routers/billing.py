@@ -1490,6 +1490,19 @@ async def commit_dry_run_session(
     shadow_ledger = get_shadow_ledger()
     await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     result = await shadow_ledger.commit_session(session_id, money)
+    if not result.wallet_id:
+        # The session was there for the ownership check above and gone by the
+        # time we claimed it. ``end_dry_run_session`` already 404s on the same
+        # window; without this, commit answers 200 with ``success: false`` and
+        # a caller reading only the status code records a commit that never
+        # happened.
+        #
+        # Keyed on the empty ``wallet_id`` rather than on ``success``, because
+        # ``commit_session`` also reports ``success: false`` when the charges
+        # themselves fail (insufficient funds, say). That is a real answer
+        # about a real session and must stay a 200 — 404-ing it would claim
+        # the session never existed.
+        raise _session_not_found(session_id)
 
     return {
         "session_id": result.session_id,
@@ -1527,6 +1540,11 @@ async def revert_dry_run_session(
     shadow_ledger = get_shadow_ledger()
     await _load_owned_dry_run_session(shadow_ledger, session_id, auth)
     result = await shadow_ledger.revert_session(session_id)
+    if not result.wallet_id:
+        # Same window as commit: present for the ownership check, gone before
+        # the revert. A missing session is ``revert_session``'s only failure
+        # mode, so an unset wallet id means exactly that.
+        raise _session_not_found(session_id)
 
     return {
         "session_id": result.session_id,

@@ -1504,7 +1504,6 @@ async def test_charge_without_a_service_category_is_refused(
     assert [e for e in ledger_resp.json()["entries"] if e["action"] == "debit"] == []
 
 
-
 @pytest.mark.anyio
 async def test_dry_run_session_does_not_leak_another_tenants_session(
     client, api_headers, clean_database
@@ -1583,7 +1582,16 @@ async def test_dry_run_session_does_not_leak_another_tenants_session(
         theirs, absent = responses
         assert theirs.status_code == 404, f"{method} {template}: {theirs.text}"
         assert absent.status_code == 404, f"{method} {template}: {absent.text}"
+        # Both, not just `theirs`. Asserting the error code on one of them
+        # would let a change that answered 404 with a *different* code for the
+        # unknown session pass, which is the distinction this test exists to
+        # forbid. Byte equality is unavailable because the message echoes the
+        # session id, so normalise that out and compare the rest.
         assert theirs.json()["detail"]["error"] == "session_not_found"
+        assert absent.json()["detail"]["error"] == "session_not_found"
+        assert theirs.text.replace(b_session, "SID") == absent.text.replace(
+            unknown_session, "SID"
+        ), f"{method} {template}: bodies differ beyond the echoed session id"
         # The owning wallet must not appear anywhere in the refusal.
         assert wallet_b not in theirs.text, f"{method} {template} leaked wallet_b"
 
@@ -1609,9 +1617,149 @@ async def test_dry_run_session_does_not_leak_another_tenants_session(
         json={"wallet_id": wallet_b, "key_name": "tenant-b-key"},
         headers=api_headers,
     )
+    assert own_key.status_code == 201, own_key.text
     b_headers = {"X-API-Key": own_key.json()["api_key"]}
     own = await client.get(
         f"/v1/billing/dry-run/session/{b_session}", headers=b_headers
     )
     assert own.status_code == 200, own.text
     assert own.json()["wallet_id"] == wallet_b
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["commit", "revert"])
+async def test_dry_run_session_lost_mid_operation_is_a_404(
+    client, api_headers, clean_database, monkeypatch, operation
+):
+    """A session that vanishes between the ownership check and the operation.
+
+    ``commit_session`` and ``revert_session`` do not raise when the session is
+    gone — they return a result object with ``wallet_id`` unset. The router
+    used to hand that straight back as a **200**, so a commit that committed
+    nothing answered OK with ``success: false``. A caller reading the status
+    code would record a commit that never happened. ``end_dry_run_session``
+    already 404s on the identical window.
+
+    The window is between two awaits and could not be forced through HTTP —
+    two concurrent commits are both caught by the ownership check, because the
+    winner removes the session before the loser's check runs. So the service
+    is driven into exactly the state the guard exists for, which tests the
+    branch rather than the race.
+    """
+    from app.services import shadow_ledger as shadow_ledger_module
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Lost Session",
+            "email": f"lost-session-{operation}@t.com",
+            "initial_credits": 1000,
+        },
+        headers=api_headers,
+    )
+    wallet_id = sponsor.json()["wallet_id"]
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    assert session_resp.status_code == 201, session_resp.text
+    session_id = session_resp.json()["session_id"]
+
+    ledger = shadow_ledger_module.get_shadow_ledger()
+    method = f"{operation}_session"
+    original = getattr(ledger, method)
+
+    async def vanished(*args, **kwargs):
+        """Return what the service really returns once the session is gone."""
+        await ledger.end_session(session_id)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(ledger, method, vanished)
+
+    resp = await client.post(
+        f"/v1/billing/dry-run/session/{session_id}/{operation}",
+        json={},
+        headers=api_headers,
+    )
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"]["error"] == "session_not_found"
+
+
+@pytest.mark.anyio
+async def test_a_failed_commit_is_not_reported_as_a_missing_session(
+    client, api_headers, clean_database
+):
+    """A commit that fails on funds is a real answer about a real session.
+
+    ``commit_session`` reports ``success: false`` for two unrelated reasons:
+    the session is gone, and the charges themselves failed. The 404 guard keys
+    on the unset ``wallet_id`` precisely so this second case keeps its 200 —
+    404-ing it would tell the caller the session never existed, when it exists
+    and the commit is merely unaffordable.
+
+    Reaching it needs a charge that fits when simulated and does not when
+    committed, so the wallet is drained *between* the two: 100 credits, a
+    4-credit simulation, then a real 98-credit debit, leaving 2.
+    """
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Broke Commit",
+            "email": "broke-commit@t.com",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    agent = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor.json()["wallet_id"],
+            "agent_id": "broke-commit-bot",
+            "budget_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_id = agent.json()["wallet_id"]
+
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    assert session_resp.status_code == 201, session_resp.text
+    session_id = session_resp.json()["session_id"]
+
+    simulated = await client.post(
+        "/v1/billing/dry-run/charge",
+        json={
+            "wallet_id": wallet_id,
+            "service": "iot_bridge",
+            "units": 2,
+            "dry_run_session_id": session_id,
+        },
+        headers=api_headers,
+    )
+    assert simulated.status_code == 200, simulated.text
+    assert simulated.json()["would_succeed"] is True, simulated.text
+
+    drain = await client.post(
+        f"/v1/billing/charge?wallet_id={wallet_id}&service=iot_bridge&units=49",
+        headers=api_headers,
+    )
+    assert drain.status_code == 200, drain.text
+    assert drain.json()["balance_after"] == 2.0, drain.text
+
+    resp = await client.post(
+        f"/v1/billing/dry-run/session/{session_id}/commit",
+        json={},
+        headers=api_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is False, body
+    assert body["committed_charges"] == 0, body
+    assert "insufficient_funds" in body["message"], body
+    # The session is named, not denied. This is the assertion the guard could
+    # break: keying the 404 on ``success`` instead of ``wallet_id`` fails here.
+    assert body["wallet_id"] == wallet_id
