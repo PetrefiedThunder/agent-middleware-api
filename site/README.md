@@ -176,7 +176,13 @@ Analytics for the Vercel project first, then set the environment variable.
 ## Deployment
 
 Keep `vercel.json`; this change intentionally does not migrate configuration
-formats. The linked Vercel project uses `site/` as its root directory and runs
+formats.
+
+If a merge to `main` ever fails to produce a production deployment (observed
+2026-08-19: the push built and passed CI on GitHub while Vercel never started
+a production build — a missed webhook), use **Redeploy** on the latest `main`
+deployment in the Vercel dashboard. HTML carries no long-lived cache rule, so
+the fix is visible as soon as the deployment is promoted. The linked Vercel project uses `site/` as its root directory and runs
 the stdlib-only `python3 build_site.py` command before serving `dist/`. The
 dependency-free `package.json` gives Vercel's static builder an explicit build
 entrypoint; without it, a standalone JavaScript asset can be mistaken for the
