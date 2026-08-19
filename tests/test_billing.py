@@ -4,6 +4,7 @@ Validates the full money flow: sponsor wallets → agent provisioning →
 micro-metering → 402 insufficient funds → top-ups → arbitrage reporting.
 """
 
+import asyncio
 import pytest
 from datetime import timedelta
 from decimal import Decimal
@@ -1974,3 +1975,191 @@ async def test_a_simulated_charge_cannot_resurrect_a_claimed_session(
         headers=api_headers,
     )
     assert recommit.status_code == 404, recommit.text
+
+
+class _FakeRedis:
+    """The eight Redis calls ``ShadowLedger`` makes, over plain dicts.
+
+    Every method yields with ``asyncio.sleep(0)`` before touching state. That
+    is the whole point: against a real server each call is a network round
+    trip, so another task can run between any two of them. Without the yield
+    the fake would serialise everything and quietly hide the races these
+    tests exist to catch.
+
+    Hand-rolled rather than pulled in as a dependency — the surface is eight
+    methods and the repository does not otherwise need a Redis test double.
+    """
+
+    def __init__(self):
+        self.kv: dict = {}
+        self.sets: dict = {}
+        self.on_get = None
+        self.on_set = None
+
+    async def ping(self):
+        await asyncio.sleep(0)
+        return True
+
+    async def get(self, key):
+        await asyncio.sleep(0)
+        if self.on_get is not None:
+            hook, self.on_get = self.on_get, None
+            await hook()
+        return self.kv.get(key)
+
+    async def getdel(self, key):
+        await asyncio.sleep(0)
+        return self.kv.pop(key, None)
+
+    async def set(self, key, value, ex=None, xx=False):
+        await asyncio.sleep(0)
+        if self.on_set is not None:
+            hook, self.on_set = self.on_set, None
+            await hook()
+        if xx and key not in self.kv:
+            return None
+        self.kv[key] = value
+        return True
+
+    async def setex(self, key, ttl, value):
+        await asyncio.sleep(0)
+        self.kv[key] = value
+        return True
+
+    async def delete(self, key):
+        await asyncio.sleep(0)
+        return 1 if self.kv.pop(key, None) is not None else 0
+
+    async def sadd(self, key, member):
+        await asyncio.sleep(0)
+        self.sets.setdefault(key, set()).add(member)
+
+    async def smembers(self, key):
+        await asyncio.sleep(0)
+        return set(self.sets.get(key, set()))
+
+    async def srem(self, key, member):
+        await asyncio.sleep(0)
+        self.sets.get(key, set()).discard(member)
+
+
+@pytest.fixture
+def redis_backed_shadow_ledger():
+    """Point the shared ShadowLedger at the fake, and restore it after."""
+    from app.services import shadow_ledger as shadow_ledger_module
+
+    ledger = shadow_ledger_module.get_shadow_ledger()
+    fake = _FakeRedis()
+    saved_client, saved_url = ledger._redis, ledger._redis_url
+    ledger._redis, ledger._redis_url = fake, "redis://fake"
+    try:
+        yield ledger, fake
+    finally:
+        ledger._redis, ledger._redis_url = saved_client, saved_url
+
+
+@pytest.mark.anyio
+async def test_two_concurrent_end_sessions_do_not_both_succeed(
+    client, api_headers, clean_database, redis_backed_shadow_ledger
+):
+    """Only one terminal operation may claim a session — proved on Redis.
+
+    This is the property that closes the revert/commit window, and until now
+    it was argued rather than tested: against the in-memory store there is no
+    suspension point between a read and a delete, so the interleave could not
+    be forced. Against Redis every call is a round trip, and the fake models
+    that with an ``asyncio.sleep(0)`` in each method.
+
+    Read-then-delete lets both callers read before either deletes, so both
+    return a summary — and the same shape is what let a commit slip between
+    ``end_session``'s read and its delete while ``revert_session`` reported
+    success. ``_claim_session`` is a single ``GETDEL``, so exactly one wins.
+    """
+    ledger, _fake = redis_backed_shadow_ledger
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Double End",
+            "email": "double-end@t.com",
+            "initial_credits": 1000,
+        },
+        headers=api_headers,
+    )
+    wallet_id = sponsor.json()["wallet_id"]
+    session = await ledger.create_session(
+        wallet_id=wallet_id, real_balance=Decimal("1000")
+    )
+
+    first, second = await asyncio.gather(
+        ledger.end_session(session.session_id),
+        ledger.end_session(session.session_id),
+    )
+
+    ended = [s for s in (first, second) if s is not None]
+    assert len(ended) == 1, (
+        "both callers ended the same session; a terminal operation is not "
+        f"exclusive (got {first!r} and {second!r})"
+    )
+    assert await ledger.get_session(session.session_id) is None
+
+
+@pytest.mark.anyio
+async def test_a_simulated_charge_cannot_recreate_a_claimed_redis_session(
+    client, api_headers, clean_database, redis_backed_shadow_ledger
+):
+    """The Redis half of the resurrection fix, which was argued until now.
+
+    ``simulate_charge`` writes the mutated session back. Unconditionally, that
+    write *recreates* a key a concurrent commit has already claimed — with
+    every simulated charge intact — so the committed session comes back to
+    life and can be committed a second time, applying the same charges to the
+    real wallet twice. ``xx=True`` makes the write conditional on the key
+    still existing, so a claimed session stays claimed.
+
+    The commit is landed from inside the fake's ``set``, which is exactly the
+    moment the old code would have resurrected the session.
+    """
+    ledger, fake = redis_backed_shadow_ledger
+    from app.schemas.billing import ServiceCategory
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Redis Resurrect",
+            "email": "redis-resurrect@t.com",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    agent = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor.json()["wallet_id"],
+            "agent_id": "redis-resurrect-bot",
+            "budget_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_id = agent.json()["wallet_id"]
+    session = await ledger.create_session(
+        wallet_id=wallet_id, real_balance=Decimal("100")
+    )
+    session_id = session.session_id
+    committed = {}
+
+    async def commit_before_the_write_back():
+        committed["result"] = await ledger.commit_session(session_id, get_agent_money())
+
+    fake.on_set = commit_before_the_write_back
+
+    with pytest.raises(ValueError, match="Session not found"):
+        await ledger.simulate_charge(session_id, ServiceCategory.IOT_BRIDGE, units=2)
+
+    assert "result" in committed, "the commit never landed; the window was missed"
+    # The session must stay claimed. If the write-back recreated it, it would
+    # still be committable — and its charges applied to the wallet twice.
+    assert await ledger.get_session(session_id) is None
+    second = await ledger.commit_session(session_id, get_agent_money())
+    assert second.wallet_id == "", second
+    assert second.committed_charges == 0, second
