@@ -14,7 +14,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.time import utc_now
-from tests.conftest import requires_sqlite_row_lock_noop
+from tests.conftest import interleaving_factory, requires_sqlite_row_lock_noop
 from app.main import app
 from app.services.stripe_integration import StripeIntegration, StripeSettlementError
 
@@ -535,39 +535,12 @@ class TestStripeWebhookIdempotency:
                         .execution_options(synchronize_session=False)
                     )
 
-        class _Session:
-            def __init__(self, inner):
-                self._inner = inner
-
-            def __getattr__(self, name):
-                return getattr(self._inner, name)
-
-            async def execute(self, *args, **kwargs):
-                state["executes"] = state.get("executes", 0) + 1
-                n = state["executes"]
-                result = await self._inner.execute(*args, **kwargs)
-                # Statement 2 is the wallet SELECT. Firing after it returns
-                # puts the spend between the read and the clawback write,
-                # which is the whole race.
-                if n == 2 and not state.get("fired"):
-                    state["fired"] = True
-                    await _concurrent_spend()
-                return result
-
-        class _CM:
-            def __init__(self, cm):
-                self._cm = cm
-
-            async def __aenter__(self):
-                return _Session(await self._cm.__aenter__())
-
-            async def __aexit__(self, *exc):
-                return await self._cm.__aexit__(*exc)
-
         monkeypatch.setattr(
             integration,
             "_session_factory",
-            lambda: (lambda: _CM(real_factory())),
+            # Statement 2 is the wallet SELECT. Firing after it returns puts
+            # the spend between the read and the clawback write.
+            interleaving_factory(real_factory, _concurrent_spend, state, fire_on=2),
         )
 
         # Stripe reports cents; the ledger is in credits at ten per cent (the

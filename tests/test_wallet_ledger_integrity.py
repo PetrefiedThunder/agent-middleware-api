@@ -28,10 +28,10 @@ from sqlalchemy import select
 from app.db.models import LedgerEntryModel, WalletModel
 from app.main import app
 from app.schemas.billing import ServiceCategory
-from app.services.agent_money import get_agent_money
+from app.services.agent_money import InsufficientFundsResponse, get_agent_money
 from tests.test_trust_helpers import provision_agent_wallet
 
-from tests.conftest import requires_sqlite_row_lock_noop
+from tests.conftest import interleaving_factory, requires_sqlite_row_lock_noop
 
 # Every test in this module forces a concurrent writer into an open
 # transaction, which is only a *concurrent* writer while the row lock is a
@@ -91,48 +91,6 @@ def _exact_amount(entry) -> Decimal:
     return abs(Decimal(entry.amount_exact or str(entry.amount)))
 
 
-def _interleaving_factory(real_factory, hook, state, *, fire_on: int = 1):
-    """Wrap a session factory so `hook` runs once, mid-transaction.
-
-    Fires after ``fire_on`` statements have been issued on the wrapped session,
-    which places it after the balance has been read and before it is written.
-    """
-
-    class _Session:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-        async def execute(self, *args, **kwargs):
-            state["executes"] = state.get("executes", 0) + 1
-            n = state["executes"]
-            # Fire *after* the statement returns, so the hook lands once the
-            # value has been read but before anything is written back. Firing
-            # beforehand would place the concurrent writer ahead of the read,
-            # which is not the race. Counting completed reads also keeps the
-            # seam identical across the fixed and unfixed code, which differ in
-            # how many statements they issue.
-            result = await self._inner.execute(*args, **kwargs)
-            if n == fire_on and not state.get("fired"):
-                state["fired"] = True
-                await hook()
-            return result
-
-    class _CM:
-        def __init__(self, cm):
-            self._cm = cm
-
-        async def __aenter__(self):
-            return _Session(await self._cm.__aenter__())
-
-        async def __aexit__(self, *exc):
-            return await self._cm.__aexit__(*exc)
-
-    return lambda: (lambda: _CM(real_factory()))
-
-
 @pytest.mark.anyio
 async def test_a_concurrent_charge_cannot_vanish_from_the_balance(
     client, clean_database, monkeypatch
@@ -173,7 +131,7 @@ async def test_a_concurrent_charge_cannot_vanish_from_the_balance(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+        interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
     )
 
     state["first"] = await money.charge(
@@ -242,7 +200,7 @@ async def test_reclaiming_a_child_twice_cannot_mint_credits(
     monkeypatch.setattr(
         money._wallet_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _concurrent_reclaim, state, fire_on=1),
+        interleaving_factory(real_factory, _concurrent_reclaim, state, fire_on=1),
     )
 
     try:
@@ -300,7 +258,7 @@ async def test_concurrent_charges_cannot_exceed_a_child_wallet_spend_cap(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+        interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
     )
 
     state["first"] = await money.charge(
@@ -362,7 +320,7 @@ async def test_a_rejected_charge_does_not_erase_another_charges_velocity(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+        interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
     )
 
     state["first"] = await money.charge(
@@ -417,7 +375,7 @@ async def test_a_wallet_frozen_mid_charge_is_not_debited(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _freeze_the_wallet, state, fire_on=1),
+        interleaving_factory(real_factory, _freeze_the_wallet, state, fire_on=1),
     )
 
     result = await money.charge(
@@ -486,7 +444,7 @@ async def test_a_concurrent_charge_cannot_erase_a_refund_credit(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
+        interleaving_factory(real_factory, _concurrent_charge, state, fire_on=1),
     )
 
     await money.refund_charge(
@@ -640,7 +598,7 @@ async def test_a_period_rollover_is_not_charged_for_a_rejected_charge(
     monkeypatch.setattr(
         money._billing_engine,
         "_session_factory",
-        _interleaving_factory(real_factory, _roll_the_period_and_freeze, state, fire_on=1),
+        interleaving_factory(real_factory, _roll_the_period_and_freeze, state, fire_on=1),
     )
 
     result = await money.charge(
@@ -651,7 +609,16 @@ async def test_a_period_rollover_is_not_charged_for_a_rejected_charge(
     )
 
     assert state.get("fired"), "the interleave never ran — the test proved nothing"
-    assert not hasattr(result, "entry_id"), f"a frozen wallet was debited: {result}"
+    # Pin the response, not merely the absence of a ledger entry. The freeze
+    # commits after the wallet SELECT returns, so the in-memory wallet still
+    # reads "active" at the status check and it is the guarded UPDATE that
+    # rejects the charge. Both branches reach the reversal this test measures,
+    # but they are separately reachable, and ``not hasattr(result, "entry_id")``
+    # records neither.
+    assert isinstance(result, InsufficientFundsResponse), (
+        f"a frozen wallet was debited: {result}"
+    )
+    assert result.error == "wallet_frozen"
 
     async with real_factory() as session:
         wallet = await session.get(WalletModel, wallet_id)

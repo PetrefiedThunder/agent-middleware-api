@@ -25,7 +25,7 @@ from app.services.refund_reconciliation import (
 )
 from app.services.receipts import ReceiptService
 from app.services.service_registry import get_service_registry
-from tests.conftest import requires_sqlite_row_lock_noop
+from tests.conftest import interleaving_factory, requires_sqlite_row_lock_noop
 from tests.test_trust_helpers import (
     BOOTSTRAP_HEADERS,
     create_tool_permit,
@@ -805,41 +805,16 @@ async def test_operator_refund_release_cannot_erase_a_concurrent_reservation(
     async def _concurrent_reservation() -> None:
         await get_permit_service().reserve_budget(permit_id, Decimal("1"))
 
-    class _Session:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-        async def execute(self, *args, **kwargs):
-            state["executes"] = state.get("executes", 0) + 1
-            n = state["executes"]
-            result = await self._inner.execute(*args, **kwargs)
-            # Statement 3 is the correlated-refund lookup, which is the first
-            # visible statement *after* the permit row is loaded. The load
-            # itself is a ``session.get`` and so passes straight to the inner
-            # session -- firing any earlier means the service re-reads the
-            # permit after the reservation lands and the race never happens.
-            if n == 3 and not state.get("fired"):
-                state["fired"] = True
-                await _concurrent_reservation()
-            return result
-
-    class _CM:
-        def __init__(self, cm):
-            self._cm = cm
-
-        async def __aenter__(self):
-            return _Session(await self._cm.__aenter__())
-
-        async def __aexit__(self, *exc):
-            return await self._cm.__aexit__(*exc)
-
     monkeypatch.setattr(
         reconciliation_module,
         "get_session_factory",
-        lambda: (lambda: _CM(real_factory())),
+        # Statement 3 is the correlated-refund lookup, the first statement
+        # visible to the wrapper *after* the permit row is loaded. The load
+        # itself is a ``session.get`` and bypasses the wrapper entirely, so
+        # firing any earlier lets the service re-read the permit after the
+        # reservation lands and the race never happens -- the first version of
+        # this test did exactly that and passed against the unfixed service.
+        interleaving_factory(real_factory, _concurrent_reservation, state, fire_on=3),
     )
 
     resolved = await client.post(

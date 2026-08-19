@@ -45,6 +45,14 @@ full release gate; do not backfill a final `v1.2.0` tag.
 - **`/v1/billing/charge` answers 404 for an unknown wallet** instead of letting
   `WalletNotFoundError` escape as a 500 — the six other endpoints in that
   router already did.
+- **Negative and zero `units` are refused at the billing engine.** A negative
+  `units` made `charge_amount` negative, and the guarded debit then read
+  `balance >= charge_amount` as trivially true and applied
+  `balance - charge_amount` — *raising* the balance. Reproduced against the
+  unfixed engine: a wallet at 100 charged `units=-5` ended at 110, with a
+  ledger entry recording `action="debit", amount=+10`, so the audit trail
+  agreed it was a charge. The router refused it through `gt=0`; the governed
+  MCP path and the SDK do not pass through the router.
 - **Non-finite `units` are refused**, at the query boundary
   (`allow_inf_nan=False`) and again in `BillingEngine.charge`, which the
   governed MCP path and the SDK reach without passing the router. `gt=0` does

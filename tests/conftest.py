@@ -125,6 +125,57 @@ os.environ.setdefault("ALLOW_LEGACY_UNPERMITTED_MCP", "true")
 os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "1000000")
 
 
+def interleaving_factory(real_factory, hook, state, *, fire_on: int = 1):
+    """Wrap a session factory so `hook` runs once, mid-transaction.
+
+    Fires after ``fire_on`` statements have been issued on the wrapped session,
+    which places it after the value under test has been read and before it is
+    written back.
+
+    ``fire_on`` counts statements that reach ``Session.execute``. ``session.get``
+    does **not**: it is delegated straight to the inner session, so a row loaded
+    that way is invisible here. Choosing a seam before such a load lets the
+    service re-read the row *after* the concurrent write lands, and the race
+    never happens -- a test that does that passes against the unfixed service
+    while ``state["fired"]`` reads true throughout. Always confirm a new seam by
+    reverting the service and watching the test fail.
+    """
+
+    class _Session:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        async def execute(self, *args, **kwargs):
+            state["executes"] = state.get("executes", 0) + 1
+            n = state["executes"]
+            # Fire *after* the statement returns, so the hook lands once the
+            # value has been read but before anything is written back. Firing
+            # beforehand would place the concurrent writer ahead of the read,
+            # which is not the race. Counting completed reads also keeps the
+            # seam identical across the fixed and unfixed code, which differ in
+            # how many statements they issue.
+            result = await self._inner.execute(*args, **kwargs)
+            if n == fire_on and not state.get("fired"):
+                state["fired"] = True
+                await hook()
+            return result
+
+    class _CM:
+        def __init__(self, cm):
+            self._cm = cm
+
+        async def __aenter__(self):
+            return _Session(await self._cm.__aenter__())
+
+        async def __aexit__(self, *exc):
+            return await self._cm.__aexit__(*exc)
+
+    return lambda: (lambda: _CM(real_factory()))
+
+
 def running_on_sqlite() -> bool:
     """True when this run's ``DATABASE_URL`` names SQLite.
 

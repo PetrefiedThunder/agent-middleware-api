@@ -587,6 +587,17 @@ class BillingEngine:
         # out, and every balance derived from it is NaN thereafter.
         if not units.is_finite():
             raise ValueError(f"units must be a finite number, got {units}")
+        if units <= 0:
+            # Same reasoning, sharper consequence. A negative ``units`` makes
+            # ``charge_amount`` negative, and the guarded debit below then
+            # reads ``balance >= charge_amount`` as trivially true and applies
+            # ``balance - charge_amount`` -- which *raises* the balance. The
+            # result is credits minted from nothing, recorded as a DEBIT
+            # ledger entry with a positive amount, so the audit trail agrees
+            # it was a charge. Zero writes a meaningless zero-value debit.
+            # The router refuses both through ``gt=0``; the governed MCP path
+            # and the SDK never pass through the router.
+            raise ValueError(f"units must be greater than zero, got {units}")
 
         pricing = self._default_pricing.get(service_category)
         if not pricing:

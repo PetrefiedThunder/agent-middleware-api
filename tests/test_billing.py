@@ -1232,6 +1232,35 @@ async def test_charge_rejects_malformed_units_without_touching_the_wallet(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("units", [Decimal("-5"), Decimal("-0.00000001"), Decimal("0")])
+async def test_billing_engine_refuses_non_positive_units(units):
+    """A negative units count inverts the debit into a credit.
+
+    ``charge_amount`` goes negative, the guarded debit reads
+    ``balance >= charge_amount`` as trivially true, and ``balance -
+    charge_amount`` *raises* the balance. Reproduced before the fix: a wallet
+    at 100 charged ``units=-5`` ended at 110, with a ledger entry recording
+    ``action="debit", amount=+10`` -- money minted, and the audit trail
+    agreeing it was a charge. Zero is refused alongside it: it writes a
+    zero-value debit that means nothing.
+
+    The router refuses both through ``gt=0``, but the governed MCP path and
+    the SDK reach the engine without passing through it, which is why the
+    guard belongs here.
+    """
+    from app.schemas.billing import ServiceCategory
+    from app.services.agent_money import get_agent_money
+
+    with pytest.raises(ValueError, match="greater than zero"):
+        await get_agent_money().charge(
+            wallet_id="wal-irrelevant",
+            service_category=ServiceCategory.IOT_BRIDGE,
+            units=units,
+            request_path="/non-positive",
+        )
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("units", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")])
 async def test_billing_engine_refuses_non_finite_units(units):
     """The engine refuses non-finite units, not only the HTTP boundary.
@@ -1275,6 +1304,10 @@ async def test_charge_against_an_unknown_wallet_creates_nothing(
     ledger_resp = await client.get(
         f"/v1/billing/ledger/{unknown}", headers=api_headers
     )
+    # Pin the status set first. Guarding the emptiness check on 200 alone
+    # would let a future change to the ledger endpoint drop the assertion
+    # this test exists for without anything failing.
+    assert ledger_resp.status_code in (200, 404), ledger_resp.text
     if ledger_resp.status_code == 200:
         assert ledger_resp.json()["entries"] == []
 
@@ -1309,7 +1342,8 @@ async def test_charge_without_a_service_category_is_refused(
         f"/v1/billing/charge?wallet_id={agent_wallet_id}&units=1",
         headers=api_headers,
     )
-    assert resp.status_code in (400, 422), resp.text
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"]["error"] == "missing_service"
 
     ledger_resp = await client.get(
         f"/v1/billing/ledger/{agent_wallet_id}", headers=api_headers

@@ -10,11 +10,14 @@ published to PyPI.
 
 ## Installation
 
-Install a downloaded release wheel:
+`0.5.0` is the source version here; the newest cut release is
+`python-sdk-v0.4.0`. Install the released wheel:
 
 ```bash
-python -m pip install ./b2a_sdk-0.5.0-py3-none-any.whl
+python -m pip install ./b2a_sdk-0.4.0-py3-none-any.whl
 ```
+
+Once `python-sdk-v0.5.0` is tagged, the same command with `0.5.0` installs it.
 
 For repository development:
 

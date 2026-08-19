@@ -125,9 +125,17 @@ async def test_agent_json_sdk_integrations_are_honest(client):
     assert python_sdk["install"] == "pip install -e ./b2a_sdk"
     assert "pip install b2a-sdk" not in json.dumps(python_sdk)
     assert "not published" in python_sdk["note"].lower()
-    # The release tag is a separate fact from the source version and is
-    # reported separately; it may legitimately lag.
+    # The release tag is a separate fact from the source version and may
+    # legitimately lag it. Pin the value rather than checking it appears in
+    # ``note``: a substring test passes for any tag, including a stale one,
+    # which is exactly the drift this endpoint is supposed to rule out.
+    # `python-sdk-v0.4.0` is the newest tag in the repository; bump this
+    # line in the same change that cuts the next release.
+    assert python_sdk["latest_release_tag"] == "python-sdk-v0.4.0"
     assert python_sdk["latest_release_tag"] in python_sdk["note"]
+    # The two must not silently converge: the whole point of reporting them
+    # separately is that a source ahead of the last tag stays visible.
+    assert python_sdk["version"] != python_sdk["latest_release_tag"]
 
     typescript_sdk = integrations["typescript_sdk"]
     assert isinstance(typescript_sdk, dict)
