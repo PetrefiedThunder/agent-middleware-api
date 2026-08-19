@@ -353,6 +353,13 @@ class WalletEngine:
         auto_refill_amount: Decimal = Decimal("1000.0"),
     ) -> WalletResponse:
         """Provision a pre-paid agent wallet from a sponsor's balance."""
+        if budget_credits <= Decimal("0"):
+            # A negative budget inverts the debit into a credit: the guard
+            # ``balance >= budget_credits`` is trivially true for a negative
+            # amount, so the sponsor would be paid and the new wallet opened
+            # holding a negative balance.
+            raise ValueError("budget_credits must be positive")
+
         async with self._session_factory()() as session:
             async with session.begin():
                 # Lock sponsor wallet for update
@@ -465,6 +472,11 @@ class WalletEngine:
     ) -> WalletResponse:
         """Spawn a child sub-agent wallet from a parent agent's balance."""
         _validate_child_wallet_ttl(ttl_seconds)
+        if budget_credits <= Decimal("0"):
+            # Same inversion as the sponsor path, and worse: a child opened
+            # with a negative balance cannot be unwound by a later reclaim,
+            # which only credits the parent back a positive reclaim_amount.
+            raise ValueError("budget_credits must be positive")
         async with self._session_factory()() as session:
             async with session.begin():
                 # Lock parent wallet
@@ -501,7 +513,7 @@ class WalletEngine:
                 )
                 if (
                     parent.wallet_type == WalletType.CHILD.value
-                    and parent.max_spend
+                    and parent.max_spend is not None
                     and parent.lifetime_debits + budget_credits > parent.max_spend
                 ):
                     raise ValueError("Child wallet lifetime spend cap exceeded")
@@ -526,7 +538,7 @@ class WalletEngine:
                         )
                     if (
                         parent.wallet_type == WalletType.CHILD.value
-                        and parent.max_spend
+                        and parent.max_spend is not None
                         and parent.lifetime_debits + budget_credits > parent.max_spend
                     ):
                         raise ValueError("Child wallet lifetime spend cap exceeded")
@@ -798,7 +810,7 @@ class WalletEngine:
                 await self.ensure_wallet_not_expired(session, source)
                 if (
                     source.wallet_type == WalletType.CHILD.value
-                    and source.max_spend
+                    and source.max_spend is not None
                     and source.lifetime_debits + amount > source.max_spend
                 ):
                     raise ValueError("Child wallet lifetime spend cap exceeded")
@@ -824,7 +836,7 @@ class WalletEngine:
                         )
                     if (
                         source.wallet_type == WalletType.CHILD.value
-                        and source.max_spend
+                        and source.max_spend is not None
                         and source.lifetime_debits + amount > source.max_spend
                     ):
                         raise ValueError("Child wallet lifetime spend cap exceeded")

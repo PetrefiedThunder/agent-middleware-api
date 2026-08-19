@@ -338,3 +338,123 @@ async def test_transfer_reports_a_destination_that_vanished(
     assert dest.wallet_id in str(excinfo.value)
     # The debit rolled back with the aborted transaction.
     assert await _balance(source.wallet_id) == Decimal("300")
+
+
+async def _set_child_cap(wallet_id: str, max_spend: Decimal) -> None:
+    """Force a wallet into child shape with an exact lifetime cap.
+
+    ``max_spend=0`` cannot be created through the API (the request schema
+    requires ``gt=0``), so a stored zero cap is reachable only from a direct
+    service call or a migration. It is still a value the column can hold, and
+    the guarded UPDATE treats it as a real cap, so the Python paths must agree.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        async with session.begin():
+            await session.execute(
+                sa_update(WalletModel)
+                .where(WalletModel.wallet_id == wallet_id)
+                .values(wallet_type="child", max_spend=max_spend)
+            )
+
+
+async def test_zero_lifetime_cap_is_a_cap_not_an_absent_one(
+    sponsor_wallet: str,
+) -> None:
+    """A stored cap of zero must refuse, and say it was the cap.
+
+    The guarded UPDATE compares against the column, so a zero cap already
+    refuses the debit. The Python checks used truthiness, so zero read as "no
+    cap set" -- the pre-check waved the debit through and the failure path
+    reported an empty balance. Two halves of the same function disagreeing
+    about what zero means is the actual defect; the caller seeing the wrong
+    reason is the symptom.
+    """
+    money = get_agent_money()
+    parent = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("400"),
+    )
+    await _set_child_cap(parent.wallet_id, Decimal("0"))
+
+    with pytest.raises(ValueError) as excinfo:
+        await money.create_child_wallet(
+            parent_wallet_id=parent.wallet_id,
+            child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
+            budget_credits=Decimal("10"),
+            max_spend=Decimal("10"),
+        )
+
+    assert "cap exceeded" in str(excinfo.value).lower()
+    # The balance was never the problem, and none of it moved.
+    assert await _balance(parent.wallet_id) == Decimal("400")
+
+
+async def test_zero_lifetime_cap_refuses_a_transfer_as_a_cap(
+    sponsor_wallet: str,
+) -> None:
+    """The transfer path must agree with the delegation path about zero."""
+    money = get_agent_money()
+    source = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"src-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("300"),
+    )
+    dest = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"dst-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("100"),
+    )
+    await _set_child_cap(source.wallet_id, Decimal("0"))
+
+    with pytest.raises(ValueError) as excinfo:
+        await money.transfer(
+            from_wallet_id=source.wallet_id,
+            to_wallet_id=dest.wallet_id,
+            amount=Decimal("10"),
+        )
+
+    assert "cap exceeded" in str(excinfo.value).lower()
+    assert await _balance(source.wallet_id) == Decimal("300")
+    assert await _balance(dest.wallet_id) == Decimal("100")
+
+
+@pytest.mark.parametrize("budget", [Decimal("0"), Decimal("-50")])
+async def test_non_positive_provisioning_budget_is_refused(
+    sponsor_wallet: str, budget: Decimal
+) -> None:
+    """A non-positive budget must be refused before any wallet is touched.
+
+    The request schemas already require ``gt=0``, so this is unreachable over
+    HTTP -- but the guard it would otherwise meet is ``balance >= budget``,
+    which a negative budget satisfies trivially. The debit would then run as a
+    credit: the sponsor gains, and the new wallet opens holding a negative
+    balance that no later reclaim can unwind.
+    """
+    money = get_agent_money()
+    before = await _balance(sponsor_wallet)
+
+    with pytest.raises(ValueError, match="positive"):
+        await money.create_agent_wallet(
+            sponsor_wallet_id=sponsor_wallet,
+            agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+            budget_credits=budget,
+        )
+
+    assert await _balance(sponsor_wallet) == before
+
+    parent = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"parent-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("200"),
+    )
+    with pytest.raises(ValueError, match="positive"):
+        await money.create_child_wallet(
+            parent_wallet_id=parent.wallet_id,
+            child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
+            budget_credits=budget,
+            max_spend=Decimal("50"),
+        )
+
+    assert await _balance(parent.wallet_id) == Decimal("200")
