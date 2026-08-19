@@ -16,7 +16,8 @@
   --c-gold: #d4af37;
   --c-gold-bright: #e6c963;
   --c-gray: #98a0ab;
-  --c-gray-dim: #5c6470;
+  /* Dimmest text tone; keep it >= 4.5:1 against pure black (WCAG AA). */
+  --c-gray-dim: #7e8794;
 
   /* Names the shared accessibility widget styles expect. */
   --ink: var(--c-black);
@@ -318,6 +319,7 @@ body::after {
 .concept-hero {
   position: relative;
   z-index: 3;
+  min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
@@ -389,7 +391,18 @@ body::after {
   color: var(--c-gray);
 }
 
+/* The chamfer clip-path lives on an inner face, not the link itself: a
+   clip-path clips ALL of an element's painting, including its focus
+   outline, so a clipped <a> would swallow the keyboard focus ring. The
+   drop-shadow glow stays on the link and follows the clipped child's
+   silhouette. */
 .concept-cta {
+  display: inline-flex;
+  filter: drop-shadow(0 0 20px rgba(212, 175, 55, 0.4));
+  transition: filter 180ms ease, transform 180ms ease;
+}
+
+.concept-cta-face {
   display: inline-flex;
   align-items: center;
   gap: 0.15rem;
@@ -400,8 +413,6 @@ body::after {
   letter-spacing: 0.14em;
   color: var(--c-black);
   background: var(--c-gold);
-  /* Chamfered corners; the glow is a drop-shadow so it follows the cut
-     silhouette rather than the clipped-away box. */
   clip-path: polygon(
     10px 0,
     calc(100% - 10px) 0,
@@ -412,14 +423,16 @@ body::after {
     0 calc(100% - 10px),
     0 10px
   );
-  filter: drop-shadow(0 0 20px rgba(212, 175, 55, 0.4));
-  transition: background 180ms ease, filter 180ms ease, transform 180ms ease;
+  transition: background 180ms ease;
 }
 
 .concept-cta:hover {
-  background: var(--c-gold-bright);
   filter: drop-shadow(0 0 30px rgba(212, 175, 55, 0.62));
   transform: translateY(-1px);
+}
+
+.concept-cta:hover .concept-cta-face {
+  background: var(--c-gold-bright);
 }
 
 .concept-cta:focus-visible {
@@ -465,7 +478,10 @@ body::after {
   border: 1px solid var(--rule);
   background: var(--panel);
   color: var(--text);
-  font-family: var(--font-display);
+  /* Not var(--font-display): Instrument Serif ships weight 400 only, so
+     an 800 here would synthesize a faux bold. Libre Franklin 800 is a
+     real face and already preloaded on this page. */
+  font-family: "Libre Franklin", var(--font-body);
   font-weight: 800;
   font-size: 1.15rem;
   cursor: pointer;
@@ -591,6 +607,7 @@ body::after {
 
   .wave-canvas,
   .wave-fallback,
+  .concept-nav,
   .concept-foot,
   .amw-a11y-toggle,
   .amw-a11y-panel {

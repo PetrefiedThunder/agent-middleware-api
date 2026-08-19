@@ -509,10 +509,12 @@
     window.addEventListener(
       "pointermove",
       function (event) {
+        // No scheduleFrame here: the animated loop re-arms itself, and in
+        // the static (reduced-motion) mode a pointer must not trigger
+        // full re-renders of an intentionally still frame.
         pointerNdc.x = (event.clientX / window.innerWidth) * 2 - 1;
         pointerNdc.y = 1 - (event.clientY / window.innerHeight) * 2;
         pointerActive = true;
-        scheduleFrame();
       },
       { passive: true }
     );
@@ -802,6 +804,11 @@
       rafId = 0;
     }
     running = false;
+    // Show the static CSS backdrop while the context is gone; restoration
+    // takes the class back off. Without this the dead canvas keeps covering
+    // the fallback with its last (or a blank) frame.
+    document.documentElement.classList.add("wave-dead");
+    setStats("STATIC BACKDROP · CONTEXT LOST");
   });
 
   canvas.addEventListener("webglcontextrestored", function () {
@@ -821,6 +828,9 @@
       needResize = true;
       scheduleFrame();
     } catch (error) {
+      // Stay dead: without this flag a later scheduled frame would issue
+      // GL calls against a context that never came back.
+      dead = true;
       document.documentElement.classList.add("wave-dead");
       setStats("STATIC BACKDROP · CONTEXT LOST");
     }
