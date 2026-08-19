@@ -1313,6 +1313,55 @@ async def test_charge_against_an_unknown_wallet_creates_nothing(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("units", [-5, 0, "abc", "Infinity"])
+async def test_dry_run_charge_rejects_bad_units_on_both_branches(
+    client, api_headers, clean_database, units
+):
+    """The dry-run endpoint validates before it picks a branch.
+
+    ``simulate_charge`` has two: with a ``dry_run_session_id`` it calls
+    ``ShadowLedger.simulate_charge`` directly and never reaches
+    ``BillingEngine.charge``, so the engine's non-positive guard does not
+    cover it at all; without one it does reach the engine, where that guard
+    raises ``ValueError`` and escapes as a 500. Constraining the request field
+    refuses both before either branch is chosen — and a simulation is exactly
+    where a caller checks affordability, so a 500 there reads as "the service
+    is broken" rather than "that is not a valid quantity".
+    """
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Dry Run Units",
+            "email": "dry-run-units@t.com",
+            "initial_credits": 1000,
+        },
+        headers=api_headers,
+    )
+    wallet_id = sponsor_resp.json()["wallet_id"]
+
+    resp = await client.post(
+        "/v1/billing/dry-run/charge",
+        json={"wallet_id": wallet_id, "service": "iot_bridge", "units": units},
+        headers=api_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+    # A session-scoped simulation is refused on the same field, before the
+    # session is even looked up — so an unknown session cannot mask it.
+    resp = await client.post(
+        "/v1/billing/dry-run/charge",
+        json={
+            "wallet_id": wallet_id,
+            "service": "iot_bridge",
+            "units": units,
+            "dry_run_session_id": "sess-does-not-exist",
+        },
+        headers=api_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.anyio
 async def test_charge_without_a_service_category_is_refused(
     client, api_headers, clean_database
 ):

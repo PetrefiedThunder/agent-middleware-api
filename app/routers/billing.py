@@ -1259,7 +1259,20 @@ class SimulatedChargeRequest(BaseModel):
 
     wallet_id: str = Field(..., description="Wallet being simulated")
     service: ServiceCategory = Field(..., description="Service category to simulate")
-    units: float = Field(default=1.0, description="Number of units")
+    units: float = Field(
+        default=1.0,
+        # Same constraints as the real charge query parameter, for the same
+        # reasons and one extra. The session-based branch of simulate_charge
+        # calls ShadowLedger.simulate_charge directly and never reaches
+        # BillingEngine.charge, so the engine's guard does not cover it at
+        # all; the session-less branch does reach the engine, where the guard
+        # raises ValueError and surfaces as a 500 rather than a 422. Refusing
+        # here fixes both: one clean rejection at the boundary, before either
+        # branch is chosen.
+        gt=0,
+        allow_inf_nan=False,
+        description="Number of units",
+    )
     description: str | None = Field(None, description="Optional description")
     dry_run_session_id: str | None = Field(
         None,

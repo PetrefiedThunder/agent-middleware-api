@@ -53,6 +53,13 @@ full release gate; do not backfill a final `v1.2.0` tag.
   ledger entry recording `action="debit", amount=+10`, so the audit trail
   agreed it was a charge. The router refused it through `gt=0`; the governed
   MCP path and the SDK do not pass through the router.
+- **The dry-run endpoint validates `units` too.** `POST /v1/billing/dry-run/charge`
+  has two branches: with a session id it calls `ShadowLedger.simulate_charge`
+  directly and never reaches `BillingEngine.charge`, so the engine guard did
+  not cover it; without one it reached the engine and the guard escaped as a
+  500. `SimulatedChargeRequest.units` now carries the same `gt=0` and
+  `allow_inf_nan=False` constraints as the real charge, refusing both branches
+  with a 422 before either is chosen.
 - **Non-finite `units` are refused**, at the query boundary
   (`allow_inf_nan=False`) and again in `BillingEngine.charge`, which the
   governed MCP path and the SDK reach without passing the router. `gt=0` does

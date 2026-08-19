@@ -135,7 +135,12 @@ async def test_agent_json_sdk_integrations_are_honest(client):
     assert python_sdk["latest_release_tag"] in python_sdk["note"]
     # The two must not silently converge: the whole point of reporting them
     # separately is that a source ahead of the last tag stays visible.
-    assert python_sdk["version"] != python_sdk["latest_release_tag"]
+    # Normalize before comparing -- "0.5.0" and "python-sdk-v0.4.0" differ as
+    # raw strings even when they name the same release, so a bare inequality
+    # would hold no matter what and assert nothing at all.
+    assert python_sdk["latest_release_tag"] != (
+        f"python-sdk-v{python_sdk['version']}"
+    )
 
     typescript_sdk = integrations["typescript_sdk"]
     assert isinstance(typescript_sdk, dict)
