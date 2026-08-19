@@ -1595,6 +1595,7 @@ async def test_dry_run_session_does_not_leak_another_tenants_session(
         # The owning wallet must not appear anywhere in the refusal.
         assert wallet_b not in theirs.text, f"{method} {template} leaked wallet_b"
 
+    charges = []
     for sid in (b_session, unknown_session):
         charge = await client.post(
             "/v1/billing/dry-run/charge",
@@ -1609,6 +1610,16 @@ async def test_dry_run_session_does_not_leak_another_tenants_session(
         assert charge.status_code == 404, charge.text
         assert charge.json()["detail"]["error"] == "session_not_found"
         assert wallet_b not in charge.text
+        charges.append(charge)
+
+    # Compared against each other, not only checked one at a time. This is the
+    # endpoint most likely to grow response fields — it is the only one of the
+    # five with a full response model — so a per-response check would let a
+    # newly added field recreate the oracle without failing anything.
+    theirs_charge, absent_charge = charges
+    assert theirs_charge.text.replace(b_session, "SID") == absent_charge.text.replace(
+        unknown_session, "SID"
+    ), "dry-run/charge: bodies differ beyond the echoed session id"
 
     # The owner is unaffected: a wallet-scoped key still reaches its own
     # session. Without this the fix could "pass" by refusing everyone.
@@ -1763,3 +1774,98 @@ async def test_a_failed_commit_is_not_reported_as_a_missing_session(
     # The session is named, not denied. This is the assertion the guard could
     # break: keying the 404 on ``success`` instead of ``wallet_id`` fails here.
     assert body["wallet_id"] == wallet_id
+
+
+@pytest.mark.anyio
+async def test_revert_does_not_claim_success_after_a_concurrent_commit(
+    client, api_headers, clean_database
+):
+    """A revert that lost the session to a commit must not report success.
+
+    ``revert_session`` reads the session, then calls ``end_session`` — and used
+    to discard that call's return value. ``commit_session`` claims the session
+    atomically, so a commit landing between those two steps left ``end_session``
+    with nothing to end while the revert still reported ``reverted=True``,
+    carrying the wallet id from its stale read.
+
+    The status code is the smaller half. The message reads "No changes made to
+    real wallet", and the concurrent commit had just applied the charges to it.
+    Reproduced before the fix: a wallet at 100 ended at **96** while the revert
+    claimed nothing had moved.
+
+    The interleave is forced *after* the initial read — patching ``end_session``
+    rather than removing the session up front, because a session already gone
+    is caught by the ownership check and never reaches this window.
+    """
+    from app.services import shadow_ledger as shadow_ledger_module
+
+    sponsor = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Revert Race",
+            "email": "revert-race@t.com",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    agent = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor.json()["wallet_id"],
+            "agent_id": "revert-race-bot",
+            "budget_credits": 100,
+        },
+        headers=api_headers,
+    )
+    wallet_id = agent.json()["wallet_id"]
+
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    assert session_resp.status_code == 201, session_resp.text
+    session_id = session_resp.json()["session_id"]
+    simulated = await client.post(
+        "/v1/billing/dry-run/charge",
+        json={
+            "wallet_id": wallet_id,
+            "service": "iot_bridge",
+            "units": 2,
+            "dry_run_session_id": session_id,
+        },
+        headers=api_headers,
+    )
+    assert simulated.status_code == 200, simulated.text
+
+    ledger = shadow_ledger_module.get_shadow_ledger()
+    original_end_session = ledger.end_session
+    committed = {}
+
+    async def commit_then_end(sid):
+        """Land the commit in the window, then run the real ``end_session``."""
+        if sid == session_id and "result" not in committed:
+            committed["result"] = await ledger.commit_session(sid, get_agent_money())
+        return await original_end_session(sid)
+
+    ledger.end_session = commit_then_end
+    try:
+        resp = await client.post(
+            f"/v1/billing/dry-run/session/{session_id}/revert",
+            json={},
+            headers=api_headers,
+        )
+    finally:
+        ledger.end_session = original_end_session
+
+    # The commit really did charge the wallet — otherwise there is nothing for
+    # the revert to have lied about.
+    assert committed["result"].success is True, committed["result"]
+    assert committed["result"].committed_charges == 1, committed["result"]
+    balance = await client.get(f"/v1/billing/wallets/{wallet_id}", headers=api_headers)
+    assert balance.json()["balance"] == 96.0, balance.text
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"]["error"] == "session_not_found"
+    # Nothing in the refusal may claim the revert happened.
+    assert "reverted" not in resp.text

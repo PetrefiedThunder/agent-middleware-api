@@ -672,7 +672,24 @@ class ShadowLedger:
         charge_count = len(session.simulated_charges)
         total = session.total_simulated
 
-        await self.end_session(session_id)
+        if await self.end_session(session_id) is None:
+            # The session was claimed between the read above and this call --
+            # by ``commit_session``, which claims atomically. Discarding this
+            # return value meant reporting ``reverted=True`` with the wallet id
+            # from the stale read, and a message reading "No changes made to
+            # real wallet" when the concurrent commit had already applied the
+            # charges to it. Reproduced: a wallet at 100 ended at 96 while the
+            # revert claimed nothing had moved.
+            #
+            # Reported as a missing session, matching the branch above, so the
+            # router's empty-``wallet_id`` check answers 404 rather than a 200
+            # asserting a revert that did not happen.
+            return RevertResult(
+                session_id=session_id,
+                wallet_id="",
+                reverted=False,
+                message="Session not found",
+            )
 
         logger.info(
             f"Reverted sandbox session {session_id}: "
