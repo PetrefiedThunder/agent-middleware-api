@@ -1330,8 +1330,20 @@
     nodes.over.hidden = true;
     if (!prefersStaticMotion()) startLoop();
     else stopLoop();
+    // Coming back from a run hides the stage while its ← CABINETS button still
+    // holds focus. Engines disagree about whether that resets activeElement to
+    // body or leaves it on the now-invisible button, and the second case
+    // strands keyboard and screen-reader focus in a hidden subtree — so test
+    // whether focus is still on something visible rather than trusting either
+    // behaviour.
     var first = nodes.select.querySelector(".arcade-cabinet");
-    if (first && isOpen && doc.activeElement === doc.body) first.focus();
+    var active = doc.activeElement;
+    var activeVisible =
+      active &&
+      active !== doc.body &&
+      overlay.contains(active) &&
+      active.offsetParent !== null;
+    if (first && isOpen && !activeVisible) first.focus();
     announce("Cabinet select. Four cabinets available.");
   }
 
