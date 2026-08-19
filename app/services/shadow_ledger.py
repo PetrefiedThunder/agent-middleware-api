@@ -460,22 +460,20 @@ class ShadowLedger:
 
         Does NOT affect real wallet state - just provides a summary
         of what would have been charged.
+
+        Claims the session rather than reading it and deleting it separately.
+        Read-then-delete leaves a window between the two: a concurrent
+        ``commit_session`` claims the session and charges the real wallet, this
+        method's delete becomes a no-op, and it still returns a summary built
+        from the stale read -- so the caller is told the session was ended
+        when a commit ended it, and ``revert_session`` reports a revert that
+        did not happen. ``_claim_session`` is the same atomic primitive commit
+        uses (GETDEL on Redis, ``dict.pop`` in memory), so exactly one of
+        end/commit/revert can win.
         """
-        session = await self.get_session(session_id)
+        session = await self._claim_session(session_id)
         if not session:
             return None
-
-        redis_client = await self._get_redis()
-
-        if redis_client:
-            await redis_client.delete(await self._session_key(session_id))
-            await redis_client.delete(await self._balance_key(session_id))
-            await redis_client.srem(
-                await self._wallet_sessions_key(session.wallet_id),
-                session_id,
-            )
-        else:
-            self._memory_store.pop(session_id, None)
 
         summary = SessionSummary(
             session_id=session_id,
