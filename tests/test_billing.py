@@ -1362,6 +1362,86 @@ async def test_dry_run_charge_rejects_bad_units_on_both_branches(
 
 
 @pytest.mark.anyio
+async def test_dry_run_charge_refuses_unauthenticated_callers_without_leaking(
+    client, api_headers, clean_database
+):
+    """Unauthenticated dry runs are refused, and reveal nothing by refusing.
+
+    A simulation endpoint is a tempting oracle: it takes a wallet id and a
+    session id and reports what *would* happen, so if its refusals varied with
+    whether those exist, an unauthenticated caller could enumerate them
+    without ever moving money. The refusal must therefore be identical
+    whatever the payload names.
+
+    It must also come *before* body validation. If invalid units produced a
+    422 while valid units produced a 401, the status code alone would confirm
+    that a request got far enough to be validated — a weaker oracle, but the
+    same kind.
+    """
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Dry Run Auth",
+            "email": "dry-run-auth@t.com",
+            "initial_credits": 1000,
+        },
+        headers=api_headers,
+    )
+    real_wallet = sponsor_resp.json()["wallet_id"]
+    fake_wallet = "wal-does-not-exist-000000"
+
+    async def _dry_run(headers: dict, wallet_id: str, units: float = 1.0):
+        return await client.post(
+            "/v1/billing/dry-run/charge",
+            json={
+                "wallet_id": wallet_id,
+                "service": "iot_bridge",
+                "units": units,
+            },
+            headers=headers,
+        )
+
+    # The status varies with the *credential*, never with the payload: no
+    # header and a malformed key are 401, a well-formed but unrecognized key
+    # is 403. That split is fine — it describes what the caller presented, not
+    # what exists on the server.
+    credentials = (
+        ({}, 401),
+        ({"X-API-Key": "short"}, 401),
+        ({"X-API-Key": "not-a-real-key"}, 403),
+    )
+    for headers, expected_status in credentials:
+        real = await _dry_run(headers, real_wallet)
+        fake = await _dry_run(headers, fake_wallet)
+        assert real.status_code == expected_status, real.text
+        assert fake.status_code == expected_status, fake.text
+        # Identical bodies, not merely identical statuses: an error message
+        # that named the wallet would leak exactly what the status hides.
+        assert real.text == fake.text
+        assert real_wallet not in real.text
+
+        # Auth precedes validation, so a malformed body cannot be used to tell
+        # a request that was rejected at the door from one that got inside.
+        bad_units = await _dry_run(headers, real_wallet, units=-5)
+        assert bad_units.status_code == expected_status, bad_units.text
+        assert bad_units.text == real.text
+
+    # The session-scoped branch is refused on the same terms, so an unknown
+    # session id cannot be distinguished from a real one either.
+    unauth_session = await client.post(
+        "/v1/billing/dry-run/charge",
+        json={
+            "wallet_id": real_wallet,
+            "service": "iot_bridge",
+            "units": 1,
+            "dry_run_session_id": "sess-does-not-exist",
+        },
+        headers={},
+    )
+    assert unauth_session.status_code == 401, unauth_session.text
+
+
+@pytest.mark.anyio
 async def test_charge_without_a_service_category_is_refused(
     client, api_headers, clean_database
 ):
