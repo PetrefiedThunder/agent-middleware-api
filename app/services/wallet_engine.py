@@ -353,12 +353,16 @@ class WalletEngine:
         auto_refill_amount: Decimal = Decimal("1000.0"),
     ) -> WalletResponse:
         """Provision a pre-paid agent wallet from a sponsor's balance."""
-        if budget_credits <= Decimal("0"):
+        if budget_credits < Decimal("0"):
             # A negative budget inverts the debit into a credit: the guard
             # ``balance >= budget_credits`` is trivially true for a negative
             # amount, so the sponsor would be paid and the new wallet opened
             # holding a negative balance.
-            raise ValueError("budget_credits must be positive")
+            #
+            # Zero is deliberately allowed. It debits nothing and opens an
+            # empty wallet to be topped up later, which is what
+            # SelfProvisionRequest.budget_credits (ge=0) offers callers.
+            raise ValueError("budget_credits cannot be negative")
 
         async with self._session_factory()() as session:
             async with session.begin():
@@ -472,11 +476,12 @@ class WalletEngine:
     ) -> WalletResponse:
         """Spawn a child sub-agent wallet from a parent agent's balance."""
         _validate_child_wallet_ttl(ttl_seconds)
-        if budget_credits <= Decimal("0"):
+        if budget_credits < Decimal("0"):
             # Same inversion as the sponsor path, and worse: a child opened
             # with a negative balance cannot be unwound by a later reclaim,
             # which only credits the parent back a positive reclaim_amount.
-            raise ValueError("budget_credits must be positive")
+            # Zero is allowed here too, for the same reason.
+            raise ValueError("budget_credits cannot be negative")
         async with self._session_factory()() as session:
             async with session.begin():
                 # Lock parent wallet

@@ -420,22 +420,27 @@ async def test_zero_lifetime_cap_refuses_a_transfer_as_a_cap(
     assert await _balance(dest.wallet_id) == Decimal("100")
 
 
-@pytest.mark.parametrize("budget", [Decimal("0"), Decimal("-50")])
-async def test_non_positive_provisioning_budget_is_refused(
-    sponsor_wallet: str, budget: Decimal
+async def test_negative_provisioning_budget_is_refused(
+    sponsor_wallet: str,
 ) -> None:
-    """A non-positive budget must be refused before any wallet is touched.
+    """A negative budget must be refused before any wallet is touched.
 
-    The request schemas already require ``gt=0``, so this is unreachable over
-    HTTP -- but the guard it would otherwise meet is ``balance >= budget``,
-    which a negative budget satisfies trivially. The debit would then run as a
-    credit: the sponsor gains, and the new wallet opens holding a negative
-    balance that no later reclaim can unwind.
+    The wallet-creation schemas require ``gt=0``, so this is unreachable over
+    those routes -- but the guard it would otherwise meet is
+    ``balance >= budget``, which a negative budget satisfies trivially. The
+    debit would then run as a credit: the sponsor gains, and the new wallet
+    opens holding a negative balance that no later reclaim can unwind.
+
+    Zero is NOT refused, and must not be: ``SelfProvisionRequest`` accepts
+    ``budget_credits=0`` (``ge=0``) to open an empty wallet for later top-up,
+    and refusing it there would 500 the request after its sponsor wallet had
+    already been created. That is asserted separately below.
     """
+    budget = Decimal("-50")
     money = get_agent_money()
     before = await _balance(sponsor_wallet)
 
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="negative"):
         await money.create_agent_wallet(
             sponsor_wallet_id=sponsor_wallet,
             agent_id=f"agent-{uuid.uuid4().hex[:8]}",
@@ -449,7 +454,7 @@ async def test_non_positive_provisioning_budget_is_refused(
         agent_id=f"parent-{uuid.uuid4().hex[:8]}",
         budget_credits=Decimal("200"),
     )
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="negative"):
         await money.create_child_wallet(
             parent_wallet_id=parent.wallet_id,
             child_agent_id=f"child-{uuid.uuid4().hex[:8]}",
@@ -458,3 +463,26 @@ async def test_non_positive_provisioning_budget_is_refused(
         )
 
     assert await _balance(parent.wallet_id) == Decimal("200")
+
+
+async def test_zero_provisioning_budget_opens_an_empty_wallet(
+    sponsor_wallet: str,
+) -> None:
+    """Zero is a legal budget: it debits nothing and opens an empty wallet.
+
+    ``SelfProvisionRequest.budget_credits`` is declared ``ge=0``, so a
+    zero-budget provision is a supported request. Refusing it would raise
+    after the caller's sponsor wallet had already been committed, leaving an
+    orphan behind and answering 500 to a well-formed request.
+    """
+    money = get_agent_money()
+    before = await _balance(sponsor_wallet)
+
+    agent = await money.create_agent_wallet(
+        sponsor_wallet_id=sponsor_wallet,
+        agent_id=f"agent-{uuid.uuid4().hex[:8]}",
+        budget_credits=Decimal("0"),
+    )
+
+    assert await _balance(agent.wallet_id) == Decimal("0")
+    assert await _balance(sponsor_wallet) == before
