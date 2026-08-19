@@ -141,7 +141,10 @@ preloaded.
 Preloads cover every face in the first viewport. Public Sans and Libre Franklin
 are variable, so one file each is enough; IBM Plex Mono is static, so weights
 400 (nav links), 500 (section kickers) and 600 (nav brand) are three separate
-files and all three are preloaded. A preload must carry `crossorigin` even
+files and all three are preloaded. Instrument Serif renders the homepage
+hero headline, so its single 400 face is preloaded too — the manifest is
+shared by every page, so subpages pay its ~21KB once rather than letting
+the landing headline flash Georgia and reflow. A preload must carry `crossorigin` even
 same-origin, or the browser discards it and fetches the file twice. The `404`
 page preloads nothing on purpose — it is `noindex` and mostly serves scanners.
 
