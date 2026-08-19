@@ -395,7 +395,7 @@ def test_vercel_insights_loader_requires_explicit_opt_in(tmp_path) -> None:
         assert "/_vercel/insights/script.js" not in page
         assert "/va-init.js" not in page
         assert "@@VERCEL_ANALYTICS_SCRIPTS@@" not in page
-        assert '<script defer src="/analytics.js?v=gateway-6"></script>' in page
+        assert '<script defer src="/analytics.js?v=gateway-7"></script>' in page
 
     enabled_output = tmp_path / "enabled"
     enabled_contacts = dict(VALID_TEST_CONTACTS)
@@ -405,7 +405,7 @@ def test_vercel_insights_loader_requires_explicit_opt_in(tmp_path) -> None:
     for relative_path in ("index.html", "proof/index.html", "compare/index.html"):
         page = (enabled_output / relative_path).read_text(encoding="utf-8")
         assert '<script defer src="/_vercel/insights/script.js"></script>' in page
-        assert '<script src="/va-init.js?v=gateway-6"></script>' in page
+        assert '<script src="/va-init.js?v=gateway-7"></script>' in page
         assert "@@VERCEL_ANALYTICS_SCRIPTS@@" not in page
 
     # "1"/"yes"/"on" aliases are rejected: the documented contract is exactly
@@ -1135,6 +1135,8 @@ def test_local_site_assets_exist() -> None:
         SITE / "compare" / "index.html",
         SITE / "404.html",
         SITE / "a11y-preload.js",
+        SITE / "arcade.js",
+        SITE / "arcade.css",
         SITE / "va-init.js",
         SITE / ".well-known" / "security.txt",
         SITE / "fonts.css",
@@ -1419,3 +1421,160 @@ def test_vendored_font_license_is_published(tmp_path) -> None:
     assert not (output / "fonts" / "README.md").exists()
     assert (output / ".well-known" / "security.txt").is_file()
     assert (output / "proof" / "receipt.json").is_file()
+
+
+def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
+    """The waiting room may only ever be an addition to a page that works.
+
+    The landing page's job is the funnel. The arcade is a joke told on top of
+    it, so every part of it has to be removable: the launcher ships ``hidden``
+    and is revealed only once ``arcade.js`` runs, and nothing in the funnel
+    depends on either file loading.
+    """
+
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    markup = (output / "index.html").read_text(encoding="utf-8")
+
+    # Hidden until the script proves it can run. A visitor with JavaScript off
+    # must not be shown a button that does nothing.
+    launcher = re.search(r"<button[^>]*id=\"arcade-launch\"[^>]*>", markup)
+    assert launcher, "landing page has no arcade launcher"
+    assert "hidden" in launcher.group(0), (
+        "the arcade launcher ships visible; without JavaScript it is a dead control"
+    )
+    assert re.search(r"<div class=\"footer-arcade\"[^>]*hidden", markup), (
+        "the launcher's explanatory copy ships visible while its button is hidden"
+    )
+    assert 'type="button"' in launcher.group(0), (
+        "a button inside no form still defaults to submit in some engines"
+    )
+
+    # Both assets ship, carry the shared cache token, and are cached like every
+    # other static asset.
+    for asset in ("/arcade.js", "/arcade.css"):
+        assert re.search(
+            rf'(?:src|href)="{re.escape(asset)}\?v=[^"]+"', markup
+        ), f"index.html does not reference {asset} with a cache token"
+        assert (output / asset.lstrip("/")).is_file(), f"{asset} was not published"
+
+    config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
+    cached_sources = {
+        entry["source"]
+        for entry in config["headers"]
+        for header in entry["headers"]
+        if header["key"] == "Cache-Control" and "max-age=604800" in header["value"]
+    }
+    assert any("arcade.js" in source for source in cached_sources), (
+        "arcade.js has no long-lived cache rule"
+    )
+    assert any("arcade.css" in source for source in cached_sources), (
+        "arcade.css has no long-lived cache rule"
+    )
+
+    # Landing page only: the proof and comparison pages are where a buyer is
+    # doing actual work, and they should not pay for the joke.
+    for relative_path in ("proof/index.html", "compare/index.html", "404.html"):
+        other = (output / relative_path).read_text(encoding="utf-8")
+        assert "arcade" not in other, (
+            f"{relative_path} loads the arcade; it belongs on the landing page only"
+        )
+
+
+def test_arcade_cabinets_are_generic_and_unbranded() -> None:
+    """No arcade trademark may appear in the waiting room.
+
+    The cabinets are riffs on a genre, which is fine, but a shipped page that
+    names somebody's game or studio is a trademark problem rather than a joke.
+    The names here are all failure modes of this product's own domain, and this
+    test is what keeps the next contributor from "improving" one of them into a
+    brand.
+    """
+
+    forbidden = (
+        "space invaders",
+        "pac-man",
+        "pacman",
+        "tetris",
+        "frogger",
+        "donkey kong",
+        "galaga",
+        "centipede",
+        "missile command",
+        "q*bert",
+        "qbert",
+        "atari",
+        "namco",
+        "nintendo",
+        "sega",
+        "taito",
+        "konami",
+        "midway",
+        "activision",
+    )
+
+    for path in (SITE / "arcade.js", SITE / "arcade.css", SITE / "index.html"):
+        body = path.read_text(encoding="utf-8").casefold()
+        for name in forbidden:
+            assert name not in body, (
+                f"{path.name} names {name!r}; the cabinets must stay generic"
+            )
+
+    # The cabinets that should exist, by the ids the rest of the feature and
+    # the ?arcade= parameter address them by.
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+    for cabinet_id in ("scope-creep", "token-bucket", "append-only", "race-condition"):
+        assert f'id: "{cabinet_id}"' in arcade, f"cabinet {cabinet_id} is missing"
+
+
+def test_arcade_receipts_are_marked_simulated() -> None:
+    """A prop receipt must be unmistakable as a prop.
+
+    Everything this site claims rests on a receipt being verifiable. A
+    game-over artifact that looked like the real thing — screenshotted, pasted
+    into a thread, believed — would cost more than the joke is worth, so the
+    prop says what it is in its own body text and points at the real one.
+    """
+
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+
+    assert "SIMULATED · NOT A REAL RECEIPT" in arcade, (
+        "the prop receipt has no simulated stamp"
+    )
+    assert "UNSIGNED" in arcade and "UNVERIFIABLE" in arcade, (
+        "the prop receipt does not disclaim its own signature"
+    )
+    assert '"/proof/"' in arcade, (
+        "the prop receipt does not point at the real, verifiable receipt"
+    )
+    # No fabricated cryptographic material: a plausible-looking signature blob
+    # is exactly the thing that gets mistaken for real.
+    assert not re.search(r"[A-Za-z0-9+/]{40,}={0,2}", arcade), (
+        "arcade.js contains a long base64-looking literal; a prop receipt must "
+        "not carry anything resembling a real signature"
+    )
+
+
+def test_arcade_pauses_the_particle_field_rather_than_racing_it() -> None:
+    """Two animation loops must not run at once.
+
+    The particle field pauses because the stylesheet hides its canvas and
+    /wave.js unschedules on the IntersectionObserver that notices. That is a
+    load-bearing interaction between two files that never import each other,
+    so it is asserted rather than left to a comment.
+    """
+
+    styles = (SITE / "styles.css").read_text(encoding="utf-8")
+    wave = (SITE / "wave.js").read_text(encoding="utf-8")
+
+    hide_rule = re.search(
+        r"html\.arcade-open\s+\.wave-canvas[^}]*\{[^}]*display:\s*none",
+        styles,
+        flags=re.DOTALL,
+    )
+    assert hide_rule, "opening the arcade does not hide the particle canvas"
+    assert "IntersectionObserver" in wave, (
+        "wave.js no longer observes its canvas, so hiding it would leave the "
+        "renderer running behind the arcade"
+    )
