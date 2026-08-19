@@ -10,11 +10,18 @@ permissions:
   contents: read
   pull-requests: read
 
-# Supersede in-flight PR runs when a branch is updated again. Push runs are
-# never cancelled: railway-deploy.yml gates a release on a *completed*
-# push-event CI run for the exact SHA, and a cancelled run has no conclusion.
+# Supersede in-flight PR runs when a branch is updated again.
+#
+# Push runs must never be grouped with each other. cancel-in-progress: false
+# alone is not enough: GitHub keeps at most one pending run per group and
+# cancels the older pending one when a newer run arrives, so a third push to
+# main would cancel the queued middle one. railway-deploy.yml gates a release
+# on that exact SHA's push run and treats a `cancelled` conclusion as a failed
+# gate — an intermediate commit would become unreleasable. Giving each push its
+# own group (run_id is unique per run) means pushes never queue behind one
+# another and are never superseded.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
