@@ -78,7 +78,7 @@ it and `test_pages_carry_no_inline_scripts` will fail. Put the code in a
 same-origin file instead.
 
 CSS and JS are served with `max-age=604800`, so cache busting is a **manual
-query token**: every reference looks like `/styles.css?v=gateway-5`. When you
+query token**: every reference looks like `/styles.css?v=gateway-6`. When you
 change any of those files (including `/wave.js`), bump the token in
 `index.html`, `proof/index.html`, `compare/index.html`, `concept/index.html`,
 `404.html`, and `build_site.py`'s `ANALYTICS_SCRIPTS`, or

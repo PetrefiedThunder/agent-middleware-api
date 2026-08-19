@@ -791,6 +791,7 @@
       pulseFronts[j] = pulses[j].x + age * PULSE_SPEED;
       pulseStrengths[j] = 1.3 * Math.exp(-age * 0.9);
     }
+    state.pulses = pulses.length;
   }
 
   // Wire the governed-loop cards and the booking CTA to the field. Cards
@@ -996,6 +997,10 @@
       eased.yaw = 0;
       eased.pitch = 0;
       eased.strength = 0;
+      // Pulses age by waveTime, which stands still here — a pulse fired
+      // before the toggle would otherwise bake a frozen streak into every
+      // later still frame. The still frame is the pure field state.
+      pulses.length = 0;
       directorTick(true);
       staticRenderedFor = dominantName;
       drawScene(frozenTime !== null ? frozenTime : CONFIG.staticTime);
