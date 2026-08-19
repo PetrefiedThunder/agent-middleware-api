@@ -879,14 +879,31 @@ def test_landing_hero_wave_is_progressive_enhancement(tmp_path) -> None:
     assert (output / "wave.js").is_file()
 
     # The scroll narrative is wired: sections declare field states and the
-    # renderer knows every one of them. The story's three anchor states
-    # must exist, and no section may name a preset the renderer lacks.
+    # renderer knows every one of them. All eight documented states must be
+    # present (site/README.md names the full arc), and no section may name
+    # a preset the renderer lacks. An unknown preset would not crash the
+    # renderer — measureSections skips names missing from PRESETS — but it
+    # would silently drop that section from the narrative, so the build
+    # contract refuses it here instead.
     wave_js = (output / "wave.js").read_text(encoding="utf-8")
     declared = re.findall(r'data-wave="([a-z]+)"', page)
-    for anchor in ("sea", "stream", "crystal"):
-        assert anchor in declared, f"landing page lost the {anchor} field state"
+    required = {
+        "sea",
+        "condense",
+        "order",
+        "stream",
+        "crystal",
+        "quiet",
+        "gridquiet",
+        "dark",
+        "ember",
+    }
+    assert required.issubset(set(declared)), (
+        "landing page is missing field states: "
+        + ", ".join(sorted(required - set(declared)))
+    )
     for preset in declared:
-        assert re.search(rf"\b{preset}: \{{", wave_js), (
+        assert re.search(rf"\b{re.escape(preset)}: \{{", wave_js), (
             f'index.html declares data-wave="{preset}" but wave.js has no '
             "such preset"
         )

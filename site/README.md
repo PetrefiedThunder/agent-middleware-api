@@ -36,7 +36,8 @@ Open `http://127.0.0.1:8765/`.
 - `/` — human design-partner funnel over one persistent particle field
   (`/wave.js`, plain WebGL, no libraries). Sections declare a field state
   with `data-wave="preset"` and scrolling lerps between them — sea →
-  condense → order → stream → crystal → quiet → dark → ember — while the
+  condense → order → stream → crystal → quiet → gridquiet → dark →
+  ember — while the
   composite's ground color lerps from pure black into the ledger ink.
   Hovering a governed-loop card or the booking CTA fires a pulse through
   the field. Reduced motion renders one still frame per field state;
