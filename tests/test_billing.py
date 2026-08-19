@@ -1261,7 +1261,9 @@ async def test_billing_engine_refuses_non_positive_units(units):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("units", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")])
+@pytest.mark.parametrize(
+    "units", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")]
+)
 async def test_billing_engine_refuses_non_finite_units(units):
     """The engine refuses non-finite units, not only the HTTP boundary.
 
@@ -1301,9 +1303,7 @@ async def test_charge_against_an_unknown_wallet_creates_nothing(
     assert resp.status_code == 404, resp.text
     assert resp.json()["detail"]["error"] == "wallet_not_found"
 
-    ledger_resp = await client.get(
-        f"/v1/billing/ledger/{unknown}", headers=api_headers
-    )
+    ledger_resp = await client.get(f"/v1/billing/ledger/{unknown}", headers=api_headers)
     # Pin the status set first. Guarding the emptiness check on 200 alone
     # would let a future change to the ledger endpoint drop the assertion
     # this test exists for without anything failing.
@@ -1401,6 +1401,18 @@ async def test_dry_run_charge_refuses_unauthenticated_callers_without_leaking(
             headers=headers,
         )
 
+    async def _dry_run_session(headers: dict, session_id: str, units: float):
+        return await client.post(
+            "/v1/billing/dry-run/charge",
+            json={
+                "wallet_id": real_wallet,
+                "service": "iot_bridge",
+                "units": units,
+                "dry_run_session_id": session_id,
+            },
+            headers=headers,
+        )
+
     # The status varies with the *credential*, never with the payload: no
     # header and a malformed key are 401, a well-formed but unrecognized key
     # is 403. That split is fine — it describes what the caller presented, not
@@ -1426,19 +1438,31 @@ async def test_dry_run_charge_refuses_unauthenticated_callers_without_leaking(
         assert bad_units.status_code == expected_status, bad_units.text
         assert bad_units.text == real.text
 
-    # The session-scoped branch is refused on the same terms, so an unknown
-    # session id cannot be distinguished from a real one either.
-    unauth_session = await client.post(
-        "/v1/billing/dry-run/charge",
-        json={
-            "wallet_id": real_wallet,
-            "service": "iot_bridge",
-            "units": 1,
-            "dry_run_session_id": "sess-does-not-exist",
-        },
-        headers={},
+    # The session-scoped branch is refused on the same terms. Asserting that
+    # against an unknown session id alone would prove nothing: it has to be
+    # compared with a session that really exists, or the test passes for a
+    # server that answers 404 for one and 401 for the other.
+    session_resp = await client.post(
+        "/v1/billing/dry-run/session",
+        json={"wallet_id": real_wallet},
+        headers=api_headers,
     )
-    assert unauth_session.status_code == 401, unauth_session.text
+    assert session_resp.status_code == 201, session_resp.text
+    real_session = session_resp.json()["session_id"]
+    fake_session = "sess-does-not-exist"
+
+    for headers, expected_status in credentials:
+        for units in (1, -5):
+            real = await _dry_run_session(headers, real_session, units)
+            fake = await _dry_run_session(headers, fake_session, units)
+            assert real.status_code == expected_status, real.text
+            assert fake.status_code == expected_status, fake.text
+            # The handler looks the session up *before* checking wallet
+            # access — but the credential check is a dependency, so it runs
+            # before the handler body at all. Nothing about which session
+            # ids exist reaches a caller who never got past the door.
+            assert real.text == fake.text
+            assert real_session not in real.text
 
 
 @pytest.mark.anyio
