@@ -144,8 +144,6 @@ class IdempotencyService:
                 # Check if this DISPATCHED attempt is stale (abandoned/crashed)
                 # or live (owned by an active concurrent request).
                 if dispatch_attempt.dispatched_at is not None:
-                    from datetime import datetime, timezone
-                    
                     from app.core.time import to_naive_utc, utc_now
                     
                     # Both must be naive or both aware for subtraction
