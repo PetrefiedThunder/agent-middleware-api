@@ -503,6 +503,81 @@ jobs:
       - name: Run the trust release gate
         run: scripts/trust_release_gate.sh
 
+  # Constant test loop: proves the local trust-plane loop (self-provision path)
+  # and optionally tests production when CI_SMOKE_AGENT_KEY is available.
+  # Production test is skipped (not failed) when the secret is unset.
+  constant_test_loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install httpx
+
+      - name: Run local trust-plane constant test loop (self-provision)
+        # Always run: proves the local loop with self-provisioned credentials.
+        # Uses quickstart path with ephemeral SQLite and dev key self-provision.
+        env:
+          ENABLE_DEV_KEY_SELF_PROVISION: "true"
+          TRUST_MODE_ENABLED: "true"
+          ALLOW_LEGACY_UNPERMITTED_MCP: "false"
+          ENABLE_PROOF_SURFACES: "false"
+          ENABLE_DOGFOOD_TOOL: "true"
+          TRUST_SIGNING_PRIVATE_KEY_B64: dGVzdC1zaWduaW5nLWtleS1tYXRlcmlhbC0zMmJ5dGU=
+          DATABASE_URL: sqlite+aiosqlite:///./constant-test-loop.db
+          STATE_BACKEND: sqlite
+          SQLITE_URL: ./constant-test-loop-kv.db
+        run: |
+          # Boot server in background
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          SERVER_PID=$!
+          
+          # Wait for health endpoint
+          for i in {1..60}; do
+            if curl -f http://127.0.0.1:8000/health >/dev/null 2>&1; then
+              echo "Server ready"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "Server failed to start"
+              kill $SERVER_PID 2>/dev/null || true
+              exit 1
+            fi
+            sleep 1
+          done
+          
+          # Run constant test loop (self-provision, no CI_SMOKE_AGENT_KEY)
+          python scripts/constant_test_loop.py
+          TEST_EXIT=$?
+          
+          # Clean up server
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+          
+          exit $TEST_EXIT
+
+      - name: Run production constant test loop (api.thisisatest.tech)
+        # Only run when CI_SMOKE_AGENT_KEY is set. Skip (not fail) when unset.
+        # This tests the production API with a persistent agent key.
+        if: vars.CI_SMOKE_AGENT_KEY != '' || secrets.CI_SMOKE_AGENT_KEY != ''
+        env:
+          API_URL: https://api.thisisatest.tech
+          CI_SMOKE_AGENT_KEY: ${{ secrets.CI_SMOKE_AGENT_KEY }}
+          CI_SMOKE_WALLET_ID: ${{ secrets.CI_SMOKE_WALLET_ID }}
+          CI_SMOKE_KEY_ID: ${{ secrets.CI_SMOKE_KEY_ID }}
+        run: python scripts/constant_test_loop.py
+
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
