@@ -256,11 +256,30 @@ class ServiceRegistry:
         requires a signed permit + idempotency key — even if legacy
         unpermitted MCP is otherwise allowed.
         """
+        if credits_per_unit <= 0:
+            # A price is what the meter charges. Zero makes a governed tool
+            # free; negative pays the caller on every invoke, because the
+            # billing engine multiplies units by this number and debits the
+            # result. Refuse at registration rather than discovering it in a
+            # ledger.
+            raise ValueError(
+                f"credits_per_unit must be greater than 0, got {credits_per_unit!r}"
+            )
+
         input_schema = pydantic_to_mcp_schema(input_model)
         output_schema = pydantic_to_mcp_schema(output_model)
 
-        if input_schema is None and output_schema is None:
-            input_schema, output_schema = extract_schema_from_callable(func)
+        # Each side falls back independently. Requiring *both* to be absent
+        # meant that supplying only an output_model -- a handler with plain
+        # typed arguments returning a model -- left the input schema empty, so
+        # the tool advertised "takes no arguments" and every obedient client
+        # call raised TypeError on the missing parameters.
+        if input_schema is None or output_schema is None:
+            derived_input, derived_output = extract_schema_from_callable(func)
+            if input_schema is None:
+                input_schema = derived_input
+            if output_schema is None:
+                output_schema = derived_output
 
         service_record = {
             "service_id": service_id,
