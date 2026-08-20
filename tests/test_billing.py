@@ -696,12 +696,80 @@ async def test_pricing_table(client, api_headers):
     data = resp.json()
     assert data["exchange_rate"] == 1000.0
     assert data["exchange_rate_exact"] == "1000.0"
-    assert len(data["pricing"]) >= 7  # At least one entry per service
+    # Tests run with ENABLE_PROOF_SURFACES=false, so only the categories a core
+    # deployment can actually serve are advertised.
+    assert [entry["service_category"] for entry in data["pricing"]] == [
+        "platform_fee",
+        "swarm_delegation",
+    ]
     # Check structure
     entry = data["pricing"][0]
     assert "service_category" in entry
     assert "unit" in entry
     assert "credits_per_unit" in entry
+
+
+@pytest.mark.anyio
+async def test_pricing_table_hides_frozen_proof_surfaces(client, api_headers):
+    """A core deployment must not advertise services it cannot serve.
+
+    billing is a CORE_TRUST_ROUTER, so it is mounted — and published in the
+    OpenAPI — even when every proof-surface router is not. Listing their
+    categories made the trust plane's own price list read as a menu for media,
+    IoT, oracle, red-team and friends, which docs/PROOF_SURFACES.md rule 3
+    forbids advertising as the product.
+    """
+    resp = await client.get("/v1/billing/pricing", headers=api_headers)
+    assert resp.status_code == 200
+    advertised = {e["service_category"] for e in resp.json()["pricing"]}
+
+    for frozen in (
+        "iot_bridge",
+        "media_engine",
+        "oracle",
+        "red_team",
+        "rtaas",
+        "sandbox",
+        "telemetry_pm",
+        "content_factory",
+        "protocol_gen",
+        "agent_comms",
+    ):
+        assert frozen not in advertised
+    # The platform fee is the category a governed MCP tool falls back to, so it
+    # must survive the filter or a core deployment would advertise no price.
+    assert "platform_fee" in advertised
+
+
+@pytest.mark.anyio
+async def test_pricing_table_lists_proof_surfaces_when_they_are_mounted(
+    client, api_headers, monkeypatch
+):
+    """Gating is presentation-only and follows the mount flag both ways."""
+    monkeypatch.setenv("ENABLE_PROOF_SURFACES", "true")
+    get_settings.cache_clear()
+    try:
+        resp = await client.get("/v1/billing/pricing", headers=api_headers)
+        assert resp.status_code == 200
+        advertised = {e["service_category"] for e in resp.json()["pricing"]}
+        assert {"iot_bridge", "media_engine", "oracle", "platform_fee"} <= advertised
+    finally:
+        monkeypatch.delenv("ENABLE_PROOF_SURFACES", raising=False)
+        get_settings.cache_clear()
+
+
+def test_pricing_table_has_exactly_one_definition():
+    """The dry-run sandbox must price identically to the real charge path.
+
+    shadow_ledger carried its own byte-identical copy of DEFAULT_PRICING. Two
+    copies price the same only until someone edits one, and the failure mode is
+    a dry run that quotes a number the real charge would never take. Assert the
+    same object reaches every consumer.
+    """
+    from app.services import agent_money, pricing, shadow_ledger
+
+    assert agent_money.DEFAULT_PRICING is pricing.DEFAULT_PRICING
+    assert shadow_ledger.DEFAULT_PRICING is pricing.DEFAULT_PRICING
 
 
 @pytest.mark.anyio
@@ -2212,3 +2280,203 @@ async def test_a_simulated_charge_cannot_recreate_a_claimed_redis_session(
     second = await ledger.commit_session(session_id, get_agent_money())
     assert second.wallet_id == "", second
     assert second.committed_charges == 0, second
+
+
+# --- Zero is a value, not an absence ---
+
+
+@pytest.mark.anyio
+async def test_zero_daily_limit_blocks_spending_rather_than_unlocking_it(
+    client, api_headers
+):
+    """``daily_limit=0`` is the strictest cap there is, not the absence of one.
+
+    ``daily_limit`` is Optional: ``None`` means "no cap". A truthiness test
+    conflates that with ``Decimal("0")`` -- the value an operator sets to halt
+    a runaway agent -- and hands it unlimited daily spend instead. The HTTP
+    schema advertises ``ge=0``, so zero is a documented input, and this line is
+    the only hard daily-spend enforcement in the system.
+    """
+
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Zero Cap Co",
+            "email": "ops@zerocap.example",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    sponsor_id = sponsor_resp.json()["wallet_id"]
+
+    agent_resp = await client.post(
+        "/v1/billing/wallets/agent",
+        json={
+            "sponsor_wallet_id": sponsor_id,
+            "agent_id": "halted-bot",
+            "budget_credits": 5000,
+            "daily_limit": 0,
+        },
+        headers=api_headers,
+    )
+    assert agent_resp.status_code == 201
+    agent_wallet_id = agent_resp.json()["wallet_id"]
+
+    charge_resp = await client.post(
+        f"/v1/billing/charge?wallet_id={agent_wallet_id}"
+        "&service=agent_comms&units=1",
+        headers=api_headers,
+    )
+    assert charge_resp.status_code == 402, (
+        "a zero daily limit was read as 'no limit' and the charge went through"
+    )
+
+    # The wallet keeps its funds: a refused charge must not debit.
+    wallet_resp = await client.get(
+        f"/v1/billing/wallets/{agent_wallet_id}", headers=api_headers
+    )
+    assert Decimal(wallet_resp.json()["balance_exact"]) == Decimal("5000")
+
+
+def test_register_local_derives_an_input_schema_alongside_an_output_model() -> None:
+    """Supplying only an output model must not erase the input contract.
+
+    The callable fallback used to run only when *both* schemas were absent, so
+    a handler with plain typed arguments plus an output model advertised
+    ``inputSchema: {}``. A client that obeyed that contract called the tool
+    with no arguments and got a TypeError.
+    """
+
+    from pydantic import BaseModel
+
+    from app.schemas.billing import ServiceCategory
+    from app.services.service_registry import get_service_registry
+
+    class Out(BaseModel):
+        echoed: str
+
+    registry = get_service_registry()
+
+    def handler(value: str) -> Out:
+        return Out(echoed=value)
+
+    record = registry.register_local(
+        service_id="schema-fallback-probe",
+        name="Schema fallback probe",
+        description="Input schema must still be derived from the callable",
+        category=ServiceCategory.AGENT_COMMS,
+        func=handler,
+        output_model=Out,
+    )
+
+    input_schema = record["input_schema"]
+    assert input_schema, "input schema was dropped because an output model was given"
+    assert "value" in (input_schema.get("properties") or {}), (
+        f"the handler's own parameter is missing from {input_schema!r}"
+    )
+
+
+@pytest.mark.anyio
+async def test_losing_an_operation_key_race_does_not_leave_velocity_overcounted(
+    client, api_headers
+):
+    """A charge that loses the idempotency race must give back its velocity.
+
+    The velocity monitor records a charge in its own transaction, before the
+    billing transaction takes the wallet lock. When the ledger insert then
+    violates the wallet/operation-key uniqueness constraint, the billing
+    transaction rolls back -- but that already-committed increment does not go
+    with it. The loser adopts the winner's durable debit and returns it as a
+    successful idempotent replay, so one charge ends up counted twice against
+    the caller's hourly and daily spend.
+
+    That is not a cosmetic metric: those counters are what the spend cap and
+    the anomaly auto-freeze are measured against, so the wallet is eventually
+    throttled and frozen for money it never spent.
+
+    The race is reproduced deterministically by having the winner's debit land
+    during the exact window the loser is exposed to -- after its duplicate
+    pre-check, before its own insert.
+    """
+
+    from app.db.models import IdempotencyRecordModel
+    from app.schemas.billing import ServiceCategory
+    from app.services import billing_engine as billing_engine_module
+    from app.services.billing_engine import BillingEngine
+
+    sponsor_resp = await client.post(
+        "/v1/billing/wallets/sponsor",
+        json={
+            "sponsor_name": "Race Co",
+            "email": "ops@race.example",
+            "initial_credits": 10000,
+        },
+        headers=api_headers,
+    )
+    wallet_id = sponsor_resp.json()["wallet_id"]
+
+    session_factory = get_session_factory()
+    operation_key = "op-velocity-race"
+
+    async with session_factory() as session:
+        async with session.begin():
+            session.add(
+                IdempotencyRecordModel(
+                    record_id=operation_key,
+                    wallet_id=wallet_id,
+                    endpoint="/v1/billing/charge",
+                    idempotency_key=operation_key,
+                    request_hash="b" * 64,
+                )
+            )
+
+    money = get_agent_money()
+    charge_kwargs = dict(
+        wallet_id=wallet_id,
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("2"),
+        operation_key=operation_key,
+    )
+
+    # The winner: an ordinary charge under the same operation key.
+    winner = await money.charge(**charge_kwargs)
+
+    async with session_factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        spent_after_winner = (wallet.hourly_spent, wallet.daily_spent)
+
+    # The loser: force it past its own duplicate pre-check so it reaches the
+    # insert and collides, which is the window the bug lives in.
+    real_get_operation_debit = BillingEngine._get_operation_debit
+    calls = {"n": 0}
+
+    async def _blind_first_precheck(session, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Stand in for the winner's row not being visible yet: this is the
+            # window between the loser's pre-check and its own insert.
+            return None
+        return await real_get_operation_debit(session, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        billing_engine_module.BillingEngine,
+        "_get_operation_debit",
+        staticmethod(_blind_first_precheck),
+    )
+    try:
+        loser = await money.charge(**charge_kwargs)
+    finally:
+        monkeypatch.undo()
+
+    # The loser adopted the winner's debit rather than writing a second one.
+    assert loser.entry_id == winner.entry_id
+
+    async with session_factory() as session:
+        wallet = await session.get(WalletModel, wallet_id)
+        spent_after_loser = (wallet.hourly_spent, wallet.daily_spent)
+
+    assert spent_after_loser == spent_after_winner, (
+        "the losing attempt's velocity increment survived its rollback: "
+        f"{spent_after_winner} -> {spent_after_loser} for one charge"
+    )
