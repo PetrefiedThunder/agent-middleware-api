@@ -8,43 +8,71 @@ must not cause a second gateway dispatch or a second ledger debit."
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from app.db.database import get_session_factory
-from app.db.models import IdempotencyRecordModel, McpDispatchAttemptModel
+from app.db.models import IdempotencyRecordModel
+from app.main import app
+from app.schemas.billing import ServiceCategory
+from app.services.agent_money import get_agent_money
 from app.services.idempotency import get_idempotency_service
 from app.services.mcp_dispatch_attempts import (
     DISPATCH_DISPATCHED,
     get_mcp_dispatch_attempt_service,
 )
-from app.services.upstream_mcp import UpstreamMcpDeliveryUncertainError
-from tests.support.provision import create_tool_permit, provision_agent_wallet
-from tests.support.upstream_mcp_executor import UpstreamMcpExecutor
+from app.services.service_registry import get_service_registry
+from app.services.upstream_mcp import (
+    UpstreamMcpDeliveryUncertainError,
+    UpstreamMcpResult,
+)
+from tests.test_trust_helpers import create_tool_permit, provision_agent_wallet
 
 
-class AmbiguousExecutor(UpstreamMcpExecutor):
-    """Executor that raises delivery_uncertain after dispatch checkpoint."""
+def _upstream_result(payload: dict[str, Any]) -> UpstreamMcpResult:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return UpstreamMcpResult(
+        payload=payload,
+        canonical_json=canonical,
+        response_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+        size_bytes=len(canonical.encode()),
+        is_error=bool(payload.get("isError")),
+    )
 
-    def __init__(self) -> None:
-        self.dispatch_count = 0
-        self.calls: list[dict] = []
+
+@dataclass
+class AmbiguousExecutor:
+    """Executor that always raises delivery_uncertain after the dispatch checkpoint."""
+
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    dispatch_count: int = 0
 
     async def call_tool(
         self,
-        arguments: dict,
+        arguments: dict[str, Any],
         *,
         invocation_id: str,
-        idempotency_key: str | None = None,
-        before_dispatch = None,
-    ):
+        idempotency_key: str,
+        before_dispatch: Callable[[], Awaitable[None]],
+    ) -> UpstreamMcpResult:
         self.calls.append({"arguments": arguments, "idempotency_key": idempotency_key})
-        if before_dispatch:
-            await before_dispatch()
+        await before_dispatch()
         self.dispatch_count += 1
         raise UpstreamMcpDeliveryUncertainError()
+
+
+@pytest.fixture
+async def client() -> AsyncClient:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as value:
+        yield value
 
 
 @pytest.mark.anyio
@@ -64,26 +92,25 @@ async def test_replay_after_dispatched_triggers_reconciliation(
        - Trigger immediate reconciliation
        - Return the delivery_uncertain receipt
     """
-    from app.services.service_registry import get_service_registry
-
-    provisioned = await provision_agent_wallet(client)
     tool_name = "uncertain-replay-test"
     executor = AmbiguousExecutor()
     registry = get_service_registry()
-    registry.register_local(
-        tool_name,
-        lambda **kwargs: None,
-        {
-            "name": tool_name,
-            "description": "Test tool",
-            "inputSchema": {"type": "object", "properties": {}},
-            "creditsPerCall": Decimal("2"),
-            "execution_backend": "upstream_mcp",
-        },
+    registry.register_upstream(
+        service_id=tool_name,
+        name="Uncertain Replay Test Tool",
+        description="Test tool",
+        category=ServiceCategory.AGENT_COMMS,
+        executor=executor,
+        input_schema={"type": "object", "properties": {"test": {"type": "string"}}},
+        output_schema=None,
+        credits_per_unit=2.0,
+        upstream_tool_name=tool_name,
+        upstream_origin="https://test.example.com",
     )
-    registry.register_executor(tool_name, executor)
 
     try:
+        provisioned = await provision_agent_wallet(client)
+
         permit = await create_tool_permit(
             client,
             wallet_id=provisioned["agent_wallet_id"],
@@ -130,14 +157,11 @@ async def test_replay_after_dispatched_triggers_reconciliation(
         assert attempt is not None
 
         # Attach charge (simulating successful charge before crash)
-        from app.services.agent_money import get_agent_money
-
         money = get_agent_money()
         charge = await money.charge(
             wallet_id=provisioned["agent_wallet_id"],
-            amount_credits=Decimal("2"),
-            service_category="api",
-            description="Test charge",
+            service_category=ServiceCategory.AGENT_COMMS,
+            units=Decimal("2"),
             request_path="/test",
             operation_key=begun.record_id,
         )
@@ -158,7 +182,8 @@ async def test_replay_after_dispatched_triggers_reconciliation(
             assert record is not None
             assert record.response_json is None
 
-        # Now replay the same idempotency key - this should trigger reconciliation
+        # Now replay the same idempotency key - this should trigger on-demand
+        # reconciliation rather than returning idempotency_in_progress.
         replayed = await idem.begin_with_record(
             wallet_id=provisioned["agent_wallet_id"],
             endpoint="/mcp/invoke",
@@ -167,25 +192,18 @@ async def test_replay_after_dispatched_triggers_reconciliation(
             operation_kind="upstream_mcp",
         )
 
-        # Should have replay data now
+        # Should have replay data now (reconciliation completed)
         assert replayed.replay is not None
         assert replayed.replay.response_json is not None
         response = replayed.replay.response_json
 
         # Verify it's a delivery_uncertain response
-        assert "error" in response or "content" in response
-        if "receipt" in response:
-            receipt = response["receipt"]
-        elif "error" in response and isinstance(response["error"], dict):
-            receipt = response["error"].get("data", {}).get("receipt")
-        else:
-            receipt = response.get("receipt")
+        assert "error" in response
+        assert response["error"] == "delivery_uncertain"
+        assert response.get("receipt", {}).get("outcome") == "delivery_uncertain"
+        assert Decimal(str(response["receipt"]["credits_charged"])) == Decimal("2")
 
-        assert receipt is not None
-        assert receipt["outcome"] == "delivery_uncertain"
-        assert Decimal(str(receipt["credits_charged"])) == Decimal("2")
-
-        # Verify NO redispatch occurred
+        # Verify NO redispatch occurred (executor was never called in this test)
         assert executor.dispatch_count == 0, "Executor should not have been called"
 
         # Verify only one debit
@@ -213,26 +231,25 @@ async def test_delivery_uncertain_replay_never_redispatches(
     and has been receipted, replay returns the same receipt without
     re-executing the tool.
     """
-    from app.services.service_registry import get_service_registry
-
-    provisioned = await provision_agent_wallet(client)
     tool_name = "no-redispatch-test"
     executor = AmbiguousExecutor()
     registry = get_service_registry()
-    registry.register_local(
-        tool_name,
-        lambda **kwargs: None,
-        {
-            "name": tool_name,
-            "description": "Test tool",
-            "inputSchema": {"type": "object", "properties": {}},
-            "creditsPerCall": Decimal("2"),
-            "execution_backend": "upstream_mcp",
-        },
+    registry.register_upstream(
+        service_id=tool_name,
+        name="No Redispatch Test Tool",
+        description="Test tool that always returns delivery_uncertain",
+        category=ServiceCategory.AGENT_COMMS,
+        executor=executor,
+        input_schema={"type": "object", "properties": {"test": {"type": "string"}}},
+        output_schema=None,
+        credits_per_unit=2.0,
+        upstream_tool_name=tool_name,
+        upstream_origin="https://test.example.com",
     )
-    registry.register_executor(tool_name, executor)
 
     try:
+        provisioned = await provision_agent_wallet(client)
+
         permit = await create_tool_permit(
             client,
             wallet_id=provisioned["agent_wallet_id"],

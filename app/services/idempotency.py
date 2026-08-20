@@ -118,9 +118,14 @@ class IdempotencyService:
             )
 
             reconciler = get_mcp_dispatch_reconciliation_service()
-            # Reconcile this specific attempt immediately
+            # Reconcile this specific attempt immediately.
+            # Use reconciled_stale_prepared for prepared-state attempts so the
+            # outcome is identical to what the periodic sweep would produce.
             try:
-                await reconciler.reconcile_attempt(dispatch_attempt.attempt_id)
+                await reconciler.reconcile_attempt(
+                    dispatch_attempt.attempt_id,
+                    prepared_error_code="reconciled_stale_prepared",
+                )
             except Exception:
                 # Reconciliation failed; fall through to normal wait path
                 pass
