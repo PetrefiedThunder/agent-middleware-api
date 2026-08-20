@@ -130,12 +130,32 @@ class IdempotencyService:
                         return replay
                 # Terminal but no response yet - fall through to wait
 
-            # Only reconcile PREPARED attempts. DISPATCHED attempts may be owned
+            # Only reconcile PREPARED attempts, or DISPATCHED attempts that are
+            # stale (dispatched >5s ago). Fresh DISPATCHED attempts may be owned
             # by an active concurrent request; reconciling them causes a race where
             # we terminalize with delivery_uncertain while the owner is about to
             # complete with the actual result, triggering dispatch_terminal_conflict.
-            # Truly stale DISPATCHED attempts will be handled by the periodic sweep.
+            should_reconcile = False
             if dispatch_attempt.state == DISPATCH_PREPARED:
+                should_reconcile = True
+            elif dispatch_attempt.state == "dispatched":
+                # Check if this DISPATCHED attempt is stale (abandoned/crashed)
+                # or live (owned by an active concurrent request).
+                # Use dispatched_at timestamp: if > 5 seconds old, assume stale.
+                if dispatch_attempt.dispatched_at is not None:
+                    from datetime import datetime, timezone
+                    
+                    age_seconds = (
+                        datetime.now(timezone.utc) - dispatch_attempt.dispatched_at
+                    ).total_seconds()
+                    # 5-second threshold: live requests complete in < 5s typically;
+                    # crashed requests won't complete at all.
+                    if age_seconds > 5.0:
+                        should_reconcile = True
+                    # else: fresh dispatch, assume live concurrent request, wait
+                # else: no dispatched_at (shouldn't happen), don't reconcile
+
+            if should_reconcile:
                 reconciler = get_mcp_dispatch_reconciliation_service()
                 try:
                     await reconciler.reconcile_attempt(
