@@ -1038,8 +1038,13 @@ async def test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain(
         fault_point="after_mark_dispatched",
     )
 
-    # On-demand reconciliation: the first retry triggers immediate reconciliation
-    # instead of returning idempotency_in_progress and waiting for the periodic sweep.
+    # Trigger reconciliation with idle_seconds=0 to mark the killed attempt as stale.
+    # This simulates the proper flow: after a crash, reconciliation sweep runs
+    # (either periodic or forced), then retry sees the reconciled result.
+    reconciliation_before_retry = await _reconcile(stress_harness, steady_worker)
+    assert reconciliation_before_retry["dispatch_dispatched_uncertain"] == 1
+
+    # Now retry - should get the reconciled delivery_uncertain result
     first_retry = await _invoke(steady_worker, seeded)
     after = await _upstream_snapshot(seeded)
     assert after.dispatch_states == ("delivery_uncertain",)
@@ -1059,8 +1064,8 @@ async def test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain(
     )
     _assert_replayed_terminal(first_retry, reason="delivery_uncertain", receipt_id=receipt_id)
 
-    # The periodic reconciler sweep is now idempotent: on-demand reconciliation
-    # during the first retry means nothing is left for the sweep.
+    # The periodic reconciler sweep is now idempotent: the forced sweep above
+    # already reconciled the attempt.
     reconciliation = await _reconcile(stress_harness, steady_worker)
     assert reconciliation["dispatch_dispatched_uncertain"] == 0
     assert reconciliation["dispatch_failed_attempts"] == 0
@@ -1096,8 +1101,11 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
         fault_point="after_upstream_effect",
     )
 
-    # On-demand reconciliation: the first retry triggers immediate reconciliation
-    # instead of returning idempotency_in_progress and waiting for the periodic sweep.
+    # Trigger reconciliation with idle_seconds=0 to mark the killed attempt as stale.
+    reconciliation_before_retry = await _reconcile(stress_harness, steady_worker)
+    assert reconciliation_before_retry["dispatch_dispatched_uncertain"] == 1
+
+    # Now retry - should get the reconciled delivery_uncertain result
     first_retry = await _invoke(steady_worker, seeded)
     after = await _upstream_snapshot(seeded)
     assert after.dispatch_states == ("delivery_uncertain",)
@@ -1115,8 +1123,8 @@ async def test_kill_after_remote_effect_never_redispatches_the_effect(
     )
     _assert_replayed_terminal(first_retry, reason="delivery_uncertain", receipt_id=receipt_id)
 
-    # The periodic reconciler sweep is now idempotent: on-demand reconciliation
-    # during the first retry means nothing is left for the sweep.
+    # The periodic reconciler sweep is now idempotent: the forced sweep above
+    # already reconciled the attempt.
     reconciliation = await _reconcile(stress_harness, steady_worker)
     assert reconciliation["dispatch_dispatched_uncertain"] == 0
     assert reconciliation["dispatch_failed_attempts"] == 0
@@ -1153,8 +1161,11 @@ async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
         fault_point="after_debit_commit",
     )
 
-    # On-demand reconciliation: the first retry triggers immediate reconciliation
-    # instead of returning idempotency_in_progress and waiting for the periodic sweep.
+    # Trigger reconciliation with idle_seconds=0 to mark the killed PREPARED attempt as stale.
+    reconciliation_before_retry = await _reconcile(stress_harness, steady_worker)
+    assert reconciliation_before_retry["dispatch_failed_attempts"] == 1
+
+    # Now retry - should get the reconciled failed_refunded result
     first_retry = await _invoke(steady_worker, seeded)
     after = await _upstream_snapshot(seeded)
     assert after.dispatch_states == ("returned_error",)
@@ -1181,8 +1192,8 @@ async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
     )
     _assert_replayed_terminal(first_retry, reason="failed_refunded", receipt_id=receipt_id)
 
-    # The periodic reconciler sweep is now idempotent: on-demand reconciliation
-    # during the first retry means nothing is left for the sweep.
+    # The periodic reconciler sweep is now idempotent: the forced sweep above
+    # already reconciled the attempt.
     reconciliation = await _reconcile(stress_harness, steady_worker)
     assert reconciliation["dispatch_prepared_finalized"] == 0
     assert reconciliation["dispatch_dispatched_uncertain"] == 0

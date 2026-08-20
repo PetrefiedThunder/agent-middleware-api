@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update as sa_update
 
 from app.db.database import get_session_factory
 from app.db.models import IdempotencyRecordModel
@@ -175,6 +176,24 @@ async def test_replay_after_dispatched_triggers_reconciliation(
         # Mark as dispatched (this is where the "crash" happens)
         attempt = await dispatch.mark_dispatched(attempt.attempt_id)
         assert attempt.state == DISPATCH_DISPATCHED
+
+        # Backdate the attempt to make it stale (>300s old) so on-demand
+        # reconciliation will treat it as abandoned/crashed rather than live.
+        from datetime import timedelta
+        
+        from app.core.time import utc_now
+        from app.db.database import get_session_factory as get_db_factory
+        from app.db.models import McpDispatchAttemptModel
+        
+        stale_timestamp = utc_now() - timedelta(seconds=301)
+        db_factory = get_db_factory()
+        async with db_factory() as session:
+            await session.execute(
+                sa_update(McpDispatchAttemptModel)
+                .where(McpDispatchAttemptModel.attempt_id == attempt.attempt_id)
+                .values(updated_at=stale_timestamp, dispatched_at=stale_timestamp)
+            )
+            await session.commit()
 
         # Verify the idempotency record is incomplete
         factory = get_session_factory()
