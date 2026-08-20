@@ -652,3 +652,80 @@ def test_unusable_tool_pin_exits_as_configuration_not_invariant_failure(
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "configuration error" in result.stderr
+
+
+def test_tool_args_resolve_from_flag_environment_or_neither():
+    """--tool-args needs the env fallback --tool and --other-tool already have.
+
+    A CI job can otherwise satisfy every part of the off-loopback guard except
+    the payload, and would have to put that one remaining piece in argv.
+    """
+    resolve = _load_loop()["_resolve_tool_args"]
+
+    # The flag wins, and is parsed.
+    assert resolve('{"text": "from flag"}') == {"text": "from flag"}
+
+    # Neither set: None, so the guard can still refuse off loopback.
+    assert resolve(None) is None
+
+
+def test_tool_args_environment_fallback(monkeypatch):
+    monkeypatch.setenv("CI_SMOKE_TOOL_ARGS", '{"text": "from env"}')
+    resolve = _load_loop()["_resolve_tool_args"]
+
+    assert resolve(None) == {"text": "from env"}
+    # An explicit flag still overrides the environment.
+    assert resolve('{"text": "flag wins"}') == {"text": "flag wins"}
+
+    # An explicitly empty payload is a decision, not an absence: it must
+    # satisfy the guard rather than falling through to None.
+    monkeypatch.setenv("CI_SMOKE_TOOL_ARGS", "{}")
+    assert _load_loop()["_resolve_tool_args"](None) == {}
+
+
+def test_malformed_tool_args_are_a_configuration_error(monkeypatch):
+    """Exit 2, not 1: a bad payload means misconfiguration, not a broken plane."""
+    module = _load_loop()
+    resolve = module["_resolve_tool_args"]
+    ConfigurationError = module["ConfigurationError"]
+
+    with pytest.raises(ConfigurationError, match="not valid JSON"):
+        resolve("{not json")
+
+    # A list or scalar would be forwarded as the tool's arguments and rejected
+    # downstream as a tool error, which reads as the product failing.
+    with pytest.raises(ConfigurationError, match="must be a JSON object"):
+        resolve('["a", "b"]')
+    with pytest.raises(ConfigurationError, match="must be a JSON object"):
+        resolve("42")
+
+    monkeypatch.setenv("CI_SMOKE_TOOL_ARGS", "[1, 2]")
+    module = _load_loop()
+    with pytest.raises(module["ConfigurationError"], match=r"\$CI_SMOKE_TOOL_ARGS"):
+        module["_resolve_tool_args"](None)
+
+
+def test_environment_alone_satisfies_the_off_loopback_guard():
+    """A CI job configured purely through secrets must get past the guard."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CI_SMOKE")}
+    env.update(
+        {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "API_URL": "https://api.thisisatest.tech",
+            "CI_SMOKE_AGENT_KEY": "b2a_placeholder",
+            "CI_SMOKE_TOOL": "partner.echo",
+            "CI_SMOKE_TOOL_ARGS": '{"text": "ci"}',
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, str(CONSTANT_TEST_SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    # It gets past configuration and fails on the placeholder credential
+    # instead, which is the point: neither guard message appears.
+    assert "refusing to auto-select a tool" not in result.stderr
+    assert "refusing to send derived arguments" not in result.stderr
+    assert "b2a_placeholder" not in result.stdout + result.stderr
