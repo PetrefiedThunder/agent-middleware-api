@@ -157,12 +157,12 @@ async def test_replay_after_dispatched_triggers_reconciliation(
         assert attempt is not None
 
         # Attach charge (simulating successful charge before crash)
-        # Tool has credits_per_unit=2.0, so 1 unit = 2 credits
+        # Default AGENT_COMMS pricing is 1.5 credits/unit, so 4/3 units = 2 credits
         money = get_agent_money()
         charge = await money.charge(
             wallet_id=provisioned["agent_wallet_id"],
             service_category=ServiceCategory.AGENT_COMMS,
-            units=Decimal("1"),
+            units=Decimal("4") / Decimal("3"),
             request_path="/test",
             operation_key=begun.record_id,
         )
