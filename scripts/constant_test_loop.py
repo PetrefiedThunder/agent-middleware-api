@@ -50,6 +50,10 @@ class SmokeTestFailure(RuntimeError):
     """Raised when an invariant fails during the smoke test."""
 
 
+class ConfigurationError(RuntimeError):
+    """Raised when configuration is invalid (exits with status 2)."""
+
+
 def require(condition: bool, message: str) -> None:
     """Fail immediately if condition is false."""
     if not condition:
@@ -91,8 +95,8 @@ def _get_api_url() -> str:
     is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
     
     if parsed.scheme == "http" and not is_loopback:
-        raise SystemExit(
-            f"error: refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
+        raise ConfigurationError(
+            f"refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
             f"non-loopback host {parsed.hostname}. Use https:// or a loopback address."
         )
     
@@ -214,10 +218,18 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             keys_resp = _get_json(fetch_client, f"/v1/billing/wallets/{wallet_id}/keys", expected_status=200)
             keys = keys_resp.get("keys", [])
             require(len(keys) > 0, "no keys found for this wallet")
-            # Find the key matching our API key prefix
-            key_prefix = agent_key.split("_")[0] + "_" + agent_key.split("_")[1]
+            
+            # Derive key_prefix: first 8 characters (same as generate_api_key format)
+            # Validate key format before deriving prefix
+            if len(agent_key) < 8 or "_" not in agent_key:
+                raise ConfigurationError("malformed API key: expected format <prefix>_<suffix>")
+            key_prefix = agent_key[:8]
+            
             matching_keys = [k for k in keys if k.get("key_prefix") == key_prefix]
-            require(len(matching_keys) > 0, f"no key found with prefix {key_prefix}")
+            if len(matching_keys) == 0:
+                raise ConfigurationError(f"no key found with prefix {key_prefix}")
+            if len(matching_keys) > 1:
+                raise ConfigurationError(f"ambiguous: {len(matching_keys)} keys with prefix {key_prefix}")
             key_id = matching_keys[0]["key_id"]
             
             print(
@@ -408,6 +420,23 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
     print("[constant-test] ALL INVARIANTS HELD", file=sys.stderr)
 
 
+def _validate_api_url(url: str) -> str:
+    """Validate API URL and enforce HTTPS for non-loopback hosts."""
+    from urllib.parse import urlparse
+    
+    url = url.rstrip("/")
+    parsed = urlparse(url)
+    is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    
+    if parsed.scheme == "http" and not is_loopback:
+        raise ConfigurationError(
+            f"refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
+            f"non-loopback host {parsed.hostname}. Use https:// or a loopback address."
+        )
+    
+    return url
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -422,11 +451,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    api_url = args.api_url or _get_api_url()
-    agent_key, wallet_id, key_id = _get_agent_key()
-
     try:
+        # Validate API URL (applies to both --api-url and $API_URL)
+        api_url = _validate_api_url(args.api_url or _get_api_url())
+        agent_key, wallet_id, key_id = _get_agent_key()
         run_constant_test(api_url, agent_key, wallet_id, key_id)
+    except ConfigurationError as config_error:
+        print(f"\n[constant-test] configuration error: {config_error}", file=sys.stderr)
+        return 2
     except SmokeTestFailure as failure:
         print(f"\n[constant-test] FAILED: {failure}", file=sys.stderr)
         return 1

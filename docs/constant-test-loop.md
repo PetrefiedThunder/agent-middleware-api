@@ -27,21 +27,45 @@ The script self-provisions an agent key via `/v1/dev-keys/self-provision` when n
 Set `CI_SMOKE_AGENT_KEY` for a pre-provisioned agent credential. Optionally provide `CI_SMOKE_WALLET_ID` and `CI_SMOKE_KEY_ID` for faster startup (the script will fetch them from the API if not provided):
 
 ```bash
-# Provision an agent key once (using bootstrap key)
+# Provision an agent key once (using bootstrap key) and extract credentials in one pipeline
 export BOOTSTRAP_KEY="amw_live_..."
-umask 077  # Ensure restrictive permissions for key file
+
+# Extract and set as CI secrets directly from the JSON output (no persistent file)
+export CI_SMOKE_AGENT_KEY="$(python scripts/partner_api_key_bootstrap.py \
+  --api-url https://api.thisisatest.tech \
+  --agent-id ci-smoke-agent \
+  --key-name constant-test-loop \
+  --budget-credits 5000 \
+  --json | jq -r .api_key)"
+
+export CI_SMOKE_WALLET_ID="$(python scripts/partner_api_key_bootstrap.py \
+  --api-url https://api.thisisatest.tech \
+  --agent-id ci-smoke-agent \
+  --key-name constant-test-loop \
+  --budget-credits 5000 \
+  --json | jq -r .wallet_id)"
+
+export CI_SMOKE_KEY_ID="$(python scripts/partner_api_key_bootstrap.py \
+  --api-url https://api.thisisatest.tech \
+  --agent-id ci-smoke-agent \
+  --key-name constant-test-loop \
+  --budget-credits 5000 \
+  --json | jq -r .key_id)"
+
+# Or use a restrictive temporary file if needed
+KEY_FILE="$(mktemp)"
+umask 077
 python scripts/partner_api_key_bootstrap.py \
   --api-url https://api.thisisatest.tech \
   --agent-id ci-smoke-agent \
   --key-name constant-test-loop \
   --budget-credits 5000 \
-  --json | tee /tmp/agent-key.json
-chmod 600 /tmp/agent-key.json  # Restrict to owner-only read/write
-
-# Extract and set as CI secret
-export CI_SMOKE_AGENT_KEY="$(jq -r .api_key /tmp/agent-key.json)"
-export CI_SMOKE_WALLET_ID="$(jq -r .agent_wallet_id /tmp/agent-key.json)"
-export CI_SMOKE_KEY_ID="$(jq -r .key_id /tmp/agent-key.json)"
+  --json > "$KEY_FILE"
+chmod 600 "$KEY_FILE"
+export CI_SMOKE_AGENT_KEY="$(jq -r .api_key "$KEY_FILE")"
+export CI_SMOKE_WALLET_ID="$(jq -r .wallet_id "$KEY_FILE")"
+export CI_SMOKE_KEY_ID="$(jq -r .key_id "$KEY_FILE")"
+rm "$KEY_FILE"  # Clean up immediately
 
 # Run the constant test
 API_URL=https://api.thisisatest.tech python scripts/constant_test_loop.py

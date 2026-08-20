@@ -156,6 +156,7 @@ def provision(
             "api_url": base,
             "sponsor_wallet_id": sponsor_wallet_id,
             "agent_wallet_id": agent_wallet_id,
+            "wallet_id": agent_wallet_id,  # Documented field name (agent_wallet_id kept for compat)
             "agent_id": agent_id,
             "key_id": key.get("key_id"),
             "key_prefix": key.get("key_prefix"),
