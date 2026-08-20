@@ -113,10 +113,21 @@ class IdempotencyService:
 
         if dispatch_attempt is not None:
             # Import here to avoid circular dependency
+            from app.services.mcp_dispatch_attempts import DISPATCH_TERMINAL_STATES
             from app.services.mcp_dispatch_reconciliation import (
                 get_mcp_dispatch_reconciliation_service,
             )
 
+            # If attempt is already terminal and the idempotency record has a response,
+            # return it directly without re-reconciling (avoids dispatch_terminal_conflict
+            # on concurrent identical requests).
+            if dispatch_attempt.state in DISPATCH_TERMINAL_STATES:
+                if existing.response_json is not None:
+                    replay = _replay_from_record(existing, request_hash)
+                    if replay is not None:
+                        return replay
+                # Terminal but no response yet - fall through to reconcile
+            
             reconciler = get_mcp_dispatch_reconciliation_service()
             # Reconcile this specific attempt immediately.
             # Use reconciled_stale_prepared for prepared-state attempts so the
