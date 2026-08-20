@@ -1,8 +1,12 @@
 """CrewAI Tool for Agent Middleware API."""
 
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel
+
+from b2a_sdk.models import PermitRequest
 
 from .client import B2AClient
 
@@ -11,14 +15,9 @@ class MCPToolSchema(BaseModel):
     """Schema for MCP tool input."""
 
     tool_name: str
+    idempotency_key: str
     arguments: dict[str, Any] = {}
-
-
-class AWISessionSchema(BaseModel):
-    """Schema for AWI session creation."""
-
-    target_url: str
-    max_steps: int = 100
+    permit_idempotency_key: str | None = None
 
 
 class WalletBalanceSchema(BaseModel):
@@ -26,37 +25,43 @@ class WalletBalanceSchema(BaseModel):
 
 
 class CrewAIB2ATool(BaseTool):
-    """CrewAI tool for Agent Middleware API operations."""
+    """CrewAI tool for Agent Middleware API operations via governed permit→invoke→receipt flow."""
 
     name: str = "Agent_Middleware_API"
     description: str = (
-        "Access Agent Middleware API for MCP tools, AWI web interactions, and wallet operations. "
-        "Use this to call billable services, interact with websites, and manage agent billing."
+        "Access Agent Middleware API for MCP tools and wallet operations. "
+        "Use this to call billable services and manage agent billing. "
+        "All invocations return signed receipts."
     )
 
     client: B2AClient | None = None
-    api_url: str = "http://localhost:8000"
-    api_key: str | None = None
-    wallet_id: str | None = None
+    base_url: str = "https://api.thisisatest.tech"
+    api_key: str
+    wallet_id: str
+    permit_budget: Decimal = Decimal("100")
+    permit_ttl_minutes: int = 30
 
     def __init__(
         self,
-        api_url: str = "http://localhost:8000",
-        api_key: str | None = None,
-        wallet_id: str | None = None,
+        api_key: str,
+        wallet_id: str,
+        base_url: str = "https://api.thisisatest.tech",
+        permit_budget: Decimal = Decimal("100"),
+        permit_ttl_minutes: int = 30,
         **kwargs,
     ):
         super().__init__(**kwargs)
-        self.api_url = api_url
+        self.base_url = base_url
         self.api_key = api_key
         self.wallet_id = wallet_id
+        self.permit_budget = permit_budget
+        self.permit_ttl_minutes = permit_ttl_minutes
 
     def _get_client(self) -> B2AClient:
         if self.client is None:
             self.client = B2AClient(
-                api_url=self.api_url,
                 api_key=self.api_key,
-                wallet_id=self.wallet_id,
+                base_url=self.base_url,
             )
         return self.client
 
@@ -68,7 +73,7 @@ class CrewAIB2ATool(BaseTool):
         """Synchronous operation (for CrewAI compatibility).
 
         Args:
-            operation: One of 'list_tools', 'call_tool', 'create_session', 'balance'
+            operation: One of 'discover_tools', 'call_tool', 'balance'
             **kwargs: Operation-specific arguments
         """
         import asyncio
@@ -76,31 +81,59 @@ class CrewAIB2ATool(BaseTool):
         client = self._get_client()
 
         try:
-            if operation == "list_tools":
-                tools = asyncio.get_event_loop().run_until_complete(
-                    client.get_mcp_tools()
-                )
-                return str(tools)
+            if operation == "discover_tools":
+                tools = asyncio.get_event_loop().run_until_complete(client.discover_tools())
+                return str([{"name": t.name, "description": t.description} for t in tools])
 
             elif operation == "call_tool":
                 tool_name = kwargs.get("tool_name")
+                idempotency_key = kwargs.get("idempotency_key")
                 arguments = kwargs.get("arguments", {})
-                result = asyncio.get_event_loop().run_until_complete(
-                    client.call_mcp_tool(tool_name, arguments)
-                )
-                return str(result)
+                permit_idempotency_key = kwargs.get("permit_idempotency_key")
 
-            elif operation == "create_session":
-                target_url = kwargs.get("target_url")
-                max_steps = kwargs.get("max_steps", 100)
-                result = asyncio.get_event_loop().run_until_complete(
-                    client.create_awi_session(target_url, max_steps)
+                if not idempotency_key or not idempotency_key.strip():
+                    return "Error: idempotency_key is required and must not be blank"
+
+                if permit_idempotency_key is None:
+                    permit_idempotency_key = f"permit-{idempotency_key}"
+
+                request = PermitRequest(
+                    issuer_wallet_id=self.wallet_id,
+                    subject_wallet_id=self.wallet_id,
+                    max_credits=self.permit_budget,
+                    expires_at=datetime.now(timezone.utc)
+                    + timedelta(minutes=self.permit_ttl_minutes),
+                    allowed_tools=[tool_name],
+                    scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
                 )
-                return str(result)
+
+                permit = asyncio.get_event_loop().run_until_complete(
+                    client.create_permit(request, idempotency_key=permit_idempotency_key)
+                )
+
+                result = asyncio.get_event_loop().run_until_complete(
+                    client.invoke_tool(
+                        tool_name,
+                        arguments,
+                        wallet_id=self.wallet_id,
+                        permit_id=permit.permit_id,
+                        idempotency_key=idempotency_key,
+                    )
+                )
+
+                return str(
+                    {
+                        "content": result.content,
+                        "structured_content": result.structured_content,
+                        "receipt_id": result.receipt.receipt_id,
+                        "credits_charged": str(result.receipt.credits_charged),
+                        "signature": result.receipt.signature,
+                    }
+                )
 
             elif operation == "balance":
                 balance = asyncio.get_event_loop().run_until_complete(
-                    client.get_balance()
+                    client.get_balance(self.wallet_id)
                 )
                 return f"Balance: {balance} credits"
 
@@ -119,24 +152,56 @@ class CrewAIB2ATool(BaseTool):
         client = self._get_client()
 
         try:
-            if operation == "list_tools":
-                tools = await client.get_mcp_tools()
-                return str(tools)
+            if operation == "discover_tools":
+                tools = await client.discover_tools()
+                return str([{"name": t.name, "description": t.description} for t in tools])
 
             elif operation == "call_tool":
                 tool_name = kwargs.get("tool_name")
+                idempotency_key = kwargs.get("idempotency_key")
                 arguments = kwargs.get("arguments", {})
-                result = await client.call_mcp_tool(tool_name, arguments)
-                return str(result)
+                permit_idempotency_key = kwargs.get("permit_idempotency_key")
 
-            elif operation == "create_session":
-                target_url = kwargs.get("target_url")
-                max_steps = kwargs.get("max_steps", 100)
-                result = await client.create_awi_session(target_url, max_steps)
-                return str(result)
+                if not idempotency_key or not idempotency_key.strip():
+                    return "Error: idempotency_key is required and must not be blank"
+
+                if permit_idempotency_key is None:
+                    permit_idempotency_key = f"permit-{idempotency_key}"
+
+                request = PermitRequest(
+                    issuer_wallet_id=self.wallet_id,
+                    subject_wallet_id=self.wallet_id,
+                    max_credits=self.permit_budget,
+                    expires_at=datetime.now(timezone.utc)
+                    + timedelta(minutes=self.permit_ttl_minutes),
+                    allowed_tools=[tool_name],
+                    scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
+                )
+
+                permit = await client.create_permit(
+                    request, idempotency_key=permit_idempotency_key
+                )
+
+                result = await client.invoke_tool(
+                    tool_name,
+                    arguments,
+                    wallet_id=self.wallet_id,
+                    permit_id=permit.permit_id,
+                    idempotency_key=idempotency_key,
+                )
+
+                return str(
+                    {
+                        "content": result.content,
+                        "structured_content": result.structured_content,
+                        "receipt_id": result.receipt.receipt_id,
+                        "credits_charged": str(result.receipt.credits_charged),
+                        "signature": result.receipt.signature,
+                    }
+                )
 
             elif operation == "balance":
-                balance = await client.get_balance()
+                balance = await client.get_balance(self.wallet_id)
                 return f"Balance: {balance} credits"
 
             else:
