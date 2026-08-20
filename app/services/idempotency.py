@@ -113,7 +113,10 @@ class IdempotencyService:
 
         if dispatch_attempt is not None:
             # Import here to avoid circular dependency
-            from app.services.mcp_dispatch_attempts import DISPATCH_TERMINAL_STATES
+            from app.services.mcp_dispatch_attempts import (
+                DISPATCH_TERMINAL_STATES,
+                DispatchAttemptConflictError,
+            )
             from app.services.mcp_dispatch_reconciliation import (
                 get_mcp_dispatch_reconciliation_service,
             )
@@ -137,6 +140,29 @@ class IdempotencyService:
                     dispatch_attempt.attempt_id,
                     prepared_error_code="reconciled_stale_prepared",
                 )
+            except DispatchAttemptConflictError as e:
+                # If reconciliation hit dispatch_terminal_conflict, it means another
+                # concurrent request completed the attempt. Re-read the idempotency
+                # record to get the completed result.
+                if "dispatch_terminal_conflict" in str(e):
+                    await session.rollback()
+                    session.expire_all()
+                    fresh = (
+                        await session.execute(
+                            select(IdempotencyRecordModel).where(
+                                *_idempotency_predicates(
+                                    wallet_id,
+                                    endpoint,
+                                    idempotency_key,
+                                )
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if fresh is not None and fresh.response_json is not None:
+                        replay = _replay_from_record(fresh, request_hash)
+                        if replay is not None:
+                            return replay
+                # Other conflicts should fall through to wait
             except Exception:
                 # Reconciliation failed; fall through to normal wait path
                 pass
