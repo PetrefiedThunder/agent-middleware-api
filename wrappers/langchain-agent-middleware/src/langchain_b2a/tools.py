@@ -22,7 +22,7 @@ def get_mcp_tools(
     client: B2AClient,
     *,
     wallet_id: str,
-    permit_budget: Decimal = Decimal("100"),
+    permit_budget: Decimal = Decimal(100),
     permit_ttl_minutes: int = 30,
 ) -> list[BaseTool]:
     """Get LangChain tools from MCP registry via governed permit→invoke→receipt flow.
@@ -62,7 +62,7 @@ def get_langgraph_tools(
     client: B2AClient,
     *,
     wallet_id: str,
-    permit_budget: Decimal = Decimal("100"),
+    permit_budget: Decimal = Decimal(100),
     permit_ttl_minutes: int = 30,
 ) -> list[Callable]:
     """Get tools formatted for LangGraph via governed permit→invoke→receipt flow.

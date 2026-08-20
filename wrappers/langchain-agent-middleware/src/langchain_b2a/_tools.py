@@ -1,13 +1,12 @@
 """Internal tool implementations."""
 
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-
 from b2a_sdk.models import PermitRequest
+from langchain_core.tools import StructuredTool
 
 from .client import B2AClient
 
@@ -16,7 +15,7 @@ def create_mcp_tool(
     client: B2AClient,
     *,
     wallet_id: str,
-    permit_budget: Decimal = Decimal("100"),
+    permit_budget: Decimal = Decimal(100),
     permit_ttl_minutes: int = 30,
 ) -> StructuredTool:
     """Create a LangChain tool that calls MCP endpoints via governed permit→invoke→receipt flow.
@@ -54,7 +53,7 @@ def create_mcp_tool(
             issuer_wallet_id=wallet_id,
             subject_wallet_id=wallet_id,
             max_credits=permit_budget,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=permit_ttl_minutes),
+            expires_at=datetime.now(UTC) + timedelta(minutes=permit_ttl_minutes),
             allowed_tools=[tool_name],
             scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
         )
@@ -113,7 +112,7 @@ def create_langgraph_tools(
     client: B2AClient,
     *,
     wallet_id: str,
-    permit_budget: Decimal = Decimal("100"),
+    permit_budget: Decimal = Decimal(100),
     permit_ttl_minutes: int = 30,
 ) -> list[Callable]:
     """Get tools formatted for LangGraph ReAct agents."""

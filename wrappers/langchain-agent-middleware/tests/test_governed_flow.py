@@ -1,8 +1,7 @@
 """Tests for governed permit→invoke→receipt flow in LangChain wrapper."""
 
 import json
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -21,12 +20,12 @@ def _permit_payload() -> dict:
         "allowed_tools": ["partner.search"],
         "max_credits": "100",
         "spent_credits": "0",
-        "expires_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": datetime.now(UTC).isoformat(),
         "nonce": "nonce-1",
         "status": "active",
         "signature": "sig-permit-1",
         "key_id": "key-1",
-        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "issued_at": datetime.now(UTC).isoformat(),
         "revoked_at": None,
     }
 
@@ -44,8 +43,8 @@ def _receipt_payload(outcome: str = "success") -> dict:
         "signature": f"sig-{outcome}",
         "key_id": "key-1",
         "ledger_entry_id": "ledger-1",
-        "dispatched_at": datetime.now(timezone.utc).isoformat(),
-        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "dispatched_at": datetime.now(UTC).isoformat(),
+        "completed_at": datetime.now(UTC).isoformat(),
     }
 
 
