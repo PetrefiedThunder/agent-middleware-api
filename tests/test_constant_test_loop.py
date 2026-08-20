@@ -538,3 +538,51 @@ def test_bootstrap_key_only_pipes_without_jq():
     )
     assert result.returncode != 0
     assert "BOOTSTRAP_KEY" in result.stderr
+
+
+def test_unusable_tool_pin_exits_as_configuration_not_invariant_failure(
+    test_server,
+):
+    """A bad pin must not page with the same signal as a broken trust plane.
+
+    Exit 1 means an invariant failed; exit 2 means the loop was configured
+    wrong. Conflating them makes a typo in $CI_SMOKE_TOOL indistinguishable
+    from the product actually breaking.
+    """
+    base_url, _ = test_server
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CI_SMOKE")}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CONSTANT_TEST_SCRIPT),
+            "--api-url",
+            base_url,
+            "--tool",
+            "no-such-tool",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "configuration error" in result.stderr
+    assert "FAILED" not in result.stderr
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CONSTANT_TEST_SCRIPT),
+            "--api-url",
+            base_url,
+            "--other-tool",
+            "no-such-tool",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "configuration error" in result.stderr

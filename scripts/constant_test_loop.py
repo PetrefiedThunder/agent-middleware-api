@@ -105,9 +105,11 @@ def select_governed_tool(
     """Choose the tool the permit will scope to.
 
     Returns ``(tool, error)``. A pinned name must exist; otherwise the
-    preferred production and dogfood tools are tried in order, and failing
-    those any registered tool is acceptable — the loop asserts trust-plane
-    behaviour, which does not depend on which tool is on the other end.
+    preferred production and dogfood tools are tried in order. Failing those,
+    an explicit ``--tool`` pin is required: there is deliberately no fallback
+    to an arbitrary registered tool, because a guessed tool can accept a
+    schema-valid payload and still refuse the action, which reads as a broken
+    trust plane rather than a bad choice of tool.
     """
     if pinned:
         if pinned not in registry:
@@ -378,12 +380,22 @@ def run_constant_test(
             for tool in tools.get("tools", [])
             if isinstance(tool, dict) and tool.get("name")
         }
-        tool_names = list(registry)
-
         governed_tool, selection_error = select_governed_tool(registry, pinned_tool)
         if selection_error:
-            raise SmokeTestFailure(selection_error)
+            # ConfigurationError (exit 2), not SmokeTestFailure (exit 1). An
+            # unusable tool pin is the operator's problem; exiting 1 would
+            # page someone with the same signal a broken trust plane gives.
+            raise ConfigurationError(selection_error)
         print(f"[constant-test] using tool: {governed_tool}", file=sys.stderr)
+
+        # Resolved here rather than inside the denial block below: a typo in
+        # --other-tool must be reported even on a single-tool deployment,
+        # where that block never runs and the bad pin would be swallowed.
+        other_tool, companion_error = select_companion_tool(
+            registry, governed_tool, pinned_other_tool
+        )
+        if companion_error:
+            raise ConfigurationError(companion_error)
 
         # Sized from what this tool actually costs rather than a fixed cap.
         max_credits = max(
@@ -505,53 +517,48 @@ def run_constant_test(
             file=sys.stderr,
         )
 
-        # Out-of-scope tool denial check (optional)
-        # Only run if there are multiple tools available to test against.
-        # A single-tool environment exercises the core loop but can't test
-        # permit_tool_not_allowed without registering a second tool.
-        if len(tool_names) > 1:
+        # Out-of-scope tool denial check (optional).
+        # A single-tool deployment exercises the core loop but cannot test
+        # permit_tool_not_allowed: invoking a name the registry has never
+        # heard of proves "tool not found", not "the permit refused it".
+        if other_tool:
             print("[constant-test] attempting out-of-scope tool", file=sys.stderr)
-            other_tool, companion_error = select_companion_tool(
-                registry, governed_tool, pinned_other_tool
+            denial_body = _build_mcp_call(
+                request_id=f"constant-test-deny-{run_id}",
+                tool=other_tool,
+                wallet_id=wallet_id,
+                permit_id=permit_id,
+                idempotency_key=f"constant-test-deny-{run_id}",
+                arguments=arguments_for(
+                    registry[other_tool].get("inputSchema") or {}, run_id
+                ),
             )
-            if companion_error:
-                raise SmokeTestFailure(companion_error)
-            if other_tool:
-                denial_body = _build_mcp_call(
-                    request_id=f"constant-test-deny-{run_id}",
-                    tool=other_tool,
-                    wallet_id=wallet_id,
-                    permit_id=permit_id,
-                    idempotency_key=f"constant-test-deny-{run_id}",
-                    arguments=arguments_for(
-                        registry[other_tool].get("inputSchema") or {}, run_id
-                    ),
-                )
-                denial_call = _post_json(
-                    client, "/mcp/messages", denial_body, expected_status=200
-                )
-                denial_error = _first_jsonrpc_error(denial_call)
-                require(
-                    denial_error["message"] == "permit_tool_not_allowed",
-                    f"expected permit_tool_not_allowed, got {denial_error['message']}",
-                )
-                denial_receipt = denial_error["data"]["receipt"]
-                require(
-                    denial_receipt["outcome"] == "denied",
-                    "denial receipt outcome != denied",
-                )
-                denial_charged = Decimal(str(denial_receipt["credits_charged"]))
-                require(
-                    denial_charged == Decimal("0"),
-                    f"denial charged {denial_charged} credits (expected 0)",
-                )
-                print(
-                    "[constant-test] denial OK: permit_tool_not_allowed, 0 credits charged",
-                    file=sys.stderr,
-                )
+            denial_call = _post_json(
+                client, "/mcp/messages", denial_body, expected_status=200
+            )
+            denial_error = _first_jsonrpc_error(denial_call)
+            require(
+                denial_error["message"] == "permit_tool_not_allowed",
+                f"expected permit_tool_not_allowed, got {denial_error['message']}",
+            )
+            denial_receipt = denial_error["data"]["receipt"]
+            require(
+                denial_receipt["outcome"] == "denied",
+                "denial receipt outcome != denied",
+            )
+            denial_charged = Decimal(str(denial_receipt["credits_charged"]))
+            require(
+                denial_charged == Decimal("0"),
+                f"denial charged {denial_charged} credits (expected 0)",
+            )
+            print(
+                "[constant-test] denial OK: permit_tool_not_allowed, 0 credits charged",
+                file=sys.stderr,
+            )
         else:
             print(
-                "[constant-test] SKIPPED out-of-scope tool check (single tool only)",
+                "[constant-test] SKIPPED out-of-scope tool check "
+                "(no registered tool outside the permit)",
                 file=sys.stderr,
             )
 
