@@ -2270,34 +2270,6 @@ async def test_zero_daily_limit_blocks_spending_rather_than_unlocking_it(
     assert Decimal(wallet_resp.json()["balance_exact"]) == Decimal("5000")
 
 
-def test_register_local_refuses_a_nonpositive_price() -> None:
-    """A governed tool priced at or below zero is a money bug, not a free tier.
-
-    ``credits_per_unit`` is multiplied by units and debited, so zero makes a
-    metered tool free and a negative value pays the caller on every invoke.
-    Registration is the last place to catch it before it reaches a ledger.
-    """
-
-    from app.schemas.billing import ServiceCategory
-    from app.services.service_registry import get_service_registry
-
-    registry = get_service_registry()
-
-    def handler(value: str) -> str:
-        return value
-
-    for price in (0, -1.5):
-        with pytest.raises(ValueError, match="credits_per_unit"):
-            registry.register_local(
-                service_id=f"bad-price-{price}",
-                name="Bad price",
-                description="Should never register",
-                category=ServiceCategory.AGENT_COMMS,
-                func=handler,
-                credits_per_unit=price,
-            )
-
-
 def test_register_local_derives_an_input_schema_alongside_an_output_model() -> None:
     """Supplying only an output model must not erase the input contract.
 

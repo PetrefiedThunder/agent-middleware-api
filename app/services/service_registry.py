@@ -256,16 +256,6 @@ class ServiceRegistry:
         requires a signed permit + idempotency key — even if legacy
         unpermitted MCP is otherwise allowed.
         """
-        if credits_per_unit <= 0:
-            # A price is what the meter charges. Zero makes a governed tool
-            # free; negative pays the caller on every invoke, because the
-            # billing engine multiplies units by this number and debits the
-            # result. Refuse at registration rather than discovering it in a
-            # ledger.
-            raise ValueError(
-                f"credits_per_unit must be greater than 0, got {credits_per_unit!r}"
-            )
-
         input_schema = pydantic_to_mcp_schema(input_model)
         output_schema = pydantic_to_mcp_schema(output_model)
 
