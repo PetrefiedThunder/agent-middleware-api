@@ -114,7 +114,6 @@ class IdempotencyService:
         if dispatch_attempt is not None:
             # Import here to avoid circular dependency
             from app.services.mcp_dispatch_attempts import (
-                DISPATCH_PREPARED,
                 DISPATCH_TERMINAL_STATES,
             )
             from app.services.mcp_dispatch_reconciliation import (
