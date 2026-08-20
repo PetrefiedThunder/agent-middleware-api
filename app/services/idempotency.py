@@ -114,37 +114,39 @@ class IdempotencyService:
         if dispatch_attempt is not None:
             # Import here to avoid circular dependency
             from app.services.mcp_dispatch_attempts import (
+                DISPATCH_PREPARED,
                 DISPATCH_TERMINAL_STATES,
-                DispatchAttemptConflictError,
             )
             from app.services.mcp_dispatch_reconciliation import (
                 get_mcp_dispatch_reconciliation_service,
             )
 
             # If attempt is already terminal and the idempotency record has a response,
-            # return it directly without re-reconciling (avoids dispatch_terminal_conflict
-            # on concurrent identical requests).
+            # return it directly without re-reconciling.
             if dispatch_attempt.state in DISPATCH_TERMINAL_STATES:
                 if existing.response_json is not None:
                     replay = _replay_from_record(existing, request_hash)
                     if replay is not None:
                         return replay
-                # Terminal but no response yet - fall through to reconcile
-            
-            reconciler = get_mcp_dispatch_reconciliation_service()
-            # Reconcile this specific attempt immediately.
-            # Use reconciled_stale_prepared for prepared-state attempts so the
-            # outcome is identical to what the periodic sweep would produce.
-            try:
-                await reconciler.reconcile_attempt(
-                    dispatch_attempt.attempt_id,
-                    prepared_error_code="reconciled_stale_prepared",
-                )
-            except DispatchAttemptConflictError as e:
-                # If reconciliation hit dispatch_terminal_conflict, it means another
-                # concurrent request completed the attempt. Re-read the idempotency
-                # record to get the completed result.
-                if "dispatch_terminal_conflict" in str(e):
+                # Terminal but no response yet - fall through to wait
+
+            # Only reconcile PREPARED attempts. DISPATCHED attempts may be owned
+            # by an active concurrent request; reconciling them causes a race where
+            # we terminalize with delivery_uncertain while the owner is about to
+            # complete with the actual result, triggering dispatch_terminal_conflict.
+            # Truly stale DISPATCHED attempts will be handled by the periodic sweep.
+            if dispatch_attempt.state == DISPATCH_PREPARED:
+                reconciler = get_mcp_dispatch_reconciliation_service()
+                try:
+                    await reconciler.reconcile_attempt(
+                        dispatch_attempt.attempt_id,
+                        prepared_error_code="reconciled_stale_prepared",
+                    )
+                except Exception:
+                    # Reconciliation failed; fall through to normal wait path
+                    pass
+                else:
+                    # Reconciliation succeeded; re-read the record
                     await session.rollback()
                     session.expire_all()
                     fresh = (
@@ -162,29 +164,6 @@ class IdempotencyService:
                         replay = _replay_from_record(fresh, request_hash)
                         if replay is not None:
                             return replay
-                # Other conflicts should fall through to wait
-            except Exception:
-                # Reconciliation failed; fall through to normal wait path
-                pass
-            else:
-                # Reconciliation succeeded; re-read the record
-                await session.rollback()
-                session.expire_all()
-                fresh = (
-                    await session.execute(
-                        select(IdempotencyRecordModel).where(
-                            *_idempotency_predicates(
-                                wallet_id,
-                                endpoint,
-                                idempotency_key,
-                            )
-                        )
-                    )
-                ).scalar_one_or_none()
-                if fresh is not None and fresh.response_json is not None:
-                    replay = _replay_from_record(fresh, request_hash)
-                    if replay is not None:
-                        return replay
 
         # No dispatch attempt or reconciliation failed/incomplete; wait normally
         if wait_timeout_seconds <= 0:
