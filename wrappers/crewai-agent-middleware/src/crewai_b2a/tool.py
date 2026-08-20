@@ -16,8 +16,8 @@ class MCPToolSchema(BaseModel):
 
     tool_name: str
     idempotency_key: str
+    permit_idempotency_key: str
     arguments: dict[str, Any] = {}
-    permit_idempotency_key: str | None = None
 
 
 class WalletBalanceSchema(BaseModel):
@@ -88,14 +88,14 @@ class CrewAIB2ATool(BaseTool):
             elif operation == "call_tool":
                 tool_name = kwargs.get("tool_name")
                 idempotency_key = kwargs.get("idempotency_key")
-                arguments = kwargs.get("arguments", {})
                 permit_idempotency_key = kwargs.get("permit_idempotency_key")
+                arguments = kwargs.get("arguments", {})
 
                 if not idempotency_key or not idempotency_key.strip():
                     return "Error: idempotency_key is required and must not be blank"
 
-                if permit_idempotency_key is None:
-                    permit_idempotency_key = f"permit-{idempotency_key}"
+                if not permit_idempotency_key or not permit_idempotency_key.strip():
+                    return "Error: permit_idempotency_key is required and must not be blank"
 
                 request = PermitRequest(
                     issuer_wallet_id=self.wallet_id,
@@ -159,14 +159,14 @@ class CrewAIB2ATool(BaseTool):
             elif operation == "call_tool":
                 tool_name = kwargs.get("tool_name")
                 idempotency_key = kwargs.get("idempotency_key")
-                arguments = kwargs.get("arguments", {})
                 permit_idempotency_key = kwargs.get("permit_idempotency_key")
+                arguments = kwargs.get("arguments", {})
 
                 if not idempotency_key or not idempotency_key.strip():
                     return "Error: idempotency_key is required and must not be blank"
 
-                if permit_idempotency_key is None:
-                    permit_idempotency_key = f"permit-{idempotency_key}"
+                if not permit_idempotency_key or not permit_idempotency_key.strip():
+                    return "Error: permit_idempotency_key is required and must not be blank"
 
                 request = PermitRequest(
                     issuer_wallet_id=self.wallet_id,

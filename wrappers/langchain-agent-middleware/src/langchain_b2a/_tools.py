@@ -30,24 +30,30 @@ def create_mcp_tool(
     async def call_mcp(
         tool_name: str,
         idempotency_key: str,
+        permit_idempotency_key: str,
         arguments: dict[str, Any] | None = None,
-        permit_idempotency_key: str | None = None,
     ) -> str:
         """Call an MCP tool via permit→invoke→receipt flow.
 
         Args:
             tool_name: Name of the MCP tool to call
             idempotency_key: Caller-supplied idempotency key for invoke_tool (required)
+            permit_idempotency_key: Caller-supplied permit idempotency key (required).
+                Must be stable across replays to avoid 409 IdempotencyConflictError.
             arguments: Arguments to pass to the tool
-            permit_idempotency_key: Idempotency key for permit creation (defaults to f"permit-{idempotency_key}")
+
+        Idempotency and replay:
+            Both idempotency_key and permit_idempotency_key must be caller-supplied.
+            Replaying with the same idempotency_key + permit_idempotency_key is safe:
+            the server returns cached permit and receipt without recharging.
+            Using different permits for the same invoke key will cause 409 conflicts.
         """
         if arguments is None:
             arguments = {}
         if not idempotency_key or not idempotency_key.strip():
             raise ValueError("idempotency_key is required and must not be blank")
-
-        if permit_idempotency_key is None:
-            permit_idempotency_key = f"permit-{idempotency_key}"
+        if not permit_idempotency_key or not permit_idempotency_key.strip():
+            raise ValueError("permit_idempotency_key is required and must not be blank")
 
         request = PermitRequest(
             issuer_wallet_id=wallet_id,
@@ -83,12 +89,13 @@ def create_mcp_tool(
         name="mcp_tool_call",
         description="Call a Model Context Protocol (MCP) tool from Agent Middleware API. "
         "Use this to access billable services like data indexing, content generation, etc. "
-        "Returns signed receipts for all invocations.",
+        "Returns signed receipts for all invocations. "
+        "Requires both idempotency_key and permit_idempotency_key for safe replay.",
         args_schema={
             "tool_name": str,
             "idempotency_key": str,
-            "arguments": dict,
             "permit_idempotency_key": str,
+            "arguments": dict,
         },
     )
 

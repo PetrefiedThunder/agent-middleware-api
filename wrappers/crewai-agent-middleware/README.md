@@ -54,12 +54,13 @@ result = b2a_tool.run(operation="discover_tools")
 ### Call Tool (Governed Flow)
 
 ```python
-# Call an MCP tool with caller-supplied idempotency key
+# Call an MCP tool with caller-supplied idempotency keys
 # The wrapper creates a permit, invokes the tool, and returns a signed receipt
 result = b2a_tool.run(
     operation="call_tool",
     tool_name="data-indexer",
-    idempotency_key="unique-key-123",  # REQUIRED: caller must supply
+    idempotency_key="unique-invoke-123",  # REQUIRED: caller must supply
+    permit_idempotency_key="permit-invoke-123",  # REQUIRED: stable for replay
     arguments={"documents": ["..."]},
 )
 
@@ -75,9 +76,9 @@ result = b2a_tool.run(operation="balance")
 
 ## Idempotency and Replay Protection
 
-The `idempotency_key` is **required** and must be supplied by the caller. Do not auto-generate keys.
+Both `idempotency_key` and `permit_idempotency_key` are **required** and must be supplied by the caller. Do not auto-generate keys.
 
-Replaying the same `idempotency_key` returns the original receipt without recharging:
+Replaying with the same keys returns the original receipt without recharging:
 
 ```python
 # First call: charges credits
@@ -85,6 +86,7 @@ result1 = b2a_tool.run(
     operation="call_tool",
     tool_name="partner.search",
     idempotency_key="search-abc-123",
+    permit_idempotency_key="permit-abc-123",
     arguments={"query": "test"},
 )
 
@@ -92,7 +94,8 @@ result1 = b2a_tool.run(
 result2 = b2a_tool.run(
     operation="call_tool",
     tool_name="partner.search",
-    idempotency_key="search-abc-123",  # same key
+    idempotency_key="search-abc-123",  # same invoke key
+    permit_idempotency_key="permit-abc-123",  # same permit key
     arguments={"query": "different"},  # different args ignored
 )
 ```

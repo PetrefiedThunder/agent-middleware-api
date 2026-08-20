@@ -42,24 +42,23 @@ class B2AFunctionTool:
         self,
         tool_name: str,
         idempotency_key: str,
+        permit_idempotency_key: str,
         arguments: dict[str, Any] | None = None,
-        permit_idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Call an MCP tool via governed permit→invoke→receipt flow.
 
         Args:
             tool_name: Name of the tool to call
             idempotency_key: Caller-supplied idempotency key (required)
+            permit_idempotency_key: Caller-supplied permit idempotency key (required)
             arguments: Tool arguments
-            permit_idempotency_key: Permit idempotency key (defaults to f"permit-{idempotency_key}")
         """
         if arguments is None:
             arguments = {}
         if not idempotency_key or not idempotency_key.strip():
             raise ValueError("idempotency_key is required and must not be blank")
-
-        if permit_idempotency_key is None:
-            permit_idempotency_key = f"permit-{idempotency_key}"
+        if not permit_idempotency_key or not permit_idempotency_key.strip():
+            raise ValueError("permit_idempotency_key is required and must not be blank")
 
         request = PermitRequest(
             issuer_wallet_id=self.wallet_id,
@@ -119,16 +118,16 @@ class B2AFunctionTool:
                                 "type": "string",
                                 "description": "Caller-supplied idempotency key (required, must be unique per invocation)",
                             },
+                            "permit_idempotency_key": {
+                                "type": "string",
+                                "description": "Caller-supplied permit idempotency key (required, must be stable for replay)",
+                            },
                             "arguments": {
                                 "type": "object",
                                 "description": "Arguments to pass to the tool",
                             },
-                            "permit_idempotency_key": {
-                                "type": "string",
-                                "description": "Optional permit idempotency key (defaults to permit-{idempotency_key})",
-                            },
                         },
-                        "required": ["tool_name", "idempotency_key"],
+                        "required": ["tool_name", "idempotency_key", "permit_idempotency_key"],
                     },
                 },
             },

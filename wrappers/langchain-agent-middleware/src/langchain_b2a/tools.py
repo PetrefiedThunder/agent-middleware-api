@@ -15,6 +15,7 @@ class MCPToolInput(BaseModel):
 
     tool_name: str
     idempotency_key: str
+    permit_idempotency_key: str
     arguments: dict[str, Any]
 
 

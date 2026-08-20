@@ -92,6 +92,7 @@ async def test_call_tool_requires_idempotency_key():
         operation="call_tool",
         tool_name="partner.search",
         idempotency_key="invoke-key-1",
+        permit_idempotency_key="permit-invoke-key-1",
         arguments={"query": "test"},
     )
 
@@ -103,6 +104,7 @@ async def test_call_tool_requires_idempotency_key():
         operation="call_tool",
         tool_name="partner.search",
         idempotency_key="   ",
+        permit_idempotency_key="permit-key",
         arguments={},
     )
     assert "Error: idempotency_key is required" in result_blank
@@ -147,6 +149,7 @@ async def test_replay_protection():
         operation="call_tool",
         tool_name="partner.search",
         idempotency_key="replay-key",
+        permit_idempotency_key="permit-replay-key",
         arguments={"query": "first"},
     )
 
@@ -154,6 +157,7 @@ async def test_replay_protection():
         operation="call_tool",
         tool_name="partner.search",
         idempotency_key="replay-key",
+        permit_idempotency_key="permit-replay-key",
         arguments={"query": "second"},
     )
 
@@ -196,6 +200,7 @@ async def test_signed_receipt_returned():
         operation="call_tool",
         tool_name="partner.search",
         idempotency_key="signed-key",
+        permit_idempotency_key="permit-signed-key",
         arguments={},
     )
 

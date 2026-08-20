@@ -92,6 +92,7 @@ async def test_mcp_tool_requires_idempotency_key():
     result = await tool.ainvoke({
         "tool_name": "partner.search",
         "idempotency_key": "invoke-key-1",
+        "permit_idempotency_key": "permit-invoke-key-1",
         "arguments": {"query": "test"},
     })
 
@@ -103,6 +104,7 @@ async def test_mcp_tool_requires_idempotency_key():
         await tool.ainvoke({
             "tool_name": "partner.search",
             "idempotency_key": "   ",
+            "permit_idempotency_key": "permit-key",
             "arguments": {},
         })
 
@@ -145,12 +147,14 @@ async def test_replay_with_same_idempotency_key_returns_cached_receipt():
     result1 = await tool.ainvoke({
         "tool_name": "partner.search",
         "idempotency_key": "replay-key",
+        "permit_idempotency_key": "permit-replay-key",
         "arguments": {"query": "first"},
     })
 
     result2 = await tool.ainvoke({
         "tool_name": "partner.search",
         "idempotency_key": "replay-key",
+        "permit_idempotency_key": "permit-replay-key",
         "arguments": {"query": "second"},
     })
 
@@ -194,6 +198,7 @@ async def test_signed_receipt_returned():
     result = await tool.ainvoke({
         "tool_name": "partner.search",
         "idempotency_key": "signed-key",
+        "permit_idempotency_key": "permit-signed-key",
         "arguments": {},
     })
 
@@ -219,6 +224,7 @@ async def test_missing_idempotency_key_rejected():
         await tool.ainvoke({
             "tool_name": "partner.search",
             "idempotency_key": "",
+            "permit_idempotency_key": "permit-key",
             "arguments": {},
         })
 
