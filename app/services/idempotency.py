@@ -84,6 +84,78 @@ def _replay_from_record(
 
 
 class IdempotencyService:
+    async def _try_reconcile_and_replay(
+        self,
+        session: AsyncSession,
+        *,
+        existing: IdempotencyRecordModel,
+        request_hash: str,
+        wallet_id: str,
+        endpoint: str,
+        idempotency_key: str,
+        wait_timeout_seconds: float,
+        poll_interval_seconds: float,
+    ) -> IdempotencyReplay:
+        """Try immediate reconciliation for dispatched/terminal attempts before wait."""
+        # Check if there's a dispatch attempt linked to this idempotency record
+        # that is either dispatched (ambiguous) or terminal but not finalized.
+        dispatch_attempt = (
+            await session.execute(
+                select(McpDispatchAttemptModel).where(
+                    cast(
+                        ColumnElement[bool],
+                        McpDispatchAttemptModel.idempotency_record_id
+                        == existing.record_id,
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+
+        if dispatch_attempt is not None:
+            # Import here to avoid circular dependency
+            from app.services.mcp_dispatch_reconciliation import (
+                get_mcp_dispatch_reconciliation_service,
+            )
+
+            reconciler = get_mcp_dispatch_reconciliation_service()
+            # Reconcile this specific attempt immediately
+            try:
+                await reconciler.reconcile_attempt(dispatch_attempt.attempt_id)
+            except Exception:
+                # Reconciliation failed; fall through to normal wait path
+                pass
+            else:
+                # Reconciliation succeeded; re-read the record
+                await session.rollback()
+                session.expire_all()
+                fresh = (
+                    await session.execute(
+                        select(IdempotencyRecordModel).where(
+                            *_idempotency_predicates(
+                                wallet_id,
+                                endpoint,
+                                idempotency_key,
+                            )
+                        )
+                    )
+                ).scalar_one_or_none()
+                if fresh is not None and fresh.response_json is not None:
+                    replay = _replay_from_record(fresh, request_hash)
+                    return replay
+
+        # No dispatch attempt or reconciliation failed/incomplete; wait normally
+        if wait_timeout_seconds <= 0:
+            raise IdempotencyInProgressError("idempotency_in_progress")
+        return await self._wait_for_replay(
+            session,
+            wallet_id=wallet_id,
+            endpoint=endpoint,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            timeout_seconds=wait_timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
     async def _wait_for_replay(
         self,
         session: AsyncSession,
@@ -148,15 +220,16 @@ class IdempotencyService:
                 try:
                     replay = _replay_from_record(existing, request_hash)
                 except IdempotencyInProgressError:
-                    if wait_timeout_seconds <= 0:
-                        raise
-                    replay = await self._wait_for_replay(
+                    # Before declaring in-progress, check if there's a terminal or
+                    # dispatched attempt that can be reconciled immediately.
+                    replay = await self._try_reconcile_and_replay(
                         session,
+                        existing=existing,
+                        request_hash=request_hash,
                         wallet_id=wallet_id,
                         endpoint=endpoint,
                         idempotency_key=idempotency_key,
-                        request_hash=request_hash,
-                        timeout_seconds=wait_timeout_seconds,
+                        wait_timeout_seconds=wait_timeout_seconds,
                         poll_interval_seconds=poll_interval_seconds,
                     )
                 return IdempotencyBegin(
@@ -193,15 +266,14 @@ class IdempotencyService:
                 try:
                     replay = _replay_from_record(existing, request_hash)
                 except IdempotencyInProgressError:
-                    if wait_timeout_seconds <= 0:
-                        raise
-                    replay = await self._wait_for_replay(
+                    replay = await self._try_reconcile_and_replay(
                         session,
+                        existing=existing,
+                        request_hash=request_hash,
                         wallet_id=wallet_id,
                         endpoint=endpoint,
                         idempotency_key=idempotency_key,
-                        request_hash=request_hash,
-                        timeout_seconds=wait_timeout_seconds,
+                        wait_timeout_seconds=wait_timeout_seconds,
                         poll_interval_seconds=poll_interval_seconds,
                     )
                 return IdempotencyBegin(
@@ -231,15 +303,14 @@ class IdempotencyService:
                 try:
                     replay = _replay_from_record(existing, request_hash)
                 except IdempotencyInProgressError:
-                    if wait_timeout_seconds <= 0:
-                        raise
-                    replay = await self._wait_for_replay(
+                    replay = await self._try_reconcile_and_replay(
                         session,
+                        existing=existing,
+                        request_hash=request_hash,
                         wallet_id=wallet_id,
                         endpoint=endpoint,
                         idempotency_key=idempotency_key,
-                        request_hash=request_hash,
-                        timeout_seconds=wait_timeout_seconds,
+                        wait_timeout_seconds=wait_timeout_seconds,
                         poll_interval_seconds=poll_interval_seconds,
                     )
                 return IdempotencyBegin(
