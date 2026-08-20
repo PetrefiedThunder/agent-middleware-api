@@ -26,6 +26,11 @@ def create_mcp_tool(
         permit_budget: Maximum credits per permit (default 100)
         permit_ttl_minutes: Permit lifetime in minutes (default 30)
     """
+    # Cache permits by permit_idempotency_key to avoid 409 on replay
+    # Server hashes the FULL permit request body including expires_at.
+    # Sending different expires_at with same key → 409 IdempotencyConflictError.
+    # Solution: cache created permits and reuse permit_id on replay.
+    permit_cache: dict[str, str] = {}  # permit_idempotency_key → permit_id
 
     async def call_mcp(
         tool_name: str,
@@ -39,14 +44,13 @@ def create_mcp_tool(
             tool_name: Name of the MCP tool to call
             idempotency_key: Caller-supplied idempotency key for invoke_tool (required)
             permit_idempotency_key: Caller-supplied permit idempotency key (required).
-                Must be stable across replays to avoid 409 IdempotencyConflictError.
+                Reused across replays to avoid creating multiple permits.
             arguments: Arguments to pass to the tool
 
         Idempotency and replay:
-            Both idempotency_key and permit_idempotency_key must be caller-supplied.
-            Replaying with the same idempotency_key + permit_idempotency_key is safe:
-            the server returns cached permit and receipt without recharging.
-            Using different permits for the same invoke key will cause 409 conflicts.
+            On first call, creates a permit and caches permit_id by permit_idempotency_key.
+            On replay with same permit_idempotency_key, reuses the cached permit_id.
+            This avoids 409 IdempotencyConflictError from different expires_at timestamps.
         """
         if arguments is None:
             arguments = {}
@@ -55,22 +59,28 @@ def create_mcp_tool(
         if not permit_idempotency_key or not permit_idempotency_key.strip():
             raise ValueError("permit_idempotency_key is required and must not be blank")
 
-        request = PermitRequest(
-            issuer_wallet_id=wallet_id,
-            subject_wallet_id=wallet_id,
-            max_credits=permit_budget,
-            expires_at=datetime.now(UTC) + timedelta(minutes=permit_ttl_minutes),
-            allowed_tools=[tool_name],
-            scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
-        )
-
-        permit = await client.create_permit(request, idempotency_key=permit_idempotency_key)
+        # Check cache first - if we've already created a permit with this key, reuse it
+        if permit_idempotency_key in permit_cache:
+            permit_id = permit_cache[permit_idempotency_key]
+        else:
+            # First time: create permit and cache the permit_id
+            request = PermitRequest(
+                issuer_wallet_id=wallet_id,
+                subject_wallet_id=wallet_id,
+                max_credits=permit_budget,
+                expires_at=datetime.now(UTC) + timedelta(minutes=permit_ttl_minutes),
+                allowed_tools=[tool_name],
+                scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
+            )
+            permit = await client.create_permit(request, idempotency_key=permit_idempotency_key)
+            permit_id = permit.permit_id
+            permit_cache[permit_idempotency_key] = permit_id
 
         result = await client.invoke_tool(
             tool_name,
             arguments,
             wallet_id=wallet_id,
-            permit_id=permit.permit_id,
+            permit_id=permit_id,
             idempotency_key=idempotency_key,
         )
 

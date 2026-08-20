@@ -40,6 +40,8 @@ class CrewAIB2ATool(BaseTool):
     wallet_id: str
     permit_budget: Decimal = Decimal("100")
     permit_ttl_minutes: int = 30
+    # Cache permits to avoid 409 on replay (server hashes full permit body including expires_at)
+    _permit_cache: dict[str, str] = {}  # permit_idempotency_key → permit_id
 
     def __init__(
         self,
@@ -56,6 +58,7 @@ class CrewAIB2ATool(BaseTool):
         self.wallet_id = wallet_id
         self.permit_budget = permit_budget
         self.permit_ttl_minutes = permit_ttl_minutes
+        self._permit_cache = {}  # Instance-specific cache
 
     def _get_client(self) -> B2AClient:
         if self.client is None:
@@ -97,26 +100,32 @@ class CrewAIB2ATool(BaseTool):
                 if not permit_idempotency_key or not permit_idempotency_key.strip():
                     return "Error: permit_idempotency_key is required and must not be blank"
 
-                request = PermitRequest(
-                    issuer_wallet_id=self.wallet_id,
-                    subject_wallet_id=self.wallet_id,
-                    max_credits=self.permit_budget,
-                    expires_at=datetime.now(timezone.utc)
-                    + timedelta(minutes=self.permit_ttl_minutes),
-                    allowed_tools=[tool_name],
-                    scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
-                )
+                # Check cache first - reuse existing permit to avoid 409 on replay
+                if permit_idempotency_key in self._permit_cache:
+                    permit_id = self._permit_cache[permit_idempotency_key]
+                else:
+                    request = PermitRequest(
+                        issuer_wallet_id=self.wallet_id,
+                        subject_wallet_id=self.wallet_id,
+                        max_credits=self.permit_budget,
+                        expires_at=datetime.now(timezone.utc)
+                        + timedelta(minutes=self.permit_ttl_minutes),
+                        allowed_tools=[tool_name],
+                        scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
+                    )
 
-                permit = asyncio.get_event_loop().run_until_complete(
-                    client.create_permit(request, idempotency_key=permit_idempotency_key)
-                )
+                    permit = asyncio.get_event_loop().run_until_complete(
+                        client.create_permit(request, idempotency_key=permit_idempotency_key)
+                    )
+                    permit_id = permit.permit_id
+                    self._permit_cache[permit_idempotency_key] = permit_id
 
                 result = asyncio.get_event_loop().run_until_complete(
                     client.invoke_tool(
                         tool_name,
                         arguments,
                         wallet_id=self.wallet_id,
-                        permit_id=permit.permit_id,
+                        permit_id=permit_id,
                         idempotency_key=idempotency_key,
                     )
                 )
@@ -168,25 +177,31 @@ class CrewAIB2ATool(BaseTool):
                 if not permit_idempotency_key or not permit_idempotency_key.strip():
                     return "Error: permit_idempotency_key is required and must not be blank"
 
-                request = PermitRequest(
-                    issuer_wallet_id=self.wallet_id,
-                    subject_wallet_id=self.wallet_id,
-                    max_credits=self.permit_budget,
-                    expires_at=datetime.now(timezone.utc)
-                    + timedelta(minutes=self.permit_ttl_minutes),
-                    allowed_tools=[tool_name],
-                    scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
-                )
+                # Check cache first - reuse existing permit to avoid 409 on replay
+                if permit_idempotency_key in self._permit_cache:
+                    permit_id = self._permit_cache[permit_idempotency_key]
+                else:
+                    request = PermitRequest(
+                        issuer_wallet_id=self.wallet_id,
+                        subject_wallet_id=self.wallet_id,
+                        max_credits=self.permit_budget,
+                        expires_at=datetime.now(timezone.utc)
+                        + timedelta(minutes=self.permit_ttl_minutes),
+                        allowed_tools=[tool_name],
+                        scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
+                    )
 
-                permit = await client.create_permit(
-                    request, idempotency_key=permit_idempotency_key
-                )
+                    permit = await client.create_permit(
+                        request, idempotency_key=permit_idempotency_key
+                    )
+                    permit_id = permit.permit_id
+                    self._permit_cache[permit_idempotency_key] = permit_id
 
                 result = await client.invoke_tool(
                     tool_name,
                     arguments,
                     wallet_id=self.wallet_id,
-                    permit_id=permit.permit_id,
+                    permit_id=permit_id,
                     idempotency_key=idempotency_key,
                 )
 

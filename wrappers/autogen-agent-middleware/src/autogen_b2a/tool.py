@@ -32,6 +32,8 @@ class B2AFunctionTool:
         self.wallet_id = wallet_id
         self.permit_budget = permit_budget
         self.permit_ttl_minutes = permit_ttl_minutes
+        # Cache permits to avoid 409 on replay (server hashes full permit body including expires_at)
+        self._permit_cache: dict[str, str] = {}  # permit_idempotency_key → permit_id
 
     async def discover_tools(self) -> list[dict[str, Any]]:
         """Discover all available MCP tools."""
@@ -60,22 +62,28 @@ class B2AFunctionTool:
         if not permit_idempotency_key or not permit_idempotency_key.strip():
             raise ValueError("permit_idempotency_key is required and must not be blank")
 
-        request = PermitRequest(
-            issuer_wallet_id=self.wallet_id,
-            subject_wallet_id=self.wallet_id,
-            max_credits=self.permit_budget,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=self.permit_ttl_minutes),
-            allowed_tools=[tool_name],
-            scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
-        )
+        # Check cache first - reuse existing permit to avoid 409 on replay
+        if permit_idempotency_key in self._permit_cache:
+            permit_id = self._permit_cache[permit_idempotency_key]
+        else:
+            request = PermitRequest(
+                issuer_wallet_id=self.wallet_id,
+                subject_wallet_id=self.wallet_id,
+                max_credits=self.permit_budget,
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=self.permit_ttl_minutes),
+                allowed_tools=[tool_name],
+                scopes=[f"tool:{tool_name}:invoke", "billing:charge"],
+            )
 
-        permit = await self.client.create_permit(request, idempotency_key=permit_idempotency_key)
+            permit = await self.client.create_permit(request, idempotency_key=permit_idempotency_key)
+            permit_id = permit.permit_id
+            self._permit_cache[permit_idempotency_key] = permit_id
 
         result = await self.client.invoke_tool(
             tool_name,
             arguments,
             wallet_id=self.wallet_id,
-            permit_id=permit.permit_id,
+            permit_id=permit_id,
             idempotency_key=idempotency_key,
         )
 
