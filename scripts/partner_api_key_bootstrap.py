@@ -150,7 +150,12 @@ def provision(
             },
         )
         api_key = key.get("api_key")
+        key_id = key.get("key_id")
+        key_prefix = key.get("key_prefix")
+        
         _require(bool(api_key), "api_key missing (shown only once)")
+        _require(bool(key_id), "key_id missing in provision response")
+        _require(bool(key_prefix), "key_prefix missing in provision response")
 
         return {
             "api_url": base,
@@ -158,8 +163,8 @@ def provision(
             "agent_wallet_id": agent_wallet_id,
             "wallet_id": agent_wallet_id,  # Documented field name (agent_wallet_id kept for compat)
             "agent_id": agent_id,
-            "key_id": key.get("key_id"),
-            "key_prefix": key.get("key_prefix"),
+            "key_id": key_id,
+            "key_prefix": key_prefix,
             "api_key": api_key,
         }
 

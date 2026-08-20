@@ -82,25 +82,50 @@ def _get_agent_key() -> tuple[str, str, str]:
         return ("", "", "")
 
 
-def _get_api_url() -> str:
-    """Read API URL from $API_URL or default to local quickstart.
+def _validate_and_sanitize_url(url: str) -> tuple[str, str]:
+    """Validate and sanitize API URL. Returns (validated_url, sanitized_origin_for_logging).
     
-    Validates that non-loopback URLs use HTTPS to prevent cleartext key leaks.
+    Enforces: trim whitespace, require hostname, only https:// or loopback http://.
+    Rejects unsupported schemes (ftp, file, etc.) and malformed URLs.
     """
-    url = os.environ.get("API_URL", DEFAULT_API_URL).rstrip("/")
+    from urllib.parse import urlparse, urlunparse
     
-    # Enforce HTTPS for non-loopback URLs (same as partner_api_key_bootstrap.py)
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    url = url.strip().rstrip("/")
     
-    if parsed.scheme == "http" and not is_loopback:
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise ConfigurationError(f"malformed API URL: {e}")
+    
+    # Require scheme and hostname
+    if not parsed.scheme or not parsed.hostname:
         raise ConfigurationError(
-            f"refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
-            f"non-loopback host {parsed.hostname}. Use https:// or a loopback address."
+            f"API URL must include scheme and hostname, got: {url}"
         )
     
-    return url
+    # Only allow https:// or loopback http://
+    is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    
+    if parsed.scheme == "https":
+        pass  # Always allowed
+    elif parsed.scheme == "http" and is_loopback:
+        pass  # Loopback http allowed
+    else:
+        raise ConfigurationError(
+            f"API URL must be https:// or loopback http://, got scheme: {parsed.scheme}"
+        )
+    
+    # Sanitized origin for logging (scheme + hostname + optional port, no credentials)
+    sanitized = urlunparse((parsed.scheme, parsed.netloc.split("@")[-1], "", "", "", ""))
+    
+    return url, sanitized
+
+
+def _get_api_url() -> str:
+    """Read API URL from $API_URL or default to local quickstart."""
+    url = os.environ.get("API_URL", DEFAULT_API_URL)
+    validated, _ = _validate_and_sanitize_url(url)
+    return validated
 
 
 def _post_json(
@@ -116,7 +141,10 @@ def _post_json(
         resp.status_code == expected_status,
         f"POST {path} → {resp.status_code}: {resp.text[:500]}",
     )
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as e:
+        raise SmokeTestFailure(f"POST {path} returned invalid JSON: {e}")
     require(isinstance(data, dict), f"POST {path} returned non-object JSON")
     return data
 
@@ -133,7 +161,10 @@ def _get_json(
         resp.status_code == expected_status,
         f"GET {path} → {resp.status_code}: {resp.text[:500]}",
     )
-    data = resp.json()
+    try:
+        data = resp.json()
+    except ValueError as e:
+        raise SmokeTestFailure(f"GET {path} returned invalid JSON: {e}")
     require(isinstance(data, dict), f"GET {path} returned non-object JSON")
     return data
 
@@ -178,7 +209,9 @@ def _first_jsonrpc_error(response: dict[str, Any]) -> dict[str, Any]:
 
 def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str) -> None:
     """Execute the constant test loop and assert all invariants."""
-    print(f"[constant-test] target: {api_url}", file=sys.stderr)
+    # Sanitize URL for logging (remove credentials if present)
+    _, sanitized_url = _validate_and_sanitize_url(api_url)
+    print(f"[constant-test] target: {sanitized_url}", file=sys.stderr)
 
     # Generate a unique run ID for this execution to make idempotency keys unique
     run_id = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
@@ -420,21 +453,9 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
     print("[constant-test] ALL INVARIANTS HELD", file=sys.stderr)
 
 
-def _validate_api_url(url: str) -> str:
-    """Validate API URL and enforce HTTPS for non-loopback hosts."""
-    from urllib.parse import urlparse
-    
-    url = url.rstrip("/")
-    parsed = urlparse(url)
-    is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
-    
-    if parsed.scheme == "http" and not is_loopback:
-        raise ConfigurationError(
-            f"refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
-            f"non-loopback host {parsed.hostname}. Use https:// or a loopback address."
-        )
-    
-    return url
+def _validate_api_url(url: str) -> tuple[str, str]:
+    """Validate API URL. Returns (validated_url, sanitized_origin_for_logging)."""
+    return _validate_and_sanitize_url(url)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -453,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         # Validate API URL (applies to both --api-url and $API_URL)
-        api_url = _validate_api_url(args.api_url or _get_api_url())
+        api_url, _sanitized = _validate_api_url(args.api_url or _get_api_url())
         agent_key, wallet_id, key_id = _get_agent_key()
         run_constant_test(api_url, agent_key, wallet_id, key_id)
     except ConfigurationError as config_error:

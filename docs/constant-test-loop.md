@@ -27,45 +27,37 @@ The script self-provisions an agent key via `/v1/dev-keys/self-provision` when n
 Set `CI_SMOKE_AGENT_KEY` for a pre-provisioned agent credential. Optionally provide `CI_SMOKE_WALLET_ID` and `CI_SMOKE_KEY_ID` for faster startup (the script will fetch them from the API if not provided):
 
 ```bash
-# Provision an agent key once (using bootstrap key) and extract credentials in one pipeline
+# Provision an agent key once (using bootstrap key) and extract credentials from single JSON output
 export BOOTSTRAP_KEY="amw_live_..."
 
-# Extract and set as CI secrets directly from the JSON output (no persistent file)
-export CI_SMOKE_AGENT_KEY="$(python scripts/partner_api_key_bootstrap.py \
+# Invoke bootstrap once, capture JSON, extract all credentials with jq -er (fails on missing fields)
+BOOTSTRAP_JSON="$(python scripts/partner_api_key_bootstrap.py \
   --api-url https://api.thisisatest.tech \
   --agent-id ci-smoke-agent \
   --key-name constant-test-loop \
   --budget-credits 5000 \
-  --json | jq -r .api_key)"
+  --json)"
 
-export CI_SMOKE_WALLET_ID="$(python scripts/partner_api_key_bootstrap.py \
-  --api-url https://api.thisisatest.tech \
-  --agent-id ci-smoke-agent \
-  --key-name constant-test-loop \
-  --budget-credits 5000 \
-  --json | jq -r .wallet_id)"
+export CI_SMOKE_AGENT_KEY="$(echo "$BOOTSTRAP_JSON" | jq -er .api_key)"
+export CI_SMOKE_WALLET_ID="$(echo "$BOOTSTRAP_JSON" | jq -er .wallet_id)"
+export CI_SMOKE_KEY_ID="$(echo "$BOOTSTRAP_JSON" | jq -er .key_id)"
 
-export CI_SMOKE_KEY_ID="$(python scripts/partner_api_key_bootstrap.py \
-  --api-url https://api.thisisatest.tech \
-  --agent-id ci-smoke-agent \
-  --key-name constant-test-loop \
-  --budget-credits 5000 \
-  --json | jq -r .key_id)"
-
-# Or use a restrictive temporary file if needed
-KEY_FILE="$(mktemp)"
+# Or use a restrictive temporary file with cleanup trap
 umask 077
+KEY_FILE="$(mktemp)"
+trap 'rm -f "$KEY_FILE"' EXIT  # Clean up on exit/interrupt
+
 python scripts/partner_api_key_bootstrap.py \
   --api-url https://api.thisisatest.tech \
   --agent-id ci-smoke-agent \
   --key-name constant-test-loop \
   --budget-credits 5000 \
   --json > "$KEY_FILE"
-chmod 600 "$KEY_FILE"
-export CI_SMOKE_AGENT_KEY="$(jq -r .api_key "$KEY_FILE")"
-export CI_SMOKE_WALLET_ID="$(jq -r .wallet_id "$KEY_FILE")"
-export CI_SMOKE_KEY_ID="$(jq -r .key_id "$KEY_FILE")"
-rm "$KEY_FILE"  # Clean up immediately
+
+export CI_SMOKE_AGENT_KEY="$(jq -er .api_key "$KEY_FILE")"
+export CI_SMOKE_WALLET_ID="$(jq -er .wallet_id "$KEY_FILE")"
+export CI_SMOKE_KEY_ID="$(jq -er .key_id "$KEY_FILE")"
+# Trap handles cleanup
 
 # Run the constant test
 API_URL=https://api.thisisatest.tech python scripts/constant_test_loop.py
