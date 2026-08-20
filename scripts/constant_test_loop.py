@@ -1,33 +1,28 @@
 #!/usr/bin/env python3
 """Production-ready constant smoke test: permit → invoke → receipt → replay → deny.
 
-Exercises the complete governed loop against a live trust plane using the
-dogfood tool (``partner.notes.write`` when ``ENABLE_DOGFOOD_TOOL=true``, or
-``partner.echo`` when an upstream MCP tool is configured):
+Exercises the complete governed loop against a live trust plane. Prefers the
+production tool ``partner.echo`` (upstream MCP) when available, falls back to
+``partner.notes.write`` (dogfood, requires ``ENABLE_DOGFOOD_TOOL=true`` locally):
 
 1. Permit → invoke the governed tool with scoped permit → signed receipt
 2. Replay same idempotency key → same receipt_id, no second debit
-3. Out-of-scope tool is denied
+3. Out-of-scope tool is denied (when multiple tools exist)
 
 The loop reads the agent credential only from $CI_SMOKE_AGENT_KEY (never
-hardcoded, never logged, never printed). Exits 0 on success, 1 on any
-invariant failure, 2 on configuration error.
+hardcoded, never logged, never printed). Optionally reads $CI_SMOKE_WALLET_ID
+and $CI_SMOKE_KEY_ID for faster startup; fetches them from the API if missing.
+Exits 0 on success, 1 on any invariant failure, 2 on configuration error.
 
-Run locally against quickstart::
+Run locally (auto-provisions agent key)::
 
-    export CI_SMOKE_AGENT_KEY="$(
-        uv run python scripts/quickstart.py --reset &
-        sleep 5
-        curl -s http://127.0.0.1:8000/v1/dev-keys/self-provision \\
-            -H 'Content-Type: application/json' \\
-            -d '{"agent_id":"constant-test-local"}' | jq -r .api_key
-    )"
-    uv run python scripts/constant_test_loop.py
+    make quickstart  # in terminal 1
+    python scripts/constant_test_loop.py  # in terminal 2
 
 Run against production (once CI_SMOKE_AGENT_KEY is set in CI)::
 
     API_URL=https://api.thisisatest.tech \\
-        uv run python scripts/constant_test_loop.py
+        python scripts/constant_test_loop.py
 """
 
 from __future__ import annotations
@@ -44,7 +39,9 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_API_URL = "http://127.0.0.1:8000"
-GOVERNED_TOOL = "partner.notes.write"  # Dogfood tool (enabled by ENABLE_DOGFOOD_TOOL)
+# Prefer partner.echo (production governed tool) over partner.notes.write (dogfood)
+PRODUCTION_GOVERNED_TOOL = "partner.echo"
+DOGFOOD_GOVERNED_TOOL = "partner.notes.write"
 OUT_OF_SCOPE_TOOL = "some.other.tool"  # Dummy tool not in permit scope
 PERMIT_MAX_CREDITS = 10
 
@@ -60,9 +57,11 @@ def require(condition: bool, message: str) -> None:
 
 
 def _get_agent_key() -> tuple[str, str, str]:
-    """Read agent credential from $CI_SMOKE_AGENT_KEY or self-provision one.
+    """Read agent credential from $CI_SMOKE_AGENT_KEY or signal self-provision.
     
-    Returns (api_key, wallet_id, key_id). Never logs or prints the key.
+    Returns (api_key, wallet_id, key_id). If CI_SMOKE_AGENT_KEY is set but
+    wallet_id/key_id are missing, returns (key, "", "") to signal they should
+    be fetched from the API. Never logs or prints the key.
     """
     key = os.environ.get("CI_SMOKE_AGENT_KEY", "").strip()
     wallet_id = os.environ.get("CI_SMOKE_WALLET_ID", "").strip()
@@ -72,19 +71,32 @@ def _get_agent_key() -> tuple[str, str, str]:
         # All three provided - use them
         return (key, wallet_id, key_id)
     elif key:
-        # Key provided but missing wallet_id or key_id
-        raise SystemExit(
-            "error: CI_SMOKE_AGENT_KEY set but CI_SMOKE_WALLET_ID or "
-            "CI_SMOKE_KEY_ID missing. Provide all three or none."
-        )
+        # Key provided but wallet_id/key_id missing - will fetch from API
+        return (key, "", "")
     else:
         # Nothing provided - will self-provision in run_constant_test
         return ("", "", "")
 
 
 def _get_api_url() -> str:
-    """Read API URL from $API_URL or default to local quickstart."""
-    return os.environ.get("API_URL", DEFAULT_API_URL).rstrip("/")
+    """Read API URL from $API_URL or default to local quickstart.
+    
+    Validates that non-loopback URLs use HTTPS to prevent cleartext key leaks.
+    """
+    url = os.environ.get("API_URL", DEFAULT_API_URL).rstrip("/")
+    
+    # Enforce HTTPS for non-loopback URLs (same as partner_api_key_bootstrap.py)
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    is_loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+    
+    if parsed.scheme == "http" and not is_loopback:
+        raise SystemExit(
+            f"error: refusing to send CI_SMOKE_AGENT_KEY over cleartext HTTP to "
+            f"non-loopback host {parsed.hostname}. Use https:// or a loopback address."
+        )
+    
+    return url
 
 
 def _post_json(
@@ -164,6 +176,9 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
     """Execute the constant test loop and assert all invariants."""
     print(f"[constant-test] target: {api_url}", file=sys.stderr)
 
+    # Generate a unique run ID for this execution to make idempotency keys unique
+    run_id = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
+
     # If credentials not provided, self-provision
     if not agent_key:
         print("[constant-test] self-provisioning agent key", file=sys.stderr)
@@ -171,7 +186,7 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             provision_resp = _post_json(
                 provision_client,
                 "/v1/dev-keys/self-provision",
-                {"agent_id": f"constant-test-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"},
+                {"agent_id": f"constant-test-{run_id}"},
                 expected_status=201,
             )
             agent_key = provision_resp["api_key"]
@@ -179,6 +194,34 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             key_id = provision_resp["key_id"]
             print(
                 f"[constant-test] self-provisioned: wallet_id={wallet_id}",
+                file=sys.stderr,
+            )
+    elif not wallet_id or not key_id:
+        # Key provided but wallet_id/key_id missing - fetch from API
+        print("[constant-test] fetching wallet_id and key_id from API", file=sys.stderr)
+        headers = {
+            "X-API-Key": agent_key,
+            "Content-Type": "application/json",
+        }
+        with httpx.Client(base_url=api_url, headers=headers, timeout=30.0) as fetch_client:
+            wallets_resp = _get_json(fetch_client, "/v1/billing/wallets", expected_status=200)
+            wallets = wallets_resp.get("wallets", [])
+            require(len(wallets) > 0, "no wallets found for this API key")
+            # Use the first wallet (agent wallet)
+            wallet_id = wallets[0]["wallet_id"]
+            
+            # Fetch key_id from the keys list
+            keys_resp = _get_json(fetch_client, f"/v1/billing/wallets/{wallet_id}/keys", expected_status=200)
+            keys = keys_resp.get("keys", [])
+            require(len(keys) > 0, "no keys found for this wallet")
+            # Find the key matching our API key prefix
+            key_prefix = agent_key.split("_")[0] + "_" + agent_key.split("_")[1]
+            matching_keys = [k for k in keys if k.get("key_prefix") == key_prefix]
+            require(len(matching_keys) > 0, f"no key found with prefix {key_prefix}")
+            key_id = matching_keys[0]["key_id"]
+            
+            print(
+                f"[constant-test] fetched: wallet_id={wallet_id}, key_id={key_id}",
                 file=sys.stderr,
             )
 
@@ -193,20 +236,30 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
         print("[constant-test] discovering tools", file=sys.stderr)
         tools = _get_json(client, "/mcp/tools.json", expected_status=200)
         tool_names = [tool["name"] for tool in tools.get("tools", [])]
-        require(
-            GOVERNED_TOOL in tool_names,
-            f"{GOVERNED_TOOL} not discoverable; is ENABLE_DOGFOOD_TOOL=true?",
-        )
+        
+        # Select governed tool: prefer production partner.echo over dogfood partner.notes.write
+        governed_tool = None
+        if PRODUCTION_GOVERNED_TOOL in tool_names:
+            governed_tool = PRODUCTION_GOVERNED_TOOL
+            print(f"[constant-test] using production tool: {governed_tool}", file=sys.stderr)
+        elif DOGFOOD_GOVERNED_TOOL in tool_names:
+            governed_tool = DOGFOOD_GOVERNED_TOOL
+            print(f"[constant-test] using dogfood tool: {governed_tool} (ENABLE_DOGFOOD_TOOL=true)", file=sys.stderr)
+        else:
+            raise SmokeTestFailure(
+                f"neither {PRODUCTION_GOVERNED_TOOL} nor {DOGFOOD_GOVERNED_TOOL} discoverable. "
+                f"Available tools: {', '.join(tool_names)}"
+            )
 
         # Issue scoped permit
         print("[constant-test] issuing scoped permit", file=sys.stderr)
         expires_at = (
             datetime.now(timezone.utc) + timedelta(minutes=30)
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        # Add Idempotency-Key header for permit creation
+        # Add Idempotency-Key header for permit creation (unique per run)
         permit_headers = {
             **headers,
-            "Idempotency-Key": f"constant-test-permit-{datetime.now(timezone.utc).isoformat()}",
+            "Idempotency-Key": f"constant-test-permit-{run_id}",
         }
         resp = client.post(
             "/v1/permits",
@@ -214,8 +267,8 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
                 "issuer_wallet_id": wallet_id,
                 "subject_wallet_id": wallet_id,
                 "subject_key_id": key_id,
-                "allowed_tools": [GOVERNED_TOOL],
-                "scopes": [f"tool:{GOVERNED_TOOL}:invoke", "billing:charge"],
+                "allowed_tools": [governed_tool],
+                "scopes": [f"tool:{governed_tool}:invoke", "billing:charge"],
                 "max_credits": PERMIT_MAX_CREDITS,
                 "expires_at": expires_at,
             },
@@ -229,14 +282,15 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
         permit_id = permit["permit_id"]
         print(f"[constant-test] permit_id={permit_id}", file=sys.stderr)
 
-        # Invoke the governed tool
-        print(f"[constant-test] invoking {GOVERNED_TOOL}", file=sys.stderr)
+        # Invoke the governed tool (unique idempotency key per run)
+        invoke_idempotency_key = f"constant-test-invoke-{run_id}"
+        print(f"[constant-test] invoking {governed_tool}", file=sys.stderr)
         call_body = _build_mcp_call(
-            request_id="constant-test-1",
-            tool=GOVERNED_TOOL,
+            request_id=f"constant-test-req-{run_id}",
+            tool=governed_tool,
             wallet_id=wallet_id,
             permit_id=permit_id,
-            idempotency_key="constant-test-invoke-1",
+            idempotency_key=invoke_idempotency_key,
             arguments={"text": "constant test loop"},
         )
         first_call = _post_json(
@@ -273,7 +327,7 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             f"ledger debit {debit_amount} != receipt charge {-charged}",
         )
         debits_before_replay = len(
-            [e for e in ledger["entries"] if GOVERNED_TOOL in e.get("description", "")]
+            [e for e in ledger["entries"] if governed_tool in e.get("description", "")]
         )
 
         # Replay same idempotency key → same receipt_id, no second debit
@@ -294,7 +348,7 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             [
                 e
                 for e in ledger_after_replay["entries"]
-                if GOVERNED_TOOL in e.get("description", "")
+                if governed_tool in e.get("description", "")
             ]
         )
         require(
@@ -302,7 +356,7 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
             "replay created a second debit",
         )
         print(
-            f"[constant-test] replay OK: same receipt_id, no second debit",
+            "[constant-test] replay OK: same receipt_id, no second debit",
             file=sys.stderr,
         )
 
@@ -313,14 +367,14 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
         if len(tool_names) > 1:
             print("[constant-test] attempting out-of-scope tool", file=sys.stderr)
             # Find a tool that's not the governed one
-            other_tool = next((t for t in tool_names if t != GOVERNED_TOOL), None)
+            other_tool = next((t for t in tool_names if t != governed_tool), None)
             if other_tool:
                 denial_body = _build_mcp_call(
-                    request_id="constant-test-deny",
+                    request_id=f"constant-test-deny-{run_id}",
                     tool=other_tool,
                     wallet_id=wallet_id,
                     permit_id=permit_id,
-                    idempotency_key="constant-test-deny-1",
+                    idempotency_key=f"constant-test-deny-{run_id}",
                     arguments={},
                 )
                 denial_call = _post_json(
@@ -342,7 +396,7 @@ def run_constant_test(api_url: str, agent_key: str, wallet_id: str, key_id: str)
                     f"denial charged {denial_charged} credits (expected 0)",
                 )
                 print(
-                    f"[constant-test] denial OK: permit_tool_not_allowed, 0 credits charged",
+                    "[constant-test] denial OK: permit_tool_not_allowed, 0 credits charged",
                     file=sys.stderr,
                 )
         else:

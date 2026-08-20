@@ -24,17 +24,19 @@ The script self-provisions an agent key via `/v1/dev-keys/self-provision` when n
 
 ## Production Use
 
-Set `CI_SMOKE_AGENT_KEY` (and optionally `CI_SMOKE_WALLET_ID` and `CI_SMOKE_KEY_ID`) for a pre-provisioned agent credential:
+Set `CI_SMOKE_AGENT_KEY` for a pre-provisioned agent credential. Optionally provide `CI_SMOKE_WALLET_ID` and `CI_SMOKE_KEY_ID` for faster startup (the script will fetch them from the API if not provided):
 
 ```bash
 # Provision an agent key once (using bootstrap key)
 export BOOTSTRAP_KEY="amw_live_..."
+umask 077  # Ensure restrictive permissions for key file
 python scripts/partner_api_key_bootstrap.py \
   --api-url https://api.thisisatest.tech \
   --agent-id ci-smoke-agent \
   --key-name constant-test-loop \
   --budget-credits 5000 \
   --json | tee /tmp/agent-key.json
+chmod 600 /tmp/agent-key.json  # Restrict to owner-only read/write
 
 # Extract and set as CI secret
 export CI_SMOKE_AGENT_KEY="$(jq -r .api_key /tmp/agent-key.json)"
