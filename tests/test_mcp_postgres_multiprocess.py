@@ -1163,7 +1163,7 @@ async def test_kill_between_debit_and_dispatch_refunds_without_dispatching(
 
     # Trigger reconciliation with idle_seconds=0 to mark the killed PREPARED attempt as stale.
     reconciliation_before_retry = await _reconcile(stress_harness, steady_worker)
-    assert reconciliation_before_retry["dispatch_failed_attempts"] == 1
+    assert reconciliation_before_retry["dispatch_prepared_finalized"] == 1
 
     # Now retry - should get the reconciled failed_refunded result
     first_retry = await _invoke(steady_worker, seeded)

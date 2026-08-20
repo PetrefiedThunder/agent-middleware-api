@@ -26,8 +26,24 @@ from app.services.mcp_dispatch_attempts import (
     get_mcp_dispatch_attempt_service,
 )
 from app.services.service_registry import get_service_registry
-from tests.helpers.test_upstream_executor import PausedUpstreamExecutor
 from tests.test_mcp_basic import create_tool_permit, provision_agent_wallet
+
+
+class PausedUpstreamExecutor:
+    """Test executor that pauses before actually executing, for concurrency tests."""
+
+    def __init__(self) -> None:
+        self.dispatched = asyncio.Event()
+        self.release = asyncio.Event()
+        self.dispatch_count = 0
+        self.calls: list[dict] = []
+
+    async def execute(self, invocation_id: str, arguments: dict) -> dict:
+        self.dispatch_count += 1
+        self.calls.append({"invocation_id": invocation_id, "arguments": arguments})
+        self.dispatched.set()
+        await self.release.wait()
+        return {"result": "ok"}
 
 
 @pytest.mark.anyio
