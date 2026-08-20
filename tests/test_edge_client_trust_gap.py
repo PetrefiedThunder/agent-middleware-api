@@ -17,7 +17,7 @@ async def test_edge_client_call_mcp_tool_double_charges_on_replay(
     clean_database,
 ) -> None:
     """The edge client's call_mcp_tool bypasses idempotency and double-charges.
-    
+
     This is the honesty gap: calling call_mcp_tool twice with the same
     arguments dispatches and charges twice, because there is no idempotency
     key or replay protection. The governed flow (invoke_tool with an
@@ -70,18 +70,19 @@ async def test_edge_client_call_mcp_tool_double_charges_on_replay(
                 {"message": "hello"},
             )
 
+            # Fetch the wallet before closing clients.
+            wallet_resp = await raw_client.get(
+                f"/v1/billing/wallets/{wallet_id}",
+                headers=provisioned["agent_headers"],
+            )
+            wallet = wallet_resp.json()
+
             await edge.close()
 
         # The edge client has no idempotency key, so both calls dispatched.
         assert calls == 2, "edge client did not dispatch twice"
         assert first["result"]["content"][0]["text"] != second["result"]["content"][0]["text"]
 
-        # Fetch the wallet to confirm it was charged twice.
-        wallet_resp = await raw_client.get(
-            f"/v1/billing/wallets/{wallet_id}",
-            headers=provisioned["agent_headers"],
-        )
-        wallet = wallet_resp.json()
         # Started with 1000 credits, charged 2 credits twice = 4 credits spent.
         assert wallet["balance"] == 996.0, f"balance should be 996 but was {wallet['balance']}"
     finally:

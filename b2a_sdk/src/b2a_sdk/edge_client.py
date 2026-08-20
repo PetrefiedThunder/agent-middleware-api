@@ -4,7 +4,7 @@
     The edge client's ``call_mcp_tool`` bypasses the trust-plane loop
     (no permit, no idempotency key, no signed receipt, no replay protection).
     Each call dispatches and charges independently, making replay a double-charge.
-    
+
     Use ``AgentMiddlewareClient`` with the governed flow instead:
     ``discover_tools() → create_permit() → invoke_tool()`` gives you
     idempotent replay, signed receipts, and scoped authorization.
@@ -74,12 +74,12 @@ class B2AEdgeClient:
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         """Call an MCP tool by name.
-        
+
         .. warning::
             This method bypasses the trust-plane loop: no permit, no idempotency
             key, no signed receipt, no replay protection. Calling this method
             twice with the same arguments dispatches and charges twice.
-            
+
             For governed invocations with replay protection and signed receipts,
             use ``AgentMiddlewareClient.invoke_tool()`` instead, which requires
             a permit and an idempotency key.
