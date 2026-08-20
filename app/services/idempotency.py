@@ -131,7 +131,9 @@ class IdempotencyService:
                 # Terminal but no response yet - fall through to wait
 
             # Only reconcile PREPARED attempts, or DISPATCHED attempts that are
-            # stale (dispatched >5s ago). Fresh DISPATCHED attempts may be owned
+            # either stale (>1s old) OR when wait_timeout_seconds is 0 (caller
+            # explicitly requests immediate resolution without waiting).
+            # Fresh DISPATCHED attempts with wait_timeout > 0 may be owned
             # by an active concurrent request; reconciling them causes a race where
             # we terminalize with delivery_uncertain while the owner is about to
             # complete with the actual result, triggering dispatch_terminal_conflict.
@@ -141,21 +143,19 @@ class IdempotencyService:
             elif dispatch_attempt.state == "dispatched":
                 # Check if this DISPATCHED attempt is stale (abandoned/crashed)
                 # or live (owned by an active concurrent request).
-                # Use dispatched_at timestamp: if > 5 seconds old, assume stale.
                 if dispatch_attempt.dispatched_at is not None:
                     from datetime import datetime, timezone
                     
                     age_seconds = (
                         datetime.now(timezone.utc) - dispatch_attempt.dispatched_at
                     ).total_seconds()
-                    # 1-second threshold: concurrent requests in tests complete
-                    # within ~100ms; crashed requests won't complete at all.
-                    # This is conservative enough to avoid the race while still
-                    # catching stale attempts quickly.
-                    if age_seconds > 1.0:
+                    # Reconcile if stale (>1s) or if caller won't wait (timeout=0)
+                    if age_seconds > 1.0 or wait_timeout_seconds <= 0:
                         should_reconcile = True
-                    # else: fresh dispatch, assume live concurrent request, wait
-                # else: no dispatched_at (shouldn't happen), don't reconcile
+                    # else: fresh dispatch with positive timeout, wait for completion
+                elif wait_timeout_seconds <= 0:
+                    # No dispatched_at but caller won't wait: reconcile anyway
+                    should_reconcile = True
 
             if should_reconcile:
                 reconciler = get_mcp_dispatch_reconciliation_service()
