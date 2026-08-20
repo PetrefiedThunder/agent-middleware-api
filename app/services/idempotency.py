@@ -148,9 +148,11 @@ class IdempotencyService:
                     age_seconds = (
                         datetime.now(timezone.utc) - dispatch_attempt.dispatched_at
                     ).total_seconds()
-                    # 5-second threshold: live requests complete in < 5s typically;
-                    # crashed requests won't complete at all.
-                    if age_seconds > 5.0:
+                    # 1-second threshold: concurrent requests in tests complete
+                    # within ~100ms; crashed requests won't complete at all.
+                    # This is conservative enough to avoid the race while still
+                    # catching stale attempts quickly.
+                    if age_seconds > 1.0:
                         should_reconcile = True
                     # else: fresh dispatch, assume live concurrent request, wait
                 # else: no dispatched_at (shouldn't happen), don't reconcile
