@@ -130,33 +130,28 @@ class IdempotencyService:
                         return replay
                 # Terminal but no response yet - fall through to wait
 
-            # Only reconcile PREPARED attempts, or DISPATCHED attempts that are
-            # either stale (>1s old) OR when wait_timeout_seconds is 0 (caller
-            # explicitly requests immediate resolution without waiting).
-            # Fresh DISPATCHED attempts with wait_timeout > 0 may be owned
-            # by an active concurrent request; reconciling them causes a race where
-            # we terminalize with delivery_uncertain while the owner is about to
-            # complete with the actual result, triggering dispatch_terminal_conflict.
+            # Only reconcile PREPARED or DISPATCHED attempts that are truly stale
+            # (updated >300s ago, matching the periodic sweep's idle threshold).
+            # Live attempts with active owners must wait, not be stolen.
             should_reconcile = False
-            if dispatch_attempt.state == DISPATCH_PREPARED:
-                should_reconcile = True
-            elif dispatch_attempt.state == "dispatched":
-                # Check if this DISPATCHED attempt is stale (abandoned/crashed)
-                # or live (owned by an active concurrent request).
-                if dispatch_attempt.dispatched_at is not None:
-                    from app.core.time import to_naive_utc, utc_now
-                    
-                    # Both must be naive or both aware for subtraction
-                    now_naive = to_naive_utc(utc_now())
-                    dispatched_naive = to_naive_utc(dispatch_attempt.dispatched_at)
-                    age_seconds = (now_naive - dispatched_naive).total_seconds()
-                    # Reconcile if stale (>1s) or if caller won't wait (timeout=0)
-                    if age_seconds > 1.0 or wait_timeout_seconds <= 0:
-                        should_reconcile = True
-                    # else: fresh dispatch with positive timeout, wait for completion
-                elif wait_timeout_seconds <= 0:
-                    # No dispatched_at but caller won't wait: reconcile anyway
+            
+            # Check staleness using updated_at (last state change), matching
+            # list_stale_contexts logic in mcp_dispatch_attempts.py
+            if dispatch_attempt.updated_at is not None:
+                from datetime import timedelta
+                
+                from app.core.time import to_naive_utc, utc_now
+                
+                # 300 seconds = standard staleness threshold used by periodic sweep
+                STALE_IDLE_SECONDS = 300
+                cutoff = to_naive_utc(utc_now() - timedelta(seconds=STALE_IDLE_SECONDS))
+                updated_naive = to_naive_utc(dispatch_attempt.updated_at)
+                is_stale = updated_naive < cutoff
+                
+                if is_stale:
+                    # Attempt hasn't been updated in 300s: truly stale/crashed
                     should_reconcile = True
+                # else: fresh update, assume live owner, wait
 
             if should_reconcile:
                 reconciler = get_mcp_dispatch_reconciliation_service()
