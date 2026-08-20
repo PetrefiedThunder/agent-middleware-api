@@ -284,8 +284,10 @@ def _build_mcp_tools() -> list[MCPToolInfo]:
     When proof surfaces are off, returns only registered tools (dogfood/partner).
     When on, includes proof-surface stubs plus any registered tools.
     """
+    from ..routers.mcp import _ensure_local_mcp_tools_registered
     from ..services.service_registry import get_service_registry
 
+    _ensure_local_mcp_tools_registered()
     registry = get_service_registry()
     tools = []
     
