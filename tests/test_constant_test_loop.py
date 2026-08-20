@@ -8,18 +8,113 @@ behaviors unique to constant_test_loop that aren't covered by demo_trust_plane.
 from __future__ import annotations
 
 import os
+import signal
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import httpx
 import pytest
 import runpy
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT
 CONSTANT_TEST_LOOP = ROOT / "scripts" / "constant_test_loop.py"
 CONSTANT_TEST_SCRIPT = CONSTANT_TEST_LOOP  # Alias for compatibility with ported tests
 BOOTSTRAP_SCRIPT = ROOT / "scripts" / "partner_api_key_bootstrap.py"
 
+
+# Restored: two tests below take this fixture, and removing it turned them
+# into collection errors rather than deleting them. It also boots a real
+# server, which is what makes the bootstrap and end-to-end assertions worth
+# anything — source inspection cannot show that a key never reaches a log.
+
+
+def _free_port() -> int:
+    """Find a free port on localhost."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def test_server(tmp_path_factory):
+    """Boot a minimal test server with a static dev key for bootstrap tests."""
+    import base64
+    import secrets
+    
+    state_dir = tmp_path_factory.mktemp("bootstrap-test-state")
+    port = _free_port()
+    static_dev_key = f"amw_dev_{secrets.token_urlsafe(32)}"
+    signing_seed = base64.b64encode(secrets.token_bytes(32)).decode()
+    
+    # Boot uvicorn directly with minimal env for testing
+    test_env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "ENVIRONMENT": "local",
+        "DATABASE_URL": f"sqlite+aiosqlite:///{state_dir / 'api.db'}",
+        "STATE_BACKEND": "sqlite",
+        "SQLITE_URL": str(state_dir / "state.db"),
+        "STATIC_DEV_API_KEYS": static_dev_key,
+        "VALID_API_KEYS": "",
+        "TRUST_MODE_ENABLED": "true",
+        "TRUST_SIGNING_KEY_ID": "test-ed25519",
+        "TRUST_SIGNING_PRIVATE_KEY_B64": signing_seed,
+        "ENABLE_DEV_KEY_SELF_PROVISION": "true",
+        "ENABLE_DOGFOOD_TOOL": "true",
+        "MCP_UPSTREAM_ENABLED": "false",
+        "ALLOW_LEGACY_UNPERMITTED_MCP": "false",
+        "ENABLE_PROOF_SURFACES": "false",
+    }
+    
+    log_path = state_dir / "server.log"
+    with log_path.open("wb") as log_file:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=REPO_ROOT,
+            env=test_env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    
+    base_url = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(
+                    "test server exited early:\n"
+                    + log_path.read_text(encoding="utf-8", errors="replace")
+                )
+            try:
+                if httpx.get(f"{base_url}/health", timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("test server never became healthy")
+        yield (base_url, static_dev_key)
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
 
 def test_constant_test_loop_refuses_cleartext_http_non_loopback():
     """Configuration error (exit 2) when API_URL uses HTTP for non-loopback host."""
@@ -190,7 +285,6 @@ def test_constant_test_loop_partial_credentials_fetch_from_api():
 
 def test_partner_api_key_bootstrap_json_output():
     """Bootstrap script produces JSON-parseable output and never prints the key."""
-    from pathlib import Path
     import json
     
     BOOTSTRAP = ROOT / "scripts" / "partner_api_key_bootstrap.py"
