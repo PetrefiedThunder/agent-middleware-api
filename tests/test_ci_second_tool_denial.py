@@ -6,7 +6,6 @@ to prove permit scope enforcement rather than silently skipping the check.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
