@@ -208,14 +208,9 @@ async def test_replay_after_dispatched_triggers_reconciliation(
         assert executor.dispatch_count == 0, "Executor should not have been called"
 
         # Verify only one debit
-        balance_response = await client.get(
-            f"/v1/wallets/{provisioned['agent_wallet_id']}/balance",
-            headers=provisioned["agent_headers"],
-        )
-        assert balance_response.status_code == 200
-        balance = Decimal(str(balance_response.json()["balance"]))
+        wallet = await money.get_wallet(provisioned["agent_wallet_id"])
         # Started with 1000, charged 2, so should be 998
-        assert balance == Decimal("998")
+        assert wallet.balance == Decimal("998")
 
     finally:
         registry.unregister_local(tool_name)
