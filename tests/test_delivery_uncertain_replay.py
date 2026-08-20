@@ -157,11 +157,12 @@ async def test_replay_after_dispatched_triggers_reconciliation(
         assert attempt is not None
 
         # Attach charge (simulating successful charge before crash)
+        # Tool has credits_per_unit=2.0, so 1 unit = 2 credits
         money = get_agent_money()
         charge = await money.charge(
             wallet_id=provisioned["agent_wallet_id"],
             service_category=ServiceCategory.AGENT_COMMS,
-            units=Decimal("2"),
+            units=Decimal("1"),
             request_path="/test",
             operation_key=begun.record_id,
         )
@@ -302,7 +303,7 @@ async def test_delivery_uncertain_replay_never_redispatches(
 
         # Verify only one debit
         ledger_response = await client.get(
-            f"/v1/wallets/{provisioned['agent_wallet_id']}/ledger",
+            f"/v1/billing/ledger/{provisioned['agent_wallet_id']}",
             headers=provisioned["agent_headers"],
         )
         assert ledger_response.status_code == 200

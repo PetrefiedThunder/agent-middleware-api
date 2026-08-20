@@ -146,7 +146,8 @@ class IdempotencyService:
                 ).scalar_one_or_none()
                 if fresh is not None and fresh.response_json is not None:
                     replay = _replay_from_record(fresh, request_hash)
-                    return replay
+                    if replay is not None:
+                        return replay
 
         # No dispatch attempt or reconciliation failed/incomplete; wait normally
         if wait_timeout_seconds <= 0:
