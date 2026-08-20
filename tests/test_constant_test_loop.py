@@ -347,7 +347,6 @@ def test_constant_test_loop_full_integration():
     assert "ALL INVARIANTS HELD" in result.stderr
 
 
-@pytest.mark.skip(reason="test_server fixture missing - needs to be defined or test rewritten")
 def test_constant_test_loop_never_logs_api_key(test_server):
     """Agent key is never printed or logged during constant test execution."""
     import httpx
@@ -607,7 +606,6 @@ def test_bootstrap_key_only_pipes_without_jq():
     assert "BOOTSTRAP_KEY" in result.stderr
 
 
-@pytest.mark.skip(reason="test_server fixture missing - needs to be defined or test rewritten")
 def test_unusable_tool_pin_exits_as_configuration_not_invariant_failure(
     test_server,
 ):
