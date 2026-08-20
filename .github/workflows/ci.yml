@@ -503,9 +503,9 @@ jobs:
       - name: Run the trust release gate
         run: scripts/trust_release_gate.sh
 
-  # Constant test loop: proves the local trust-plane loop (self-provision path)
-  # and optionally tests production when CI_SMOKE_AGENT_KEY is available.
-  # Production test is skipped (not failed) when the secret is unset.
+  # Constant test loop: proves the local trust-plane loop (self-provision path).
+  # Runs on pull_request and push to main. Production smoke (api.thisisatest.tech)
+  # runs only on push to main when CI_SMOKE_AGENT_KEY is set.
   constant_test_loop:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -528,12 +528,14 @@ jobs:
       - name: Run local trust-plane constant test loop (self-provision)
         # Always run: proves the local loop with self-provisioned credentials.
         # Uses quickstart path with ephemeral SQLite and dev key self-provision.
+        # Registers two tools (dogfood + harmless second) to prove out-of-scope denial.
         env:
           ENABLE_DEV_KEY_SELF_PROVISION: "true"
           TRUST_MODE_ENABLED: "true"
           ALLOW_LEGACY_UNPERMITTED_MCP: "false"
           ENABLE_PROOF_SURFACES: "false"
           ENABLE_DOGFOOD_TOOL: "true"
+          ENABLE_DOGFOOD_SECOND_TOOL: "true"
           TRUST_SIGNING_PRIVATE_KEY_B64: dGVzdC1zaWduaW5nLWtleS1tYXRlcmlhbC0zMmJ5dGU=
           DATABASE_URL: sqlite+aiosqlite:///./constant-test-loop.db
           STATE_BACKEND: sqlite
@@ -568,9 +570,10 @@ jobs:
           exit $TEST_EXIT
 
       - name: Run production constant test loop (api.thisisatest.tech)
-        # Only run when CI_SMOKE_AGENT_KEY is set. Skip (not fail) when unset.
-        # This tests the production API with a persistent agent key.
-        if: vars.CI_SMOKE_AGENT_KEY != '' || secrets.CI_SMOKE_AGENT_KEY != ''
+        # SECURITY: Only run on push to default branch (main), never on pull_request.
+        # A PR from the same repo can inject code into constant_test_loop.py that
+        # exfiltrates CI_SMOKE_AGENT_KEY. Push to main is trusted (requires review).
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           API_URL: https://api.thisisatest.tech
           CI_SMOKE_AGENT_KEY: ${{ secrets.CI_SMOKE_AGENT_KEY }}
