@@ -146,9 +146,12 @@ class IdempotencyService:
                 if dispatch_attempt.dispatched_at is not None:
                     from datetime import datetime, timezone
                     
-                    age_seconds = (
-                        datetime.now(timezone.utc) - dispatch_attempt.dispatched_at
-                    ).total_seconds()
+                    from app.core.time import to_naive_utc, utc_now
+                    
+                    # Both must be naive or both aware for subtraction
+                    now_naive = to_naive_utc(utc_now())
+                    dispatched_naive = to_naive_utc(dispatch_attempt.dispatched_at)
+                    age_seconds = (now_naive - dispatched_naive).total_seconds()
                     # Reconcile if stale (>1s) or if caller won't wait (timeout=0)
                     if age_seconds > 1.0 or wait_timeout_seconds <= 0:
                         should_reconcile = True
