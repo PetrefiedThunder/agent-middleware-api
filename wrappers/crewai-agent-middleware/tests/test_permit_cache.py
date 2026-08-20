@@ -1,6 +1,5 @@
 """Test permit caching to prevent 409 IdempotencyConflictError on replay."""
 
-import json
 from datetime import UTC, datetime
 
 import httpx
