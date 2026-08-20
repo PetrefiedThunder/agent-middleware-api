@@ -55,7 +55,19 @@ API_KEY = os.environ.get("AGENT_MIDDLEWARE_API_KEY", "")
 # quickstart, a partner pilot, and production. Hardcoding one makes the loop
 # fail with "tool not found" on every deployment but the author's, so the
 # names are discovered unless the operator pins them with --tool/--other-tool.
-PERMIT_MAX_CREDITS = "20"
+# Headroom over the selected tool's advertised price. One iteration spends a
+# single call — the replay is free and the denial never charges — so this is
+# slack for a price that moved between discovery and invocation, not a budget
+# for repeated spending.
+PERMIT_CREDIT_HEADROOM = 3
+PERMIT_MIN_CREDITS = 20
+
+# The exact refusal a permit gives for a tool outside allowed_tools. The
+# out-of-scope check asserts this string rather than "any error", so it
+# cannot be satisfied by a tool-not-found or a transport failure.
+PERMIT_SCOPE_DENIAL = "permit_tool_not_allowed"
+# The refusal for a reused idempotency key carrying a different payload.
+IDEMPOTENCY_CONFLICT = "idempotency_key_reused"
 
 
 def _redact(text: str, limit: int = 200) -> str:
@@ -165,17 +177,56 @@ def _spent(permit: dict) -> float:
     )
 
 
+def select_companion_tool(
+    registry: dict[str, dict], allowed_tool: str, pinned: str | None
+) -> tuple[str | None, str]:
+    """Pick a real registered tool the permit does not cover.
+
+    Drawn from the *registry*, never from the pinned name: ``--tool`` is
+    mandatory off loopback, so selecting the companion from the pinned list
+    would silently skip the out-of-scope check on exactly the deployments
+    where it matters most.
+
+    It must be a tool that genuinely exists, because invoking a name the
+    registry has never heard of proves "tool not found" rather than "the
+    permit refused it" — a pass for the wrong reason.
+
+    Returns ``(tool_or_None, error_message)``. ``None`` with no error means
+    the deployment has no second tool and the check should be skipped.
+    """
+    if pinned:
+        if pinned not in registry:
+            return None, (
+                "an unregistered name proves tool-not-found, not permit "
+                f"refusal; registry: {sorted(registry)[:6]}"
+            )
+        if pinned == allowed_tool:
+            return None, (
+                "the companion must differ from the permitted tool, or the "
+                "check asserts a denial that should never happen"
+            )
+        return pinned, ""
+    return next((name for name in registry if name != allowed_tool), None), ""
+
+
 async def discover_tools(client: httpx.AsyncClient) -> dict[str, dict]:
-    """Return {tool name: inputSchema} for what this deployment exposes."""
+    """Return {tool name: manifest entry} for what this deployment exposes."""
 
     r = await client.get("/mcp/tools.json")
     r.raise_for_status()
     tools = r.json().get("tools") or []
     return {
-        t["name"]: (t.get("inputSchema") or {})
-        for t in tools
-        if isinstance(t, dict) and t.get("name")
+        t["name"]: t for t in tools if isinstance(t, dict) and t.get("name")
     }
+
+
+def credits_per_call(tool: dict) -> float:
+    """The tool's advertised price, or 0 when the manifest does not state one."""
+
+    try:
+        return float((tool.get("annotations") or {}).get("creditsPerCall") or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 async def run_once(
@@ -228,21 +279,27 @@ async def run_once(
     registry = await discover_tools(client)
     if not suite.check("deployment exposes at least one tool", bool(registry)):
         return
-    names = [args.tool] if args.tool else list(registry)
-    allowed_tool = names[0]
+    allowed_tool = args.tool or next(iter(registry))
     if not suite.check(
-        f"pinned tool {allowed_tool} is registered",
+        f"tool {allowed_tool} is registered",
         allowed_tool in registry,
         f"registry: {sorted(registry)[:6]}",
     ):
         return
-    # The out-of-scope check is only meaningful against a tool that exists:
-    # invoking a name the registry has never heard of proves "tool not found",
-    # not "the permit refused it". With one tool registered there is no such
-    # name, so the check is skipped loudly rather than passing vacuously.
-    other_tool = args.other_tool or (names[1] if len(names) > 1 else None)
+    other_tool, companion_error = select_companion_tool(
+        registry, allowed_tool, args.other_tool
+    )
+    if companion_error:
+        suite.check(f"out-of-scope companion {args.other_tool}", False, companion_error)
 
     # ---- Issue a permit for the caller's own wallet -----------------------
+    # Sized from what this tool actually costs. A fixed cap fails
+    # permit_budget_exceeded on a perfectly healthy deployment the moment
+    # someone pins a tool priced above it, which reads as a product fault.
+    price = credits_per_call(registry[allowed_tool])
+    max_credits = args.max_credits or max(
+        PERMIT_MIN_CREDITS, price * PERMIT_CREDIT_HEADROOM
+    )
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
     r = await client.post(
         "/v1/permits",
@@ -251,7 +308,7 @@ async def run_once(
             "issuer_wallet_id": wallet_id,
             "subject_wallet_id": wallet_id,
             "allowed_tools": [allowed_tool],
-            "max_credits": PERMIT_MAX_CREDITS,
+            "max_credits": str(max_credits),
             "expires_at": expires_at,
         },
     )
@@ -269,7 +326,9 @@ async def run_once(
     # Keep this body byte-identical for the replay below. The idempotency
     # layer hashes the payload, so resending a *different* body under the
     # same key is a conflict rather than a replay — asserted separately.
-    golden_args = args.tool_args or arguments_for(registry[allowed_tool], run_tag)
+    golden_args = args.tool_args or arguments_for(
+        registry[allowed_tool].get("inputSchema") or {}, run_tag
+    )
     golden = invoke_body(wallet_id, permit_id, allowed_tool, golden_args)
     r = await client.post(
         "/mcp/messages", headers=headers(run_tag, "invoke"), json=golden
@@ -327,17 +386,22 @@ async def run_once(
         ),
     )
     conflict = r.json()
+    # The exact reason, not any error: a tool rejecting the injected argument,
+    # or an unrelated policy failure, would otherwise report PASS while the
+    # idempotency behaviour this asserts went unverified.
+    conflict_message = str((conflict.get("error") or {}).get("message", ""))
     suite.check(
-        "different payload under a used key is refused",
-        r.status_code == 409 or "error" in conflict,
-        f"HTTP {r.status_code}: {_redact(json.dumps(conflict))}",
+        "different payload under a used key is refused as a conflict",
+        conflict_message == IDEMPOTENCY_CONFLICT,
+        conflict_message
+        or f"HTTP {r.status_code}: {_redact(json.dumps(conflict))}",
     )
 
     # ---- Out-of-scope tool is denied, and the denial costs nothing --------
     if other_tool is None:
         print(
-            "[SKIP] out-of-scope denial — deployment exposes only one tool, "
-            "so there is no real tool outside the permit to try",
+            "[SKIP] out-of-scope denial — no registered tool outside the "
+            "permit to try against",
             flush=True,
         )
     else:
@@ -348,15 +412,22 @@ async def run_once(
                 wallet_id,
                 permit_id,
                 other_tool,
-                arguments_for(registry.get(other_tool, {}), run_tag),
+                arguments_for(
+                    (registry.get(other_tool) or {}).get("inputSchema") or {},
+                    run_tag,
+                ),
             ),
         )
         denied = r.json()
+        # Assert the *specific* refusal, not merely "something went wrong".
+        # Any-error-counts would pass on a transport hiccup or a schema
+        # complaint, and "receipt has no ok field" passes on success, since a
+        # successful receipt carries no such field at all.
+        error_message = str((denied.get("error") or {}).get("message", ""))
         suite.check(
-            f"out-of-scope tool {other_tool} is denied",
-            "error" in denied
-            or not denied.get("result", {}).get("receipt", {}).get("ok"),
-            _redact(json.dumps(denied)),
+            f"out-of-scope tool {other_tool} is refused by the permit",
+            error_message == PERMIT_SCOPE_DENIAL,
+            error_message or _redact(json.dumps(denied)),
         )
 
         r = await client.get(f"/v1/permits/{permit_id}", headers=headers(run_tag))
@@ -479,6 +550,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--max-credits",
+        type=float,
+        default=None,
+        help=(
+            "Permit cap in credits (default: 3x the tool's advertised "
+            "creditsPerCall, floor 20)"
+        ),
+    )
+    parser.add_argument(
         "--exit-on-failure",
         action="store_true",
         help="Exit non-zero on the first failing iteration instead of continuing",
@@ -489,9 +569,24 @@ def main() -> int:
     if not loopback and not args.tool:
         sys.stderr.write(
             f"refusing to auto-discover a tool against {API_URL}.\n"
-            "Off loopback, pass --tool (and --other-tool) so you choose what "
-            "this loop invokes on every iteration rather than whatever the "
-            "registry happens to list first.\n"
+            "Off loopback, pass --tool so you choose what this loop invokes "
+            "on every iteration rather than whatever the registry happens to "
+            "list first.\n"
+        )
+        return 2
+
+    if not loopback and args.tool_args is None:
+        # Schema validity is not evidence of safety. Derived arguments fill
+        # required fields from types, defaults, and the *first* enum member —
+        # which for a consequential tool could be "delete" or "commit", sent
+        # again every interval. Off loopback the payload is a decision an
+        # operator makes explicitly, even if that decision is "{}".
+        sys.stderr.write(
+            f"refusing to send derived arguments to {API_URL}.\n"
+            "Off loopback, pass --tool-args with a payload you have approved "
+            "for repeated invocation; derived arguments guess from the "
+            "schema and may name a destructive enum value. Pass "
+            "--tool-args '{}' if the tool genuinely needs no arguments.\n"
         )
         return 2
 

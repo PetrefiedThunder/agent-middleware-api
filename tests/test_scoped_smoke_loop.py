@@ -213,3 +213,116 @@ def test_bootstrap_still_refuses_to_mint_without_a_bootstrap_secret() -> None:
     )
     assert result.returncode != 0
     assert "BOOTSTRAP_KEY" in result.stderr
+
+
+def test_companion_tool_comes_from_the_registry_not_the_pinned_name(
+    monkeypatch,
+) -> None:
+    """Regression: pinning --tool must not silently skip the denial check.
+
+    ``--tool`` is mandatory off loopback. Selecting the companion from the
+    pinned list rather than the registry made the out-of-scope check skip on
+    exactly the deployments where it matters most, while the skip message
+    claimed only one tool existed.
+    """
+
+    select = _load_loop(monkeypatch)["select_companion_tool"]
+    registry = {"alpha": {}, "beta": {}, "gamma": {}}
+
+    companion, error = select(registry, "alpha", None)
+    assert companion in {"beta", "gamma"}
+    assert not error
+
+    # Pinning the permitted tool must not shrink the choice to nothing.
+    companion, error = select(registry, "gamma", None)
+    assert companion in {"alpha", "beta"}
+    assert not error
+
+
+def test_companion_tool_must_be_registered_and_distinct(monkeypatch) -> None:
+    """Both ways this check could pass without proving permit scoping."""
+
+    select = _load_loop(monkeypatch)["select_companion_tool"]
+    registry = {"alpha": {}, "beta": {}}
+
+    # An unregistered name yields tool-not-found, not a permit refusal.
+    companion, error = select(registry, "alpha", "does-not-exist")
+    assert companion is None
+    assert "tool-not-found" in error
+
+    # A companion equal to the permitted tool would assert a denial that
+    # should never occur.
+    companion, error = select(registry, "alpha", "alpha")
+    assert companion is None
+    assert "differ" in error
+
+    companion, error = select(registry, "alpha", "beta")
+    assert (companion, error) == ("beta", "")
+
+
+def test_single_tool_deployment_skips_rather_than_false_passes(
+    monkeypatch,
+) -> None:
+    select = _load_loop(monkeypatch)["select_companion_tool"]
+    assert select({"only": {}}, "only", None) == (None, "")
+
+
+def test_advertised_price_is_read_from_the_manifest(monkeypatch) -> None:
+    """A fixed permit cap fails permit_budget_exceeded on a healthy deployment.
+
+    Tool prices in this repo span 1–200 credits, so a cap chosen for one tool
+    refuses the golden invocation the moment another is pinned.
+    """
+
+    credits_per_call = _load_loop(monkeypatch)["credits_per_call"]
+
+    assert credits_per_call({"annotations": {"creditsPerCall": 25.0}}) == 25.0
+    assert credits_per_call({"annotations": {"creditsPerCall": "15"}}) == 15.0
+    # A manifest entry with no stated price must not raise; the floor applies.
+    assert credits_per_call({}) == 0.0
+    assert credits_per_call({"annotations": {}}) == 0.0
+    assert credits_per_call({"annotations": {"creditsPerCall": "free"}}) == 0.0
+
+
+def test_off_loopback_runs_require_an_approved_payload() -> None:
+    """Schema validity is not evidence of safety.
+
+    Derived arguments fill required fields from types, defaults, and the first
+    enum member — which for a consequential tool could be "delete", sent again
+    every interval.
+    """
+
+    result = subprocess.run(
+        [sys.executable, str(LOOP), "--once", "--tool", "some-tool"],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "AGENT_MIDDLEWARE_API_URL": "https://api.thisisatest.tech",
+            "AGENT_MIDDLEWARE_API_KEY": "b2a_placeholder",
+        },
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "refusing to send derived arguments" in result.stderr
+    assert "b2a_placeholder" not in result.stdout + result.stderr
+
+    # An explicit empty payload is a decision, and is accepted as one.
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(LOOP),
+            "--once",
+            "--tool",
+            "some-tool",
+            "--tool-args",
+            "{}",
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "AGENT_MIDDLEWARE_API_URL": "http://127.0.0.1:1",
+            "AGENT_MIDDLEWARE_API_KEY": "b2a_placeholder",
+        },
+    )
+    assert "refusing to send derived arguments" not in result.stderr
