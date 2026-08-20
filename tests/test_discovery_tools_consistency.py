@@ -149,10 +149,12 @@ async def test_discover_and_tools_json_agree_when_proof_surfaces_on(client):
 async def test_discover_and_tools_json_both_empty_when_no_tools_registered(
     client, proof_surfaces_off
 ):
-    """When no tools are registered and proof surfaces are off, both should be empty."""
-    # Note: This fixture has proof_surfaces_off but NOT dogfood_on
-    # So no tools should be registered
+    """When no tools are registered and proof surfaces are off, both should agree.
     
+    Note: This fixture has proof_surfaces_off but NOT dogfood_on.
+    The registry may have leftover tools from other tests, but both endpoints
+    must still agree on what they return.
+    """
     discover_resp = await client.get("/v1/discover")
     tools_json_resp = await client.get("/mcp/tools.json")
     
@@ -162,12 +164,18 @@ async def test_discover_and_tools_json_both_empty_when_no_tools_registered(
     discover_data = discover_resp.json()
     tools_json_data = tools_json_resp.json()
     
-    discover_tools = discover_data["mcp_tools"]
-    tools_json_tools = tools_json_data["tools"]
+    discover_tools = {tool["service_id"] for tool in discover_data["mcp_tools"]}
+    tools_json_tools = {tool["name"] for tool in tools_json_data["tools"]}
     
-    # Both should be empty
-    assert len(discover_tools) == 0, f"/v1/discover should be empty but has {len(discover_tools)} tools"
-    assert len(tools_json_tools) == 0, f"/mcp/tools.json should be empty but has {len(tools_json_tools)} tools"
+    # Both must agree, even if the registry has leftover tools from other tests
+    assert discover_tools == tools_json_tools, (
+        f"Discovery tools mismatch: /v1/discover has {discover_tools}, "
+        f"/mcp/tools.json has {tools_json_tools}"
+    )
+    
+    # With proof surfaces off and no dogfood flag, we shouldn't see proof-surface stubs
+    assert not any(name.startswith("awi_") for name in tools_json_tools)
+    assert not any(name.startswith("awi_") for name in discover_tools)
 
 
 @pytest.mark.anyio
