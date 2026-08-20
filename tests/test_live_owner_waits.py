@@ -224,11 +224,13 @@ async def test_live_dispatched_older_than_1s_waits_not_steal(
         assert validation.allowed
         assert attempt is not None
 
-        # Attach charge
+        # For this test, we don't need to charge/dispatch in the full real-world flow.
+        # We just need a DISPATCHED attempt to exist so we can test staleness logic.
+        # However, mark_dispatched requires ledger_entry_id to be set. So do a minimal charge.
         charge = await money.charge(
             wallet_id=provisioned["agent_wallet_id"],
             service_category=ServiceCategory.AGENT_COMMS,
-            units=Decimal("1"),
+            units=Decimal("1") / Decimal("1.5"),  # AGENT_COMMS pricing is 1.5 credits/unit
             request_path="/test",
             operation_key=begun.record_id,
         )
