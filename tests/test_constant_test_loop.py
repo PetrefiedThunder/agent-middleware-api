@@ -364,11 +364,15 @@ def test_constant_test_loop_never_logs_api_key(test_server):
     wallet_id = provision_data["wallet_id"]
     key_id = provision_data["key_id"]
 
-    # Run with explicit credentials
+    # Run with explicit credentials. Ambient CI_SMOKE_* is stripped first:
+    # inheriting the whole environment lets a developer's exported
+    # CI_SMOKE_TOOL_ARGS reach the tool as its arguments, and the resulting
+    # "unexpected keyword argument" points at the tool rather than the stray
+    # variable. The same applies to an ambient wallet or key id.
     result = subprocess.run(
         [sys.executable, str(CONSTANT_TEST_SCRIPT), "--api-url", base_url],
         env={
-            **os.environ,
+            **{k: v for k, v in os.environ.items() if not k.startswith("CI_SMOKE")},
             "CI_SMOKE_AGENT_KEY": agent_key,
             "CI_SMOKE_WALLET_ID": wallet_id,
             "CI_SMOKE_KEY_ID": key_id,
@@ -654,12 +658,16 @@ def test_unusable_tool_pin_exits_as_configuration_not_invariant_failure(
     assert "configuration error" in result.stderr
 
 
-def test_tool_args_resolve_from_flag_environment_or_neither():
+def test_tool_args_resolve_from_flag_environment_or_neither(monkeypatch):
     """--tool-args needs the env fallback --tool and --other-tool already have.
 
     A CI job can otherwise satisfy every part of the off-loopback guard except
     the payload, and would have to put that one remaining piece in argv.
     """
+    # Cleared explicitly: the "neither set" case reads the real environment,
+    # so an ambient CI_SMOKE_TOOL_ARGS would return a payload and fail the
+    # assertion even though the flag path is correct.
+    monkeypatch.delenv("CI_SMOKE_TOOL_ARGS", raising=False)
     resolve = _load_loop()["_resolve_tool_args"]
 
     # The flag wins, and is parsed.
@@ -706,12 +714,19 @@ def test_malformed_tool_args_are_a_configuration_error(monkeypatch):
 
 
 def test_environment_alone_satisfies_the_off_loopback_guard():
-    """A CI job configured purely through secrets must get past the guard."""
+    """A CI job configured purely through secrets must get past the guard.
+
+    Pointed at a reserved ``.invalid`` host (RFC 6761), which is non-loopback
+    — so both guards apply — but never resolves. Naming a real deployment
+    here would open an HTTPS session to it on every pytest run, including
+    pull-request CI, which is exactly the unattended production traffic this
+    guard exists to make deliberate.
+    """
     env = {k: v for k, v in os.environ.items() if not k.startswith("CI_SMOKE")}
     env.update(
         {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "API_URL": "https://api.thisisatest.tech",
+            "API_URL": "https://api.invalid",
             "CI_SMOKE_AGENT_KEY": "b2a_placeholder",
             "CI_SMOKE_TOOL": "partner.echo",
             "CI_SMOKE_TOOL_ARGS": '{"text": "ci"}',
@@ -724,8 +739,8 @@ def test_environment_alone_satisfies_the_off_loopback_guard():
         text=True,
         timeout=60,
     )
-    # It gets past configuration and fails on the placeholder credential
-    # instead, which is the point: neither guard message appears.
+    # It gets past configuration and fails on the unresolvable host instead,
+    # which is the point: neither guard message appears.
     assert "refusing to auto-select a tool" not in result.stderr
     assert "refusing to send derived arguments" not in result.stderr
     assert "b2a_placeholder" not in result.stdout + result.stderr
