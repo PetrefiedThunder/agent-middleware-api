@@ -12,9 +12,10 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from app.db.database import get_session_factory
+from app.main import app
 from app.schemas.billing import ServiceCategory
 from app.services.agent_money import get_agent_money
 from app.services.idempotency import IdempotencyInProgressError, get_idempotency_service
@@ -25,6 +26,13 @@ from app.services.mcp_dispatch_attempts import (
 )
 from app.services.service_registry import get_service_registry
 from tests.test_trust_helpers import create_tool_permit, provision_agent_wallet
+
+
+@pytest.fixture
+async def client() -> AsyncClient:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as value:
+        yield value
 
 
 class PausedUpstreamExecutor:
