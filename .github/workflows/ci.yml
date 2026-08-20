@@ -579,7 +579,32 @@ jobs:
           CI_SMOKE_AGENT_KEY: ${{ secrets.CI_SMOKE_AGENT_KEY }}
           CI_SMOKE_WALLET_ID: ${{ secrets.CI_SMOKE_WALLET_ID }}
           CI_SMOKE_KEY_ID: ${{ secrets.CI_SMOKE_KEY_ID }}
-        run: python scripts/constant_test_loop.py
+          CI_SMOKE_TOOL: ${{ vars.CI_SMOKE_TOOL }}
+          CI_SMOKE_TOOL_ARGS: ${{ vars.CI_SMOKE_TOOL_ARGS }}
+        run: |
+          # Genuinely opt-in. A secret cannot be tested in a step-level "if",
+          # so the skip has to happen here. Both the credential and the tool
+          # must be configured: without the key the loop tries to
+          # self-provision against production, where that endpoint is
+          # disabled, so the run would fail rather than skip.
+          if [ -z "$CI_SMOKE_AGENT_KEY" ] || [ -z "$CI_SMOKE_TOOL" ]; then
+            echo "Skipping production smoke: set the CI_SMOKE_AGENT_KEY secret"
+            echo "and the CI_SMOKE_TOOL variable to enable it."
+            exit 0
+          fi
+
+          # --tool and --tool-args are both mandatory off loopback: which tool
+          # a monitor invokes on every push, and with what payload, is an
+          # operator's decision rather than one discovery makes for them. An
+          # empty payload is a valid answer but still has to be given.
+          TOOL_ARGS="$CI_SMOKE_TOOL_ARGS"
+          if [ -z "$TOOL_ARGS" ]; then
+            TOOL_ARGS='{}'
+          fi
+
+          python scripts/constant_test_loop.py \
+            --tool "$CI_SMOKE_TOOL" \
+            --tool-args "$TOOL_ARGS"
 
   lint:
     runs-on: ubuntu-latest
