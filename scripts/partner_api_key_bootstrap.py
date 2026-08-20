@@ -194,7 +194,19 @@ def main() -> int:
         action="store_true",
         help="Print full JSON including api_key (default: human summary)",
     )
+    parser.add_argument(
+        "--key-only",
+        action="store_true",
+        help=(
+            "Print only the minted api_key to stdout. Lets the secret be "
+            "piped straight into a secret store without a jq dependency, and "
+            "without the surrounding metadata landing wherever stdout goes."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.key_only and args.json:
+        raise SystemExit("error: --key-only and --json are mutually exclusive")
 
     if args.agent_wallet_id and not args.sponsor_wallet_id:
         raise SystemExit(
@@ -214,7 +226,12 @@ def main() -> int:
         agent_wallet_id=args.agent_wallet_id,
     )
 
-    if args.json:
+    if args.key_only:
+        # Nothing but the secret on stdout: the wallet ids and note still go
+        # to stderr via the [created] lines above, so an operator watching the
+        # terminal keeps the audit detail while the pipe carries only the key.
+        print(result["api_key"])
+    elif args.json:
         print(json.dumps(result, indent=2))
     else:
         print("Partner API key bootstrap OK")
