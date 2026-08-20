@@ -50,10 +50,31 @@ class _TextExtractor(HTMLParser):
 
 
 class _RunTogetherExtractor(_TextExtractor):
-    """Text as a reader sees it: chunks concatenated, whitespace collapsed."""
+    """Text as a reader sees it: chunks concatenated, whitespace collapsed.
+
+    ``<script>`` and ``<style>`` bodies are dropped. ``HTMLParser`` reports
+    them through ``handle_data`` like any other text, so a check that FAQ
+    answers appear "on the page" would otherwise be satisfied by the JSON-LD
+    block that contains those very answers — a test that can never fail.
+    """
+
+    _OPAQUE = frozenset({"script", "style"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._suppressed = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in self._OPAQUE:
+            self._suppressed += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._OPAQUE and self._suppressed:
+            self._suppressed -= 1
 
     def handle_data(self, data: str) -> None:
-        self.parts.append(data)
+        if not self._suppressed:
+            self.parts.append(data)
 
 
 def _visible_text(markup: str) -> str:
@@ -704,6 +725,13 @@ def test_faq_structured_data_is_generated_from_the_visible_answers(tmp_path) -> 
     text = _visible_text(markup)
     nodes = _json_ld_graph(markup, "compare/index.html")
     faq = next(node for node in nodes if node["@type"] == "FAQPage")
+
+    # Negative path first: if the extractor ever stops dropping <script>
+    # bodies, every assertion below passes for the wrong reason.
+    assert "@type" not in text and "acceptedAnswer" not in text, (
+        "the visible-text helper is reading the JSON-LD block, so FAQ parity "
+        "would be satisfied by the structured data quoting itself"
+    )
 
     questions = faq["mainEntity"]
     assert len(questions) >= 4, "the FAQ shrank without the structured data noticing"
