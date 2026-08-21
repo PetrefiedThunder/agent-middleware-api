@@ -1378,6 +1378,34 @@ def test_resolved_palette_surfaces_stay_within_the_stylesheet() -> None:
             )
 
 
+def test_palette_guards_reject_off_system_colors() -> None:
+    """The palette guards must be able to fire, not merely pass today.
+
+    Both allowed sets are built from styles.css, so the retired palettes —
+    the graphics' old charcoal-and-ember, the dashboard's old blues — must
+    be absent from them. If one ever reappears in the stylesheet (even in a
+    comment, which ``_stylesheet_palette`` deliberately scans), this fails
+    before the asset checks quietly start accepting it again.
+    """
+
+    stylesheet = (SITE / "styles.css").read_text(encoding="utf-8")
+    root_block = re.search(r":root\s*\{([^}]*)\}", stylesheet)
+    assert root_block
+    root_tokens = {
+        value.casefold()
+        for value in re.findall(r"#[0-9a-fA-F]{6}\b", root_block.group(1))
+    }
+    allowed_hex, allowed_rgb = _stylesheet_palette()
+
+    retired_hex = ("#151512", "#f2efe6", "#e24b2a", "#5f5a50", "#898277",
+                   "#6ec8ff", "#071018")
+    for value in retired_hex:
+        assert value not in root_tokens, f"{value} crept back into :root"
+        assert value not in allowed_hex, f"{value} crept back into styles.css"
+    # The dashboard's old blue header glow, as an rgba triplet.
+    assert (41, 128, 185) not in allowed_rgb
+
+
 def test_social_card_renderer_refuses_unusable_chromium(
     tmp_path, monkeypatch
 ) -> None:

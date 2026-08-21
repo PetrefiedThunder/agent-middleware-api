@@ -42,8 +42,8 @@ _BRASS_DARK = "#8a6414"
 _BUTTON_BRASS = "#d8a03e"
 _BUTTON_INK = "#0b1120"
 _SIGNAL = "#b03a22"
-_MONO = '"IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace'
-_BODY = '"Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif'
+_MONO = '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace'
+_BODY = '"Public Sans", "Segoe UI", system-ui, sans-serif'
 _DISPLAY = '"Libre Franklin", "Helvetica Neue", Arial, sans-serif'
 
 
