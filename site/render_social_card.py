@@ -204,6 +204,7 @@ def _png_bottom_row(payload: bytes) -> list[tuple[int, int, int]]:
 
 
 def validate_card(payload: bytes) -> None:
+    """Refuse a screenshot that is not the full card at exact size."""
     width, height = struct.unpack(">II", payload[16:24])
     if (width, height) != CARD_SIZE:
         raise RenderError(
@@ -221,6 +222,7 @@ def validate_card(payload: bytes) -> None:
 
 
 def render(chromium: str, output: Path) -> None:
+    """Screenshot the shim with ``chromium``, validate, and write the PNG."""
     width, height = CARD_SIZE
     with tempfile.TemporaryDirectory(prefix="social-card-") as workdir:
         shim = Path(workdir) / "card.html"
@@ -270,6 +272,7 @@ def render(chromium: str, output: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: exit 0 on success, 2 on any render failure."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chromium", help="path to a Chromium/Chrome binary")
     parser.add_argument("--output", type=Path, default=PNG_TARGET)

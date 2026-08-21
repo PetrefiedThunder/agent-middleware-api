@@ -78,6 +78,7 @@ def _stamp(value: datetime) -> str:
 
 
 def _row(label: str, value: str, *, mono: bool = True) -> str:
+    """Render one label/value row of the card's terms table."""
     value_font = _MONO if mono else _BODY
     return (
         f'<tr><td style="padding:6px 0;vertical-align:top;font-family:{_BODY};'
@@ -90,6 +91,7 @@ def _row(label: str, value: str, *, mono: bool = True) -> str:
 
 
 def _banner(text: str, *, tone: str) -> str:
+    """Render a status strip above the terms; ``alert`` gets the danger tone."""
     color = _SIGNAL if tone == "alert" else _INK_MUTED
     return (
         f'<p style="margin:0 0 16px;padding:8px 12px;border:1px solid {color};'
