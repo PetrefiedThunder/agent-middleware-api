@@ -30,7 +30,8 @@ from html import escape
 # site/styles.css tokens, resolved. Mail clients need literals, not var():
 # shell/blockquote = --paper-shade, card face = --paper, text = --paper-ink,
 # muted = --paper-dim, accents = the on-paper brass link tone and the
-# .button-primary brass/ink pair, alert = --danger.
+# .button-primary brass/ink pair, alert = --danger-on-paper (the plain
+# --danger terracotta falls below 4.5:1 on the paper card face).
 _PAPER = "#efe9da"
 _PAPER_LIGHT = "#f8f5ec"
 _INK = "#141925"
@@ -40,7 +41,7 @@ _LINE = "rgba(20, 25, 37, 0.17)"
 _BRASS_DARK = "#8a6414"
 _BUTTON_BRASS = "#d8a03e"
 _BUTTON_INK = "#0b1120"
-_SIGNAL = "#e2694f"
+_SIGNAL = "#b03a22"
 _MONO = '"IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace'
 _BODY = '"Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif'
 _DISPLAY = '"Libre Franklin", "Helvetica Neue", Arial, sans-serif'
