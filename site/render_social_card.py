@@ -70,8 +70,13 @@ def find_chromium(explicit: str | None = None) -> str:
     candidates += ["chromium", "chromium-browser", "google-chrome", "chrome"]
 
     for candidate in candidates:
+        # shutil.which already requires the execute bit; the direct-path
+        # fallback must too, or a non-executable $CHROMIUM would surface
+        # later as a PermissionError traceback instead of a launch error.
         resolved = shutil.which(candidate) or (
-            candidate if Path(candidate).is_file() else None
+            candidate
+            if Path(candidate).is_file() and os.access(candidate, os.X_OK)
+            else None
         )
         if resolved:
             return resolved
@@ -244,9 +249,12 @@ def render(chromium: str, output: Path) -> None:
             # Root cannot use the user namespace sandbox (typical in CI
             # containers); rendering a local file needs no sandbox anyway.
             command.insert(1, "--no-sandbox")
-        completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=120
-        )
+        try:
+            completed = subprocess.run(
+                command, capture_output=True, text=True, timeout=120
+            )
+        except OSError as error:
+            raise RenderError(f"Chromium could not start: {error}") from error
         if completed.returncode != 0 or not screenshot.is_file():
             raise RenderError(
                 "Chromium screenshot failed: "
@@ -255,7 +263,10 @@ def render(chromium: str, output: Path) -> None:
         payload = screenshot.read_bytes()
 
     validate_card(payload)
-    output.write_bytes(payload)
+    try:
+        output.write_bytes(payload)
+    except OSError as error:
+        raise RenderError(f"could not write {output}: {error}") from error
 
 
 def main(argv: list[str] | None = None) -> int:

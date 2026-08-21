@@ -1378,6 +1378,45 @@ def test_resolved_palette_surfaces_stay_within_the_stylesheet() -> None:
             )
 
 
+def test_social_card_renderer_refuses_unusable_chromium(
+    tmp_path, monkeypatch
+) -> None:
+    """Broken renderer setups fail as launch errors, not tracebacks.
+
+    ``main()`` turns ``RenderError`` into the documented exit 2; any other
+    exception escapes as a traceback. So a non-executable ``$CHROMIUM``
+    candidate must be skipped during resolution, a binary the kernel cannot
+    exec must surface as ``RenderError`` rather than ``OSError``, and a
+    renderer that exits nonzero must too.
+    """
+
+    renderer = runpy.run_path(str(SITE / "render_social_card.py"))
+    render_error = renderer["RenderError"]
+
+    # Resolution: with only a non-executable candidate reachable, there is
+    # no browser to find. (os.access X_OK is false even for root when no
+    # execute bit is set, so this holds in CI containers too.)
+    monkeypatch.delenv("CHROMIUM", raising=False)
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    not_executable = tmp_path / "chromium"
+    not_executable.write_bytes(b"#!/bin/sh\n")
+    not_executable.chmod(0o644)
+    with pytest.raises(render_error, match="no Chromium binary found"):
+        renderer["find_chromium"](str(not_executable))
+
+    # Launch: a file the kernel cannot exec (ENOEXEC) is a launch error.
+    garbage = tmp_path / "garbage-binary"
+    garbage.write_bytes(b"\x00\x01 not an executable")
+    garbage.chmod(0o755)
+    with pytest.raises(render_error, match="could not start"):
+        renderer["render"](str(garbage), tmp_path / "card.png")
+
+    # A renderer that exits nonzero without writing a screenshot is too.
+    with pytest.raises(render_error, match="screenshot failed"):
+        renderer["render"]("/bin/false", tmp_path / "card.png")
+
+
 def _anchor_texts_and_hrefs(markup: str) -> list[tuple[str, str]]:
     """Return ``(visible_text, href)`` for every ``<a>`` in the page."""
 
