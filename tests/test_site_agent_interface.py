@@ -1246,6 +1246,81 @@ def test_navigation_is_identical_across_pages(tmp_path) -> None:
         assert f'href="{anchor}"' in not_found, f"404.html cannot reach {anchor}"
 
 
+FOOTER_DIRECTORIES = ["Human contact", "Evidence and discovery", "Source and policy"]
+
+
+def test_footer_reaches_the_same_places_on_every_page(tmp_path) -> None:
+    """The footer directory is shared chrome, not per-page content.
+
+    Every full page offers the same three directories with the same
+    destinations, so where a visitor can go next never depends on which page
+    they happen to be reading. Only the waiting-room block differs — it is
+    landing-only by construction because ``arcade.js`` loads on ``/`` alone —
+    and the 404 keeps its deliberately minimal footer.
+    """
+
+    output = tmp_path / "site"
+    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+
+    def footer(page: str) -> str:
+        return page[page.index("<footer") : page.index("</footer>")]
+
+    pages = {
+        relative_path: (output / relative_path).read_text(encoding="utf-8")
+        for relative_path in ("index.html", "proof/index.html", "compare/index.html")
+    }
+
+    for relative_path, page in pages.items():
+        headings = re.findall(r"<p>([^<]+)</p>", footer(page))
+        assert [
+            heading for heading in headings if heading in FOOTER_DIRECTORIES
+        ] == FOOTER_DIRECTORIES, (
+            f"{relative_path} footer directories diverge from the shared chrome"
+        )
+
+    landing_links = set(re.findall(r'href="([^"]+)"', footer(pages["index.html"])))
+    for relative_path in ("proof/index.html", "compare/index.html"):
+        links = set(re.findall(r'href="([^"]+)"', footer(pages[relative_path])))
+        assert links == landing_links, (
+            f"{relative_path} footer reaches different places than the landing "
+            f"footer: only in one of them: {sorted(links ^ landing_links)}"
+        )
+
+
+def test_brand_graphics_use_the_design_system_palette() -> None:
+    """favicon.svg and social-card.svg draw only ledger-and-seal colors.
+
+    Both graphics originally kept the warm charcoal-and-ember palette of a
+    design the pages no longer use, so the browser tab and every shared link
+    preview advertised a different product than the page that loaded. Hue is
+    pinned to the stylesheet's base tokens (opacity may vary via SVG opacity
+    attributes); a redesign that moves the palette moves the graphics with it
+    or fails here.
+    """
+
+    stylesheet = (SITE / "styles.css").read_text(encoding="utf-8")
+    root_block = re.search(r":root\s*\{([^}]*)\}", stylesheet)
+    assert root_block, "styles.css no longer declares a :root token block"
+    tokens = {
+        value.casefold()
+        for value in re.findall(r"#[0-9a-fA-F]{6}\b", root_block.group(1))
+    }
+    assert tokens, "no color tokens found in the styles.css :root block"
+
+    for name in ("favicon.svg", "social-card.svg"):
+        markup = (SITE / name).read_text(encoding="utf-8")
+        colors = re.findall(r"#[0-9a-fA-F]{3,8}\b", markup)
+        assert colors, f"{name} declares no colors"
+        for color in colors:
+            assert len(color) == 7, (
+                f"{name} uses {color!r}; spell colors as six-digit hex so "
+                "they can be checked against the design-system tokens"
+            )
+            assert color.casefold() in tokens, (
+                f"{name} uses {color}, which is not a styles.css :root token"
+            )
+
+
 def _anchor_texts_and_hrefs(markup: str) -> list[tuple[str, str]]:
     """Return ``(visible_text, href)`` for every ``<a>`` in the page."""
 
@@ -1368,7 +1443,9 @@ def test_local_site_assets_exist() -> None:
         SITE / "styles.css",
         SITE / "analytics.js",
         SITE / "favicon.svg",
+        SITE / "social-card.svg",
         SITE / "social-card.png",
+        SITE / "render_social_card.py",
         SITE / "robots.txt",
         SITE / "sitemap.xml",
         SITE / "llm.txt",
