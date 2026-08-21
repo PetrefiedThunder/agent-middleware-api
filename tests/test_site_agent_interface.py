@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 import runpy
 
 import pytest
@@ -1318,6 +1318,63 @@ def test_brand_graphics_use_the_design_system_palette() -> None:
             )
             assert color.casefold() in tokens, (
                 f"{name} uses {color}, which is not a styles.css :root token"
+            )
+
+
+def _stylesheet_palette() -> tuple[set[str], set[tuple[int, int, int]]]:
+    """Every color styles.css uses, as hex strings and RGB triplets.
+
+    Broader than the ``:root`` token block on purpose: the stylesheet also
+    spends a handful of literals (the darker on-paper brass, the print and
+    high-contrast overrides), and a resolved surface echoing one of those is
+    still inside the system.
+    """
+
+    stylesheet = (SITE / "styles.css").read_text(encoding="utf-8")
+    hexes = set()
+    for value in re.findall(r"#[0-9a-fA-F]{3,6}\b", stylesheet):
+        if len(value) == 4:
+            value = "#" + "".join(digit * 2 for digit in value[1:])
+        if len(value) == 7:
+            hexes.add(value.casefold())
+    triplets = {
+        tuple(int(value[i : i + 2], 16) for i in (1, 3, 5)) for value in hexes
+    }
+    return hexes, triplets
+
+
+def test_resolved_palette_surfaces_stay_within_the_stylesheet() -> None:
+    """Surfaces that resolve tokens to literals must stay inside the palette.
+
+    The API origin's operator index is a self-contained page, and the
+    approval card is email markup where mail clients drop ``:root`` and
+    custom properties — neither can import styles.css, so both carry
+    resolved literals. Literals drift silently (both once kept palettes the
+    site had retired), so every hex color and every rgba triplet must be a
+    color styles.css itself uses.
+    """
+
+    allowed_hex, allowed_rgb = _stylesheet_palette()
+    surfaces = {
+        "static/dashboard.html": ROOT / "static" / "dashboard.html",
+        "app/services/approval_card.py": ROOT / "app" / "services" / "approval_card.py",
+    }
+    for name, path in surfaces.items():
+        # unquote so the dashboard's %23-encoded data: URI favicon is scanned
+        # like any other markup.
+        content = unquote(path.read_text(encoding="utf-8"))
+        hexes = re.findall(r"#[0-9a-fA-F]{6}\b", content)
+        assert hexes, f"{name} declares no colors"
+        for value in hexes:
+            assert value.casefold() in allowed_hex, (
+                f"{name} uses {value}, which styles.css does not"
+            )
+        for triplet in re.findall(
+            r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", content
+        ):
+            rgb = tuple(int(channel) for channel in triplet)
+            assert rgb in allowed_rgb, (
+                f"{name} uses rgba{rgb}, whose hue styles.css does not"
             )
 
 

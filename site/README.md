@@ -258,7 +258,11 @@ The same tokens are resolved into the two surfaces that cannot import
 `styles.css`: `static/dashboard.html` (the API origin's self-contained
 operator index) and `app/services/approval_card.py` (permit-approval email
 and hosted card, where mail clients drop `:root` and custom properties).
-When the palette moves, re-resolve both.
+When the palette moves, re-resolve both —
+`test_resolved_palette_surfaces_stay_within_the_stylesheet` fails on any
+literal hex or rgba hue the stylesheet does not itself use. `/concept/` is
+exempt on purpose: it is the archived design study, and its bespoke palette
+is part of what it archives.
 
 ## Analytics
 
