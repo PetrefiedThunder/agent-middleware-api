@@ -1,18 +1,16 @@
 """Test to reproduce max_calls_per_tool race condition."""
 import asyncio
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.db.database import get_session_factory
-from app.db.models import PermitModel, ReceiptModel
+from app.db.models import ReceiptModel
 from app.main import app
 from app.schemas.billing import ServiceCategory
 from app.services.service_registry import get_service_registry
-from sqlalchemy import select, func, cast
-from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy import select, func
 from tests.test_trust_helpers import (
     BOOTSTRAP_HEADERS,
     provision_agent_wallet,
