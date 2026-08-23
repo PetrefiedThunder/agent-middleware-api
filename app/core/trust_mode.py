@@ -48,6 +48,12 @@ class TrustModeGuardrailError(RuntimeError):
     """Raised when trust mode is unsafe for a production-like deployment."""
 
 
+# The raw variable the explicitness check reads. Settings.ENVIRONMENT cannot
+# be used for this: pydantic fills in its "local" default when the variable
+# is absent, erasing the difference between "operator chose local" and
+# "variable was dropped".
+RUNTIME_ENVIRONMENT_VARIABLE = "ENVIRONMENT"
+
 # Variables the Railway runtime always injects into a deployed container.
 # Their presence distinguishes a hosted deployment from a local checkout.
 HOSTED_RUNTIME_MARKER_VARS = (
@@ -64,14 +70,20 @@ def require_explicit_environment_on_hosted_runtime(
 ) -> None:
     """Refuse to boot on a hosted runtime with no explicit ENVIRONMENT.
 
-    An empty ENVIRONMENT is local-compatible by design, which keeps local
+    An unset ENVIRONMENT is local-compatible by design, which keeps local
     checkouts friction-free — but on a managed platform that same default
     silently disables every production guardrail in
     ``validate_trust_mode_config`` if the variable is ever dropped from the
     service. Railway always injects its RAILWAY_* identifiers, so their
-    presence alongside an empty ENVIRONMENT is a misconfiguration, not a
+    presence alongside a missing ENVIRONMENT is a misconfiguration, not a
     local run. An explicitly local-compatible value (say, ENVIRONMENT=dev on
     a hosted sandbox) stays allowed: the operator made a visible choice.
+
+    ``environment`` must be the RAW variable (``os.environ`` /
+    ``RUNTIME_ENVIRONMENT_VARIABLE``), never ``Settings.ENVIRONMENT``: the
+    settings field substitutes its "local" default when the variable is
+    absent, which would make the deleted-variable case — the exact failure
+    this guard exists for — look explicit.
     """
     if normalize_environment(environment):
         return
@@ -236,7 +248,12 @@ def validate_trust_mode_config(
 
 
 def validate_trust_mode_guardrails(settings: Settings) -> None:
-    require_explicit_environment_on_hosted_runtime(settings.ENVIRONMENT)
+    # Deliberately the raw variable, not settings.ENVIRONMENT: the settings
+    # field defaults to "local" when the variable is absent, which is
+    # exactly the dropped-variable case this check must catch.
+    require_explicit_environment_on_hosted_runtime(
+        os.environ.get(RUNTIME_ENVIRONMENT_VARIABLE)
+    )
     validate_trust_mode_config(
         environment=settings.ENVIRONMENT,
         trust_mode_enabled=settings.TRUST_MODE_ENABLED,

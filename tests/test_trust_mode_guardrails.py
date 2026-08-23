@@ -531,3 +531,26 @@ class TestExplicitEnvironmentOnHostedRuntime:
         monkeypatch.setenv("RAILWAY_SERVICE_ID", "svc-123")
         with pytest.raises(TrustModeGuardrailError, match="RAILWAY_SERVICE_ID"):
             require_explicit_environment_on_hosted_runtime("")
+
+    def test_absent_variable_refused_at_boot_despite_settings_default(
+        self, monkeypatch
+    ):
+        """Settings.ENVIRONMENT defaults to "local" when the variable is
+        absent, so the boot wiring must read the raw variable — otherwise the
+        dropped-variable case (the exact scenario this guard closes) looks
+        like an explicit choice."""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        monkeypatch.setenv("RAILWAY_ENVIRONMENT_ID", "env-123")
+        settings = Settings(
+            _env_file=None,
+            TRUST_SIGNING_PRIVATE_KEY_B64=VALID_SIGNING_PRIVATE_KEY_B64,
+        )
+        assert settings.ENVIRONMENT == "local"
+        with pytest.raises(TrustModeGuardrailError, match="RAILWAY_ENVIRONMENT_ID"):
+            validate_trust_mode_guardrails(settings)
+
+    def test_boot_passes_when_variable_is_explicit(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "dev")
+        monkeypatch.setenv("RAILWAY_ENVIRONMENT_ID", "env-123")
+        settings = Settings(_env_file=None, ENVIRONMENT="dev")
+        validate_trust_mode_guardrails(settings)
