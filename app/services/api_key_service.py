@@ -15,7 +15,7 @@ import hashlib
 import json
 import secrets
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional, cast
 from uuid import uuid4
 
@@ -426,11 +426,17 @@ class APIKeyService:
             inherited_name = "rotated_key"
 
             if key_id:
+                # FOR UPDATE so a concurrent validate_key cannot consume a
+                # use between this snapshot and the revocation commit — the
+                # remaining budget we transfer must be the final one. SQLite
+                # ignores the lock but serializes writers anyway.
                 result = await session.execute(
-                    select(APIKeyModel).where(
+                    select(APIKeyModel)
+                    .where(
                         col(APIKeyModel.key_id) == key_id,
                         col(APIKeyModel.wallet_id) == wallet_id,
                     )
+                    .with_for_update()
                 )
                 old_key = result.scalar_one_or_none()
 
@@ -613,11 +619,17 @@ class APIKeyService:
             if not wallet_result.scalar_one_or_none():
                 raise WalletNotFoundError(wallet_id)
 
+            # FOR UPDATE so a concurrent validate_key cannot consume a use
+            # between this snapshot and the revocation commit — the bounds
+            # derived below must reflect final use counts. SQLite ignores the
+            # lock but serializes writers anyway.
             result = await session.execute(
-                select(APIKeyModel).where(
+                select(APIKeyModel)
+                .where(
                     col(APIKeyModel.wallet_id) == wallet_id,
                     col(APIKeyModel.status) == APIKeyStatus.ACTIVE.value,
                 )
+                .with_for_update()
             )
             active_keys = list(result.scalars().all())
 
@@ -681,17 +693,29 @@ class APIKeyService:
                 emergency_expires_at = None
                 emergency_max_uses = None
                 if bounding_keys:
-                    if all(key.max_uses is not None for key in bounding_keys):
+                    # Inherit BOTH bounds from one donor credential rather
+                    # than combining the loosest budget and loosest expiry
+                    # across keys: independent maxima could yield authority
+                    # (say, a big budget with unlimited lifetime) that no
+                    # revoked key actually had. The donor is the key with the
+                    # largest remaining budget (unlimited first), tie-broken
+                    # by latest expiry (never-expiring counts as latest).
+                    def _donor_rank(key: APIKeyModel) -> tuple:
+                        if key.max_uses is None:
+                            budget = (1, 0)
+                        else:
+                            budget = (0, max(key.max_uses - key.use_count, 0))
+                        if key.expires_at is None:
+                            expiry = (1, datetime.min)
+                        else:
+                            expiry = (0, key.expires_at)
+                        return (budget, expiry)
+
+                    donor = max(bounding_keys, key=_donor_rank)
+                    emergency_expires_at = donor.expires_at
+                    if donor.max_uses is not None:
                         emergency_max_uses = max(
-                            max(key.max_uses - key.use_count, 0)
-                            for key in bounding_keys
-                            if key.max_uses is not None
-                        )
-                    if all(key.expires_at is not None for key in bounding_keys):
-                        emergency_expires_at = max(
-                            key.expires_at
-                            for key in bounding_keys
-                            if key.expires_at is not None
+                            donor.max_uses - donor.use_count, 0
                         )
 
                 full_key, key_hash, key_prefix = generate_api_key()

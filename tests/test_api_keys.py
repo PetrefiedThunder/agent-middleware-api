@@ -889,3 +889,41 @@ async def test_emergency_key_never_expires_if_any_active_key_does_not(
         headers=api_headers,
     )
     assert revoke_resp.json()["new_key"]["expires_at"] is None
+
+
+@pytest.mark.anyio
+async def test_emergency_key_bounds_come_from_one_donor_credential(
+    client, api_headers, sponsor_wallet
+):
+    """Bounds must not mix across keys into authority nothing possessed.
+
+    A 1-use never-expiring key plus a 99-use short-lived key must not
+    combine into a 99-use never-expiring replacement: both bounds come
+    from the single donor with the largest remaining budget.
+    """
+    wallet_id = sponsor_wallet["wallet_id"]
+    await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id, "max_uses": 1},
+        headers=api_headers,
+    )
+    big_resp = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id, "max_uses": 99, "expires_in_days": 1},
+        headers=api_headers,
+    )
+
+    revoke_resp = await client.post(
+        "/v1/api-keys/emergency-revoke",
+        json={"wallet_id": wallet_id, "reason": "test_incident"},
+        headers=api_headers,
+    )
+    new_key = revoke_resp.json()["new_key"]
+    assert new_key["max_uses"] == 99
+    assert new_key["expires_at"] is not None
+
+    donor_expiry = datetime.fromisoformat(big_resp.json()["expires_at"]).replace(
+        tzinfo=None
+    )
+    inherited = datetime.fromisoformat(new_key["expires_at"]).replace(tzinfo=None)
+    assert abs((inherited - donor_expiry).total_seconds()) < 5

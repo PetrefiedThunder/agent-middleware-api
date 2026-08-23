@@ -86,10 +86,11 @@ audit trail says otherwise:
 - Replacement keys never widen authority: a rotated key inherits the old
   key's expiry and *remaining* `max_uses` budget (rotating a use-budgeted
   key requires `revoke_old: true`, otherwise the remaining budget would
-  exist twice), and an emergency replacement inherits the loosest bounds
-  among the wallet's active, non-expired keys at revocation time —
-  including exhausted ones, so a key spending its final use on the
-  emergency call cannot mint itself an unbounded replacement. To issue a
+  exist twice), and an emergency replacement takes both its bounds from
+  one donor credential: the active, non-expired key (exhausted ones
+  included, so a key spending its final use on the emergency call cannot
+  mint itself an unbounded replacement) with the largest remaining
+  budget, tie-broken by latest expiry. To issue a
   key with fresh bounds, mint one explicitly with `POST /v1/api-keys`.
 - The trust-plane signing key (`TRUST_SIGNING_PRIVATE_KEY_B64`) is a
   separate secret that has never been committed; it does not need rotation
