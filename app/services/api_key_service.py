@@ -421,6 +421,10 @@ class APIKeyService:
             if not wallet_result.scalar_one_or_none():
                 raise WalletNotFoundError(wallet_id)
 
+            inherited_expires_at = None
+            inherited_max_uses = None
+            inherited_name = "rotated_key"
+
             if key_id:
                 result = await session.execute(
                     select(APIKeyModel).where(
@@ -435,6 +439,23 @@ class APIKeyService:
 
                 old_key_id = old_key.key_id
 
+                # Rotation replaces the credential, not its authority: the new
+                # key carries the old key's original expiry and its remaining
+                # use budget, so a wallet-scoped caller cannot widen its own
+                # bounds by rotating (rotate is reachable with the wallet's
+                # own key, not just bootstrap). Operators wanting fresh bounds
+                # mint a new key explicitly instead.
+                inherited_expires_at = old_key.expires_at
+                if old_key.max_uses is not None:
+                    inherited_max_uses = max(old_key.max_uses - old_key.use_count, 0)
+                if old_key.metadata_json:
+                    try:
+                        inherited_name = json.loads(old_key.metadata_json).get(
+                            "name", inherited_name
+                        )
+                    except json.JSONDecodeError:
+                        pass
+
             full_key, key_hash, key_prefix = generate_api_key()
             new_key_id = f"key_{uuid4().hex[:12]}"
             new_key_prefix = key_prefix
@@ -445,6 +466,9 @@ class APIKeyService:
                 key_hash=key_hash,
                 key_prefix=new_key_prefix,
                 status=APIKeyStatus.ACTIVE.value,
+                expires_at=inherited_expires_at,
+                max_uses=inherited_max_uses,
+                metadata_json=json.dumps({"name": inherited_name}),
             )
             session.add(new_key)
 
@@ -487,9 +511,10 @@ class APIKeyService:
             "api_key": full_key,
             "key_prefix": new_key_prefix,
             "status": APIKeyStatus.ACTIVE.value,
-            "key_name": "rotated_key",
+            "key_name": inherited_name,
             "created_at": now,
-            "expires_at": None,
+            "expires_at": inherited_expires_at,
+            "max_uses": inherited_max_uses,
         }
 
         logger.info(
@@ -624,6 +649,36 @@ class APIKeyService:
 
             new_key_data = None
             if create_new_key:
+                # The replacement must not exceed the authority the wallet
+                # could already exercise: inherit the loosest bounds among the
+                # keys that could still authenticate at revocation time
+                # (emergency-revoke is reachable with the wallet's own key,
+                # so an unbounded replacement would let a capped key launder
+                # itself into an unlimited one). When no live key remains,
+                # only a bootstrap admin can reach this path, and an
+                # unbounded emergency key is not an escalation.
+                live_keys = [
+                    key
+                    for key in active_keys
+                    if (not key.expires_at or key.expires_at >= now)
+                    and (key.max_uses is None or key.use_count < key.max_uses)
+                ]
+                emergency_expires_at = None
+                emergency_max_uses = None
+                if live_keys:
+                    if all(key.max_uses is not None for key in live_keys):
+                        emergency_max_uses = max(
+                            max(key.max_uses - key.use_count, 0)
+                            for key in live_keys
+                            if key.max_uses is not None
+                        )
+                    if all(key.expires_at is not None for key in live_keys):
+                        emergency_expires_at = max(
+                            key.expires_at
+                            for key in live_keys
+                            if key.expires_at is not None
+                        )
+
                 full_key, key_hash, key_prefix = generate_api_key()
                 new_key_id = f"key_{uuid4().hex[:12]}"
                 emergency_key = APIKeyModel(
@@ -633,6 +688,8 @@ class APIKeyService:
                     key_prefix=key_prefix,
                     status=APIKeyStatus.ACTIVE.value,
                     metadata_json=json.dumps({"name": "emergency_key"}),
+                    expires_at=emergency_expires_at,
+                    max_uses=emergency_max_uses,
                 )
                 session.add(emergency_key)
                 new_key_data = {
@@ -643,7 +700,8 @@ class APIKeyService:
                     "status": APIKeyStatus.ACTIVE.value,
                     "key_name": "emergency_key",
                     "created_at": now,
-                    "expires_at": None,
+                    "expires_at": emergency_expires_at,
+                    "max_uses": emergency_max_uses,
                 }
 
             await session.commit()

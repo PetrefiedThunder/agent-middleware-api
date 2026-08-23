@@ -83,6 +83,11 @@ audit trail says otherwise:
   Rotate or revoke any that cannot be attributed — `POST
   /v1/api-keys/rotate` per key, or `POST /v1/api-keys/emergency-revoke`
   to kill every key on a wallet at once.
+- Replacement keys never widen authority: a rotated key inherits the old
+  key's expiry and *remaining* `max_uses` budget, and an emergency
+  replacement inherits the loosest bounds among the wallet's still-live
+  keys at revocation time. To issue a key with fresh bounds, mint one
+  explicitly with `POST /v1/api-keys`.
 - The trust-plane signing key (`TRUST_SIGNING_PRIVATE_KEY_B64`) is a
   separate secret that has never been committed; it does not need rotation
   for an API-key leak. If you suspect it anyway, follow the compromise
