@@ -114,7 +114,9 @@ async def test_root_and_discover_hide_unmounted_proof_services(
     discover = await client.get("/v1/discover")
     assert discover.status_code == 200
     discover_data = discover.json()
-    assert discover_data["awi_endpoints"] == []
+    # The wedge response model omits the field entirely — the public contract
+    # carries no proof-surface vocabulary when those routes are unmounted.
+    assert "awi_endpoints" not in discover_data
     # mcp_tools may include registered dogfood/partner tools, but should not
     # include proof-surface stubs (awi_*, telemetry, etc.)
     mcp_tool_names = {tool["service_id"] for tool in discover_data["mcp_tools"]}
