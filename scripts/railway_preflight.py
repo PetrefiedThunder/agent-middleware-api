@@ -466,20 +466,36 @@ def check_live(
                 f"/v1/discover could not be checked instead: {exc}"
             )
         else:
-            tools = discover_body.get("mcp_tools") or []
-            leaked = sorted(
-                {
-                    tool.get("service_id") or tool.get("name")
-                    for tool in tools
-                    if (tool.get("service_id") or tool.get("name"))
-                    in _DOGFOOD_TOOL_IDS
-                }
+            tools = (
+                discover_body.get("mcp_tools")
+                if isinstance(discover_body, dict)
+                else None
             )
-            if leaked:
+            if not isinstance(tools, list) or not all(
+                isinstance(tool, dict) for tool in tools
+            ):
+                # Fail closed on an unrecognized shape: treating it as "no
+                # tools" would let a renamed field or an error page silently
+                # pass the release gate.
                 failures.append(
-                    f"dogfood tools exposed in public discovery: {leaked} — "
-                    "ENABLE_DOGFOOD_TOOL must be false in production"
+                    "enable_dogfood_tool is absent from /health/dependencies "
+                    "and /v1/discover returned an unrecognized shape (no "
+                    "mcp_tools list) — cannot verify dogfood posture"
                 )
+            else:
+                leaked = sorted(
+                    {
+                        tool.get("service_id") or tool.get("name")
+                        for tool in tools
+                        if (tool.get("service_id") or tool.get("name"))
+                        in _DOGFOOD_TOOL_IDS
+                    }
+                )
+                if leaked:
+                    failures.append(
+                        f"dogfood tools exposed in public discovery: {leaked} "
+                        "— ENABLE_DOGFOOD_TOOL must be false in production"
+                    )
     elif dogfood is not False:
         failures.append(
             f"enable_dogfood_tool={dogfood!r} — must be explicitly false in production"

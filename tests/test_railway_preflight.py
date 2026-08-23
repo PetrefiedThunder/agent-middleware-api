@@ -818,15 +818,53 @@ def test_live_fails_on_bad_posture(monkeypatch, override):
     assert preflight.check_live("https://api.example.com") is False
 
 
+def _patch_get_with_discovery(monkeypatch, payload, discovery_payload):
+    import httpx
+
+    def get(url, **_kwargs):
+        if url.endswith("/v1/discover"):
+            return _Response(discovery_payload)
+        return _Response(payload)
+
+    monkeypatch.setattr(httpx, "get", get)
+
+
 def test_live_passes_when_dogfood_flag_absent_and_discovery_clean(monkeypatch):
     """The public projection stopped publishing the flag; a clean /v1/discover
     (no dogfood tools) is the replacement evidence."""
     payload = {
         key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
     }
-    _patch_get(monkeypatch, payload)
+    _patch_get_with_discovery(
+        monkeypatch,
+        payload,
+        {"mcp_tools": [{"service_id": "partner.echo"}]},
+    )
 
     assert preflight.check_live("https://api.example.com") is True
+
+
+@pytest.mark.parametrize(
+    "discovery_payload",
+    [
+        ["not", "a", "dict"],
+        {},
+        {"mcp_tools": "partner.echo"},
+        {"mcp_tools": ["partner.notes.write"]},
+        {"tools": [{"service_id": "partner.echo"}]},
+    ],
+)
+def test_live_fails_when_discovery_shape_is_unrecognized(
+    monkeypatch, discovery_payload
+):
+    """An unrecognized /v1/discover shape must fail closed, never read as
+    "no dogfood tools"."""
+    payload = {
+        key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
+    }
+    _patch_get_with_discovery(monkeypatch, payload, discovery_payload)
+
+    assert preflight.check_live("https://api.example.com") is False
 
 
 def test_live_fails_when_dogfood_tool_exposed_in_discovery(monkeypatch):
