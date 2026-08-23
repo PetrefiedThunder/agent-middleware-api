@@ -927,3 +927,76 @@ async def test_emergency_key_bounds_come_from_one_donor_credential(
     )
     inherited = datetime.fromisoformat(new_key["expires_at"]).replace(tzinfo=None)
     assert abs((inherited - donor_expiry).total_seconds()) < 5
+
+
+@pytest.mark.anyio
+async def test_rotate_revoked_key_is_rejected(client, api_headers, sponsor_wallet):
+    """A revoked key must not be rotatable back into an active credential."""
+    wallet_id = sponsor_wallet["wallet_id"]
+    key_resp = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    key = key_resp.json()
+
+    revoke_resp = await client.delete(
+        f"/v1/api-keys/{wallet_id}/{key['key_id']}",
+        headers=api_headers,
+    )
+    assert revoke_resp.status_code == 204
+
+    resp = await client.post(
+        "/v1/api-keys/rotate",
+        json={
+            "wallet_id": wallet_id,
+            "key_id": key["key_id"],
+            "revoke_old": True,
+        },
+        headers=api_headers,
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_rotation_request"
+
+    list_resp = await client.get(
+        f"/v1/api-keys/{wallet_id}",
+        headers=api_headers,
+    )
+    assert list_resp.json()["total_active"] == 0
+
+
+@pytest.mark.anyio
+async def test_emergency_revoked_keys_cannot_be_rotated_back(
+    client, api_headers, sponsor_wallet
+):
+    """Emergency revocation must not be undone by rotating a revoked key."""
+    wallet_id = sponsor_wallet["wallet_id"]
+    key_resp = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id},
+        headers=api_headers,
+    )
+    key = key_resp.json()
+
+    revoke_resp = await client.post(
+        "/v1/api-keys/emergency-revoke",
+        json={
+            "wallet_id": wallet_id,
+            "reason": "test_incident",
+            "create_new_key": False,
+        },
+        headers=api_headers,
+    )
+    assert revoke_resp.status_code == 200
+    assert key["key_id"] in revoke_resp.json()["revoked_keys"]
+
+    resp = await client.post(
+        "/v1/api-keys/rotate",
+        json={
+            "wallet_id": wallet_id,
+            "key_id": key["key_id"],
+            "revoke_old": True,
+        },
+        headers=api_headers,
+    )
+    assert resp.status_code == 422

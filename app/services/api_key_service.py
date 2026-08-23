@@ -443,6 +443,17 @@ class APIKeyService:
                 if not old_key:
                     raise KeyNotFoundError(key_id)
 
+                if old_key.status != APIKeyStatus.ACTIVE.value:
+                    # Rotating a revoked key would re-mint authority that
+                    # revocation (including emergency revocation) removed —
+                    # and it is also how two concurrent rotations of the same
+                    # key are serialized: the second one finds the source
+                    # already revoked and fails here instead of duplicating
+                    # the transferred budget.
+                    raise InvalidRotationRequestError(
+                        "cannot rotate a key that is not active"
+                    )
+
                 if not revoke_old and old_key.max_uses is not None:
                     # Keeping the old key active while the new one carries the
                     # same remaining budget would double a finite max_uses —
