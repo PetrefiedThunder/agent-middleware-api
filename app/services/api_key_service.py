@@ -437,6 +437,17 @@ class APIKeyService:
                 if not old_key:
                     raise KeyNotFoundError(key_id)
 
+                if not revoke_old and old_key.max_uses is not None:
+                    # Keeping the old key active while the new one carries the
+                    # same remaining budget would double a finite max_uses —
+                    # and rotate is reachable with the wallet's own key, so a
+                    # capped key could fork its budget indefinitely.
+                    raise InvalidRotationRequestError(
+                        "revoke_old is required when rotating a key with a "
+                        "use budget (max_uses): keeping the old key active "
+                        "would duplicate its remaining uses"
+                    )
+
                 old_key_id = old_key.key_id
 
                 # Rotation replaces the credential, not its authority: the new
