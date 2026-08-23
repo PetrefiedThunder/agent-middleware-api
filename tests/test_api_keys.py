@@ -767,3 +767,37 @@ async def test_emergency_key_unbounded_when_any_live_key_is(
     new_key = revoke_resp.json()["new_key"]
     assert new_key["max_uses"] is None
     assert new_key["expires_at"] is None
+
+
+@pytest.mark.anyio
+async def test_emergency_revoke_with_own_last_use_stays_bounded(
+    client, api_headers, sponsor_wallet
+):
+    """Spending a key's final use to call emergency-revoke must not launder it.
+
+    Authenticating the emergency-revoke request itself consumes the sole
+    key's last use, so the replacement must inherit a zero budget — not an
+    unbounded one (the caller was never a bootstrap admin).
+    """
+    wallet_id = sponsor_wallet["wallet_id"]
+    key_resp = await client.post(
+        "/v1/api-keys",
+        json={"wallet_id": wallet_id, "max_uses": 1},
+        headers=api_headers,
+    )
+    key = key_resp.json()
+
+    revoke_resp = await client.post(
+        "/v1/api-keys/emergency-revoke",
+        json={"wallet_id": wallet_id, "reason": "self_service_attempt"},
+        headers={"X-API-Key": key["api_key"]},
+    )
+    assert revoke_resp.status_code == 200
+    new_key = revoke_resp.json()["new_key"]
+    assert new_key["max_uses"] == 0
+
+    resp = await client.get(
+        "/v1/billing/pricing",
+        headers={"X-API-Key": new_key["api_key"]},
+    )
+    assert resp.status_code == 403

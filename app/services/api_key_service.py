@@ -650,32 +650,36 @@ class APIKeyService:
             new_key_data = None
             if create_new_key:
                 # The replacement must not exceed the authority the wallet
-                # could already exercise: inherit the loosest bounds among the
-                # keys that could still authenticate at revocation time
+                # could exercise when this call was authorized
                 # (emergency-revoke is reachable with the wallet's own key,
                 # so an unbounded replacement would let a capped key launder
-                # itself into an unlimited one). When no live key remains,
-                # only a bootstrap admin can reach this path, and an
-                # unbounded emergency key is not an escalation.
-                live_keys = [
+                # itself into an unlimited one). The basis is every
+                # non-expired ACTIVE key: an exhausted key still counts,
+                # contributing zero remaining budget, because the caller may
+                # have spent that key's last use authenticating this very
+                # request — filtering it out would hand back an unbounded
+                # replacement. With no non-expired active key at all, no
+                # wallet credential could have authenticated, so the caller
+                # is a bootstrap admin and an unbounded emergency key is not
+                # an escalation.
+                bounding_keys = [
                     key
                     for key in active_keys
-                    if (not key.expires_at or key.expires_at >= now)
-                    and (key.max_uses is None or key.use_count < key.max_uses)
+                    if not key.expires_at or key.expires_at >= now
                 ]
                 emergency_expires_at = None
                 emergency_max_uses = None
-                if live_keys:
-                    if all(key.max_uses is not None for key in live_keys):
+                if bounding_keys:
+                    if all(key.max_uses is not None for key in bounding_keys):
                         emergency_max_uses = max(
                             max(key.max_uses - key.use_count, 0)
-                            for key in live_keys
+                            for key in bounding_keys
                             if key.max_uses is not None
                         )
-                    if all(key.expires_at is not None for key in live_keys):
+                    if all(key.expires_at is not None for key in bounding_keys):
                         emergency_expires_at = max(
                             key.expires_at
-                            for key in live_keys
+                            for key in bounding_keys
                             if key.expires_at is not None
                         )
 
