@@ -449,8 +449,10 @@ def check_live(
     if body.get("enable_proof_surfaces"):
         failures.append("enable_proof_surfaces=true — must be false in production")
 
-    dogfood = body.get("enable_dogfood_tool")
-    if dogfood is None:
+    # Key presence, not truthiness: a *published* null must still fail the
+    # exactly-false requirement below — only a genuinely absent key (the
+    # post-#348 public projection) earns the discovery fallback.
+    if "enable_dogfood_tool" not in body:
         # The public /health/dependencies projection stopped publishing the
         # dogfood flag when proof surfaces are unmounted (the flag described
         # nothing a caller could reach — see build_public_dependency_report).
@@ -496,7 +498,8 @@ def check_live(
                         f"dogfood tools exposed in public discovery: {leaked} "
                         "— ENABLE_DOGFOOD_TOOL must be false in production"
                     )
-    elif dogfood is not False:
+    elif body["enable_dogfood_tool"] is not False:
+        dogfood = body["enable_dogfood_tool"]
         failures.append(
             f"enable_dogfood_tool={dogfood!r} — must be explicitly false in production"
         )

@@ -1027,3 +1027,15 @@ def test_live_fails_when_unreachable(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", _boom)
     assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_fails_when_dogfood_flag_published_as_null(monkeypatch):
+    """A *published* null is not the post-#348 omission: the exactly-false
+    requirement still applies, discovery fallback or not."""
+    _patch_get_with_discovery(
+        monkeypatch,
+        {**HEALTHY, "enable_dogfood_tool": None},
+        {"mcp_tools": []},
+    )
+
+    assert preflight.check_live("https://api.example.com") is False
