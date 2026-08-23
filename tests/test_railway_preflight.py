@@ -818,11 +818,49 @@ def test_live_fails_on_bad_posture(monkeypatch, override):
     assert preflight.check_live("https://api.example.com") is False
 
 
-def test_live_fails_when_dogfood_posture_is_missing(monkeypatch):
+def test_live_passes_when_dogfood_flag_absent_and_discovery_clean(monkeypatch):
+    """The public projection stopped publishing the flag; a clean /v1/discover
+    (no dogfood tools) is the replacement evidence."""
     payload = {
         key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
     }
     _patch_get(monkeypatch, payload)
+
+    assert preflight.check_live("https://api.example.com") is True
+
+
+def test_live_fails_when_dogfood_tool_exposed_in_discovery(monkeypatch):
+    import httpx
+
+    payload = {
+        key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
+    }
+
+    def get(url, **_kwargs):
+        if url.endswith("/v1/discover"):
+            return _Response(
+                {"mcp_tools": [{"service_id": "partner.notes.write"}]}
+            )
+        return _Response(payload)
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_fails_when_dogfood_flag_absent_and_discovery_unreachable(monkeypatch):
+    import httpx
+
+    payload = {
+        key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
+    }
+
+    def get(url, **_kwargs):
+        if url.endswith("/v1/discover"):
+            raise httpx.ConnectError("boom")
+        return _Response(payload)
+
+    monkeypatch.setattr(httpx, "get", get)
 
     assert preflight.check_live("https://api.example.com") is False
 

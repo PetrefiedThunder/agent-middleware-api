@@ -100,6 +100,10 @@ OK = "[preflight] PASS"
 BAD = "[preflight] FAIL"
 SKIP = "[preflight] SKIP"
 
+# Local proof-infrastructure tool ids that must never appear in a production
+# deployment's public discovery (see app/services/dogfood_tool.py).
+_DOGFOOD_TOOL_IDS = frozenset({"partner.notes.write", "partner.notes.count"})
+
 MANIFEST_SCHEMA_VERSION = "1.0"
 _MANIFEST_FIELDS = frozenset(
     {
@@ -446,7 +450,37 @@ def check_live(
         failures.append("enable_proof_surfaces=true — must be false in production")
 
     dogfood = body.get("enable_dogfood_tool")
-    if dogfood is not False:
+    if dogfood is None:
+        # The public /health/dependencies projection stopped publishing the
+        # dogfood flag when proof surfaces are unmounted (the flag described
+        # nothing a caller could reach — see build_public_dependency_report).
+        # Verify the observable posture instead: the dogfood tools must not
+        # be registered in public discovery.
+        try:
+            discover_resp = httpx.get(f"{base}/v1/discover", timeout=30)
+            discover_resp.raise_for_status()
+            discover_body = discover_resp.json()
+        except Exception as exc:
+            failures.append(
+                "enable_dogfood_tool is absent from /health/dependencies and "
+                f"/v1/discover could not be checked instead: {exc}"
+            )
+        else:
+            tools = discover_body.get("mcp_tools") or []
+            leaked = sorted(
+                {
+                    tool.get("service_id") or tool.get("name")
+                    for tool in tools
+                    if (tool.get("service_id") or tool.get("name"))
+                    in _DOGFOOD_TOOL_IDS
+                }
+            )
+            if leaked:
+                failures.append(
+                    f"dogfood tools exposed in public discovery: {leaked} — "
+                    "ENABLE_DOGFOOD_TOOL must be false in production"
+                )
+    elif dogfood is not False:
         failures.append(
             f"enable_dogfood_tool={dogfood!r} — must be explicitly false in production"
         )
