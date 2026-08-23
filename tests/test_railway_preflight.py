@@ -1039,3 +1039,36 @@ def test_live_fails_when_dogfood_flag_published_as_null(monkeypatch):
     )
 
     assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_fails_when_dogfood_name_hides_behind_benign_service_id(monkeypatch):
+    """service_id and name are checked independently: a benign service_id
+    must not mask a dogfood tool name."""
+    payload = {
+        key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
+    }
+    _patch_get_with_discovery(
+        monkeypatch,
+        payload,
+        {
+            "mcp_tools": [
+                {"service_id": "partner.echo", "name": "partner.notes.write"}
+            ]
+        },
+    )
+
+    assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_fails_on_non_string_tool_identifier(monkeypatch):
+    """A list-valued identifier must fail closed, not crash on set membership."""
+    payload = {
+        key: value for key, value in HEALTHY.items() if key != "enable_dogfood_tool"
+    }
+    _patch_get_with_discovery(
+        monkeypatch,
+        payload,
+        {"mcp_tools": [{"service_id": ["partner.notes.write"]}]},
+    )
+
+    assert preflight.check_live("https://api.example.com") is False

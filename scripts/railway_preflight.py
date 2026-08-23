@@ -485,18 +485,32 @@ def check_live(
                     "mcp_tools list) — cannot verify dogfood posture"
                 )
             else:
-                leaked = sorted(
-                    {
-                        tool.get("service_id") or tool.get("name")
-                        for tool in tools
-                        if (tool.get("service_id") or tool.get("name"))
-                        in _DOGFOOD_TOOL_IDS
-                    }
-                )
-                if leaked:
+                # Check service_id and name independently: a benign
+                # service_id must not mask a dogfood name (or vice versa).
+                # Non-string identifiers are an unrecognized shape, not a
+                # clean catalog.
+                leaked_ids: set[str] = set()
+                malformed_identifier = False
+                for tool in tools:
+                    for field in ("service_id", "name"):
+                        value = tool.get(field)
+                        if value is None:
+                            continue
+                        if not isinstance(value, str):
+                            malformed_identifier = True
+                            continue
+                        if value in _DOGFOOD_TOOL_IDS:
+                            leaked_ids.add(value)
+                if malformed_identifier:
                     failures.append(
-                        f"dogfood tools exposed in public discovery: {leaked} "
-                        "— ENABLE_DOGFOOD_TOOL must be false in production"
+                        "/v1/discover tool identifiers must be strings — "
+                        "cannot verify dogfood posture"
+                    )
+                if leaked_ids:
+                    failures.append(
+                        "dogfood tools exposed in public discovery: "
+                        f"{sorted(leaked_ids)} — ENABLE_DOGFOOD_TOOL must be "
+                        "false in production"
                     )
     elif body["enable_dogfood_tool"] is not False:
         dogfood = body["enable_dogfood_tool"]
