@@ -880,25 +880,35 @@ async def root(request: Request):
             "agent_billing": {
                 "base_path": "/v1/billing",
                 "description": (
-                    "Two-tier wallet system with per-action micro-metering, "
-                    "fiat-to-credit conversion, and swarm arbitrage profit "
-                    "engine."
+                    "Two-tier wallet system (sponsor funds agent) with "
+                    "ledger-backed per-action metering."
                 ),
+                # Only routes billing.router actually mounts in the wedge
+                # posture. Expansion routes (child/swarm wallets, top-ups,
+                # arbitrage, alerts) live on billing.expansion_router and are
+                # advertised only when they are mounted — never list a path
+                # that answers 404.
                 "endpoints": [
                     "POST /v1/billing/wallets/sponsor",
                     "POST /v1/billing/wallets/agent",
-                    "POST /v1/billing/wallets/child",
-                    "POST /v1/billing/wallets/{wallet_id}/reclaim",
-                    "GET /v1/billing/wallets/{wallet_id}/swarm",
                     "GET /v1/billing/wallets/{wallet_id}",
                     "GET /v1/billing/wallets",
                     "GET /v1/billing/ledger/{wallet_id}",
                     "POST /v1/billing/charge",
-                    "POST /v1/billing/top-up/prepare",
                     "GET /v1/billing/pricing",
-                    "GET /v1/billing/arbitrage",
-                    "GET /v1/billing/alerts",
-                ],
+                ]
+                + (
+                    [
+                        "POST /v1/billing/wallets/child",
+                        "POST /v1/billing/wallets/{wallet_id}/reclaim",
+                        "GET /v1/billing/wallets/{wallet_id}/swarm",
+                        "POST /v1/billing/top-up/prepare",
+                        "GET /v1/billing/arbitrage",
+                        "GET /v1/billing/alerts",
+                    ]
+                    if get_settings().ENABLE_PROOF_SURFACES
+                    else []
+                ),
             },
             "mcp_server": {
                 "base_path": "/mcp",
