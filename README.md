@@ -81,7 +81,7 @@ discover → authenticate → authorize → invoke → meter → receipt → aud
 | **Authorize** | Ed25519-signed permits bound to issuer wallet, subject wallet/key, tools, scopes, budget, nonce, and expiry | `/v1/permits` |
 | **Request** | An agent with no authority asks a human for a scoped, budgeted permit; the permit is minted from the reviewed terms after approval | `/v1/permit-requests` |
 | **Quote** | Signed, single-use price commitments the metered charge honors, so a call's cost is known before it is committed to | `/v1/quotes` |
-| **Invoke** | The governed HTTP/JSON-RPC MCP subset requires a permit and idempotency key and can dispatch one configured Streamable HTTP partner tool | `/mcp/messages`, `/mcp/tools/{service_id}/invoke` |
+| **Invoke** | The governed HTTP/JSON-RPC MCP subset requires a permit and idempotency key and can dispatch one configured Streamable HTTP partner tool | `/mcp` (opt-in standard endpoint), `/mcp/messages`, `/mcp/tools/{service_id}/invoke` |
 | **Meter** | Decimal wallet balances, row-locked debits, limits, ledger linkage, and replay-safe charging | `/v1/billing`, `/v1/me/*` |
 | **Receipt** | Signed post-permit success, denial, and failure receipts linked to permits, idempotency records, remote dispatch attempts, ledger entries, and audit events | `/v1/receipts`, `/v1/evidence/{receipt_id}` |
 | **Audit** | Per-wallet signed hash chains with concurrent append protection and verification | `/v1/audit`, `/v1/audit/verify-chain` |
