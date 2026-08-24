@@ -1,12 +1,13 @@
 # Security Review Kit — Rules of Engagement
 
-For an external reviewer who has agreed to attack this trust plane. The
-[security review path](../README.md#security-review-path) says what to read;
-this says what to attack, with which credentials, what already counts as
-known, and what turns an observation into a finding worth filing.
+This kit is for an external reviewer who has agreed to attack this trust
+plane. The [security review path](../README.md#security-review-path) says
+what to read; this says what to attack, with which credentials, what already
+counts as known, and what turns an observation into a finding worth filing.
 
-Nothing here asks you to sign anything or to limit what you publish about the
-repository. The one hard constraint is target selection (§1): the deployed
+This kit does not require an NDA for ordinary repository observations.
+Report security vulnerabilities privately under §6 and [SECURITY.md](../SECURITY.md).
+The hard constraint on testing is target selection (§1): the deployed
 instances are single-tenant projects that belong to design partners, and a
 write battery aimed at one of them damages a customer, not the vendor.
 
@@ -114,8 +115,8 @@ the boundary itself in [TRUST_MODEL.md](../TRUST_MODEL.md) and
 Include, at minimum:
 
 - The commit SHA under attack (`/health/dependencies` reports `commit_sha` on
-  a running instance; a deployed origin can lag `main` by a long way, and has
-  — see [external-surface-review-2026-08-23.md](external-surface-review-2026-08-23.md)).
+  a running instance; a deployed origin can lag `main` by a long way, as
+  documented in [external-surface-review-2026-08-23.md](external-surface-review-2026-08-23.md)).
 - The environment posture: engine (SQLite vs PostgreSQL), `TRUST_MODE_ENABLED`,
   `ENABLE_PROOF_SURFACES`, and whether either dev-key surface was enabled.
 - The exact request and the observed response, plus receipt IDs and wallet
