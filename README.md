@@ -296,6 +296,7 @@ On startup, the gateway discovers the exact upstream tool and refuses readiness 
 | `POST /v1/permit-requests` | Ask a human for authority the agent cannot mint itself | Authorized subject wallet; idempotency required |
 | `GET /v1/permit-requests/{request_id}` | Poll the decision; returns the minted permit once approved | Issuer wallet, subject wallet, or admin |
 | `POST /v1/quotes` | Get a signed price for one call of a tool | Authorized wallet |
+| `POST /mcp` | Standard MCP Streamable HTTP endpoint (official SDK stateless transport); `tools/call` runs the governed pipeline with server-minted single-tool permits | Authentication; opt-in via `ENABLE_STANDARD_MCP_ENDPOINT=true`, default off |
 | `POST /mcp/messages` | JSON-RPC MCP list/call transport (legacy; deprecated in the OpenAPI contract — new integrations should prefer the opt-in `POST /mcp`) | Authentication; permit required for governed calls |
 | `GET /v1/permits` | List permits; a wallet key sees its own, an operator key sees all | Wallet key or admin |
 | `GET /v1/me/permits` | Current wallet's permit view | Wallet key |
