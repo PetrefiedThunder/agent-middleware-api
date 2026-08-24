@@ -454,10 +454,12 @@ jobs:
           sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
-      # Working tree only, for speed. History was verified clean separately
-      # (full-history gitleaks scan, 2026-08-24, 53 commits, no leaks — see
-      # .gitleaks.toml). The 2026-08-06 leaked key predates the current
-      # flattened history and was rotated dead at the provider.
+      # Working tree only, for speed. History was verified separately on
+      # 2026-08-24 with a full-history gitleaks scan across every ref (see
+      # the scope note in .gitleaks.toml): the only real credential ever
+      # committed is the 2026-08-06 key — rotated dead at the provider, gone
+      # from main's flattened history, still reachable on stale unmerged
+      # branches until they are pruned.
       - name: Scan working tree for committed secrets
         run: gitleaks detect --no-git --source . --config .gitleaks.toml --redact --verbose
 
