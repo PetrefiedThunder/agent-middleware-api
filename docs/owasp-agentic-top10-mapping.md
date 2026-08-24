@@ -14,9 +14,7 @@ Two framing rules keep this honest:
 - **Posture labels follow the repo's reality levels.** *Enforced* means the
   control runs on the governed path and a named proof attacks it. *Contained*
   means the risk is not prevented but its blast radius is bounded and
-  evidenced. *Partially addressed* means part of the risk's surface is
-  structurally absent here rather than defended, and the remainder is
-  unmanaged. *Out of scope* means this layer deliberately does not address it.
+  evidenced. *Out of scope* means this layer deliberately does not address it.
   See [SECURITY_LIMITATIONS.md](../SECURITY_LIMITATIONS.md) and
   [threat-model.md](threat-model.md) for the boundary itself.
 
@@ -171,6 +169,5 @@ tool. Risks that live in the model (ASI01, ASI06), the process (ASI05), or
 between agents (ASI07) need controls at those layers; this mapping marks them
 contained or out of scope rather than claiming coverage. Attacks on the
 documented gaps above are the most useful ones a reviewer can run — start from
-[SECURITY_LIMITATIONS.md](../SECURITY_LIMITATIONS.md), the
-[security review path](../README.md#security-review-path), and the rules of
-engagement in [security-review-kit.md](security-review-kit.md).
+[SECURITY_LIMITATIONS.md](../SECURITY_LIMITATIONS.md) and the
+[security review path](../README.md#security-review-path).
