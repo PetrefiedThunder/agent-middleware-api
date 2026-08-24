@@ -1,10 +1,14 @@
 # Secret-scanning config for CI.
 #
-# Scope note: CI scans the WORKING TREE, not git history. History already
-# contains a leaked production key (removed from HEAD in the commit that added
-# this file), so a history scan would fail permanently and teach everyone to
-# ignore the job. The exposed key must be rotated at the provider instead —
-# deleting it from HEAD removes it from neither history nor existing clones.
+# Scope note: CI scans the WORKING TREE for speed. This repository's history
+# was separately verified clean on 2026-08-24 — a full-history `gitleaks
+# detect` with this config over all 53 commits found no leaks. The 2026-08-06
+# leaked key (see docs/api-key-rotation.md) predates the current flattened
+# history: its hardcoded occurrence is not reachable here and the value
+# survives only in the incident record. Clones of the pre-flatten repository
+# still contain it; the key itself was rotated dead at the provider —
+# deleting a secret from HEAD removes it from neither old clones nor the
+# provider, so rotation remains the only real remediation.
 
 [extend]
 useDefault = true
