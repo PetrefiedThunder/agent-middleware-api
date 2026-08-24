@@ -70,17 +70,25 @@ with a different payload fails closed.
 
 ## ASI03 — Agent Identity & Privilege Abuse
 
-**Posture: enforced.** Every caller is a wallet-scoped API key (stored hashed,
-compared constant-time in `app/core/auth.py`). A key acts only within its
-wallet: cross-tenant reads and invokes return 403, and rotation/replacement
-keys inherit their parents' bounds rather than escalating.
+**Posture: enforced for DB-backed wallet keys.** A DB-issued key (stored
+hashed, compared constant-time in `app/core/auth.py`) is scoped to exactly
+one wallet: cross-tenant reads and invokes return 403, and
+rotation/replacement keys inherit their parents' bounds rather than
+escalating. Bootstrap-admin keys (`VALID_API_KEYS`, `STATIC_DEV_API_KEYS`)
+are the intentional exception: `AuthContext.require_wallet_access`
+(`app/core/auth.py`) grants them every wallet by design, so this claim does
+not extend to admin-shaped credentials. `STATIC_DEV_API_KEYS` is refused at
+boot on a production-like deployment (`app/core/trust_mode.py`);
+`VALID_API_KEYS` is not — it is the intended production bootstrap mechanism.
 
 - Proof: `scripts/invariant_attacks/attack6_key_misuse.py` (invalid, revoked,
-  confused-deputy, and cross-tenant cases — HELD);
-  `tests/test_tool_interface_authority.py`; the tenant-isolation leg of
-  `make prove-trust-plane`.
+  confused-deputy, and cross-tenant cases — HELD, exercised with DB-backed
+  keys); `tests/test_tool_interface_authority.py`; the tenant-isolation leg
+  of `make prove-trust-plane`.
 - Gap: single-tenant vendor-managed pilot; application-layer isolation only —
-  no row-level security, no external IdP/KMS integration.
+  no row-level security, no external IdP/KMS integration. A bootstrap-admin
+  key is a full-control credential by design, not a tenant boundary — treat
+  it like a root key, not like proof that isolation holds against it.
 
 ## ASI04 — Agentic Supply Chain Compromise
 
