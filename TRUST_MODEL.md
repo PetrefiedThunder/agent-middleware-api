@@ -37,13 +37,32 @@ This is the primitive the rest of the model exists to protect, and the one that
 distinguishes this system — signed receipts do not (see
 [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now").
 
-One accepted idempotency key produces **exactly one gateway dispatch, one ledger
-debit, and one receipt**, linked by a single persisted chain. The ledger entry
-carries the idempotency record's identity as its `operation_key` under a
-uniqueness constraint, so a duplicate debit cannot be written even if two
-processes race. Replaying the same request under the same accepted key returns
-the original result and receipt without a second dispatch or debit; replaying a
-*changed* request under that key fails closed with `409 Conflict`.
+One accepted idempotency key produces **at most one gateway dispatch and at most
+one ledger debit**, linked by a single persisted chain — and **exactly one
+receipt on every path that finalizes or reconciles**. The ledger entry carries
+the idempotency record's identity as its `operation_key` under a uniqueness
+constraint, so a duplicate debit cannot be written even if two processes race.
+Replaying the same request under the same accepted key returns the original
+result and receipt without a second dispatch or debit; replaying a *changed*
+request under that key fails closed with `409 Conflict`.
+
+**Why "at most one" and not "exactly one."** Two real paths produce neither a
+dispatch nor a net debit, and one produces no receipt at all:
+
+- A crash *before* dispatch is reconciled to a refund, so the call never
+  dispatched and the wallet nets zero
+  (`test_kill_between_debit_and_dispatch_refunds_without_dispatching`).
+- A **local** governed tool that crashes *after* its side effect leaves one
+  execution and one debit with **no receipt**, permanently `needs_manual_review`;
+  reconciliation deliberately does not finalize it, and replay stays
+  in-progress rather than redispatching
+  (`test_post_side_effect_crash_requires_review_without_redispatch` asserts
+  `receipt_ids == ()`).
+
+The guarantee is therefore never a duplicate charge, not always a charge — and
+the receipt guarantee holds for the upstream path and every reconcilable
+outcome, not for the local post-effect crash. Overstating this as "exactly one
+receipt" would contradict the crash behaviour documented below.
 
 Budgets are enforced before money moves: a permit's cap is checked in the same
 atomic conditional update that consumes it, so concurrent invocations cannot
@@ -71,10 +90,26 @@ Denied and failed governed attempts produce signed denial/failure receipts when
 a valid permit was present.
 
 The receipt's Ed25519 signature covers the **ledger entry, the idempotency
-record, and the dispatch attempt together**, so the link between the authority,
-the money, and the delivery outcome is verifiable offline rather than asserted.
-Signed receipts are widely available elsewhere; that binding is what this
-signature adds.
+record, and the dispatch attempt together**, so the issuer's statement about
+authority, money, and delivery outcome is one tamper-evident unit rather than
+three separable assertions. Signed receipts are widely available elsewhere; that
+binding is what this signature adds.
+
+**What offline verification does and does not establish.** The portable bundle
+(`GET /v1/receipts/{id}/portable`) carries the `signing_input`, the signature,
+and a key reference — not the ledger or dispatch records themselves. A holder
+with no credential here can therefore verify that *this issuer signed these
+identifiers together and nothing has been altered since*. They cannot
+independently confirm that the named ledger entry carries the matching
+`operation_key`, because that record does not travel with the bundle.
+
+That consistency is enforced where the records are written — `attach_charge`
+rejects a ledger row whose `operation_key` is not the idempotency record, and
+`receipts.idempotency_record_id` / `dispatch_attempt_id` are unique foreign
+keys — and it is checkable after the fact through the authenticated evidence
+bundle (`GET /v1/receipts/{id}/evidence`). So the correct claim is **signed and
+tamper-evident offline; consistency enforced at write time and auditable
+online** — never "the linkage is verifiable offline."
 
 ## Audit Chain
 

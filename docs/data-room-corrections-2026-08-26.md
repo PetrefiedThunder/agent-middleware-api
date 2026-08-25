@@ -61,17 +61,45 @@ patent counsel.
 **Replacement**, which is stronger because it survives the search — and which is
 verified in this repository:
 
-> One accepted idempotency key produces exactly one gateway dispatch, one ledger
-> debit, and one receipt — and the receipt's Ed25519 signature covers the ledger
-> entry, the idempotency record, and the dispatch attempt together, so the link
-> is verifiable offline rather than asserted. No project we surveyed documents
-> that binding.
+> One accepted idempotency key produces at most one gateway dispatch and at most
+> one ledger debit — and the receipt's Ed25519 signature covers the ledger entry,
+> the idempotency record, and the dispatch attempt together, so the issuer's
+> statement about authority, money, and outcome is one tamper-evident unit rather
+> than three separable assertions. No project we surveyed documents that binding.
 
 Code evidence: `ledger_entry_id`, `idempotency_record_id` and
 `dispatch_attempt_id` are all inside one signed canonical payload
 (`app/services/receipts.py:85,:95,:97`), enforced at write time by
 `attach_charge` (`app/services/mcp_dispatch_attempts.py:653`) and by `unique=True`
 foreign keys (`app/db/models.py:781-790`).
+
+**Two precision limits this sentence must respect** — both raised in review of
+this document and confirmed against the code and tests. A buyer's engineer will
+find either one, and the room's credibility rests on precision.
+
+1. **Do not say the linkage is "verifiable offline."** The portable bundle
+   (`app/routers/receipts.py:269`) exports `signing_input`, signature and a key
+   reference — the three identifiers as *strings*, not the ledger or dispatch
+   records. Offline, a holder proves the issuer signed those identifiers
+   together untampered; they cannot confirm the named ledger entry actually
+   carries the matching `operation_key`, because that row does not travel with
+   the bundle. Consistency is enforced at write time and auditable through the
+   authenticated evidence bundle. Say **"signed and tamper-evident offline;
+   consistency enforced at write time and auditable online."**
+2. **"Exactly one" overstates it; "at most one" is the true guarantee.** A crash
+   before dispatch reconciles to a refund — zero dispatches, zero net debit. A
+   **local** governed tool crashing after its side effect leaves one execution
+   and one debit with **no receipt at all**, permanently `needs_manual_review`
+   (`test_post_side_effect_crash_requires_review_without_redispatch` asserts
+   `receipt_ids == ()`). The guarantee is never a duplicate charge, not always a
+   charge — and exactly one receipt on paths that finalize or reconcile, which is
+   every upstream path but not that local one.
+
+The same "exactly one … and one receipt" phrasing predates this review in
+[`../WEDGE.md`](../WEDGE.md) §"Signed receipts are table stakes now" and in
+[`market-research-2026-08.md`](market-research-2026-08.md) §4. Both need the
+same qualifier; changing the wedge's headline sentence is a product-owner call,
+not a documentation edit, so it is flagged here rather than made.
 
 Keep the survey-scoped form — "no project we surveyed documents this," never
 "nobody does." An independent survey of eight receipt protocols (arXiv:2606.04193)
