@@ -1,4 +1,4 @@
-# Wedge: Replay-safe MCP permits and receipts
+# Wedge: Replay-safe MCP permits and exactly-once debits
 
 Agent Middleware API should not initially sell itself as a full platform for
 autonomous economic actors. The credible wedge is narrower:
@@ -70,10 +70,32 @@ one:
 > genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
 > rather than a silent redispatch.
 
+Two qualifications that must travel with that sentence.
+
+**Scope it to the upstream path.** The dispatch state machine
+(`prepared → dispatched → {succeeded, returned_error, delivery_uncertain,
+response_rejected}`) covers the **configured upstream MCP tool**. Local governed
+tools have no attempt row and no ambiguous state; a crash there fails closed into
+manual review. Say "for the configured upstream tool" — `README.md` already does.
+
+**The signature adds the binding, not the evidence.** The receipt's Ed25519
+signature covers the ledger entry, the idempotency record, and the dispatch
+attempt *together*. That binding — not the fact of a signature — is the part no
+surveyed project documents.
+
 State that as scope, not as exclusivity: several projects enforce budgets and
 several dedupe replays, and whether any of them *binds* the two is an open
 verification question (`docs/market-research-2026-08.md` §7). Say "no project we
 surveyed documents this," never "nobody does."
+
+**Re-tested 2026-08-25** (`docs/market-research-2026-08.md` §9) and the row
+still holds — but the neighbourhood got more crowded, not less. Microsoft's
+`agent-governance-toolkit` now **ships** offline-verifiable receipts (Ed25519
+over RFC 8785 JCS, hash-chained), where §3 had recorded only a proposal;
+Pipelock ships mediator-signed receipts; and an independent survey of eight
+receipt protocols (arXiv:2606.04193) found **none** binding receipts to
+settlement. Treat signed offline receipts as fully commoditized from that date.
+This is a re-test on a date, not a permanent result.
 
 Lead with the debit. Cite the signature as supporting evidence, never as the
 differentiator, and never as a superlative — see **What Not To Claim Yet**.

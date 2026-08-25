@@ -135,16 +135,31 @@ live demo flow below when walking a partner through the product story.
 
 ## Talk Track
 
-- "The permit is the bounded authority: wallet, tool, scope, budget, expiry,
-  nonce, and signature."
-- "The MCP invocation is not just authenticated. It is checked against the
-  permit before the tool is allowed to run."
-- "A successful governed invoke charges the wallet once, emits a signed receipt,
-  and ties that receipt back to the ledger entry and audit event."
-- "Replaying the same request returns the same receipt instead of charging
-  again."
-- "Trying a different tool with the same permit is denied, which is the core
-  governance behavior partners need to see."
+Lead with the debit. Signed receipts ship in several competing products now, so
+a track that opens on the signature opens on the least differentiated thing in
+the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
+
+- "One agent action, one debit — no matter how many times the agent retries.
+  That is the whole product in one sentence."
+- "Watch the wallet. This call charges it exactly once, and the ledger entry is
+  keyed to the idempotency record, so a duplicate debit cannot be written even
+  under a race."
+- "Now I replay the identical request under the same key. Same receipt, no second
+  dispatch, no second debit — and the balance has not moved."
+- "The permit is the bounded authority that made the charge legitimate in the
+  first place: wallet, tool, scope, budget, expiry, nonce, and signature. It is
+  checked before the tool is allowed to run, not after."
+- "Trying a different tool with the same permit is denied, and the denial is
+  itself signed and moves no money."
+- "The receipt's signature covers the ledger entry, the idempotency record, and
+  the dispatch attempt *together*. Plenty of tools sign receipts; that binding is
+  what makes a duplicate charge impossible rather than merely detectable — and
+  you can verify it offline, without us."
+- If asked about crashes: "For the configured upstream tool, if we die after the
+  request leaves the gateway but before the acknowledgement arrives, that becomes
+  a durable `delivery_uncertain` state. The charge stands and we never redispatch,
+  because we can no longer prove the call did not land. We would rather be
+  honestly ambiguous than silently double-fire."
 
 ## Proof Artifacts
 

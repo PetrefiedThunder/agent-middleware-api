@@ -185,10 +185,14 @@ permit = {
 
 **No comparable system** offers per-invocation signed receipts with request/response hashes.
 
-> **Superseded (2026-08-15).** True against the incumbents compared above;
-> **false** against the MCP-native set — protect-mcp and jamjet both ship signed
-> per-call evidence. Left in place per this document's record-don't-rewrite
-> convention. Do not quote this sentence; see [§9](#9-mcp-native-competitive-set-added-2026-08-15).
+> **Superseded (2026-08-15; hardened 2026-08-25).** True against the incumbents
+> compared above; **false** against the MCP-native set — protect-mcp and jamjet
+> both ship signed per-call evidence, and as of the 2026-08-25 re-test so do
+> **Microsoft's `agent-governance-toolkit`** (Ed25519 over RFC 8785 JCS,
+> hash-chained) and **Pipelock**. Treat signed offline receipts as fully
+> commoditized. Left in place per this document's record-don't-rewrite
+> convention. Do not quote this sentence; see [§9](#9-mcp-native-competitive-set-added-2026-08-15)
+> and [`market-research-2026-08.md`](market-research-2026-08.md) §9.
 
 **Gap Analysis:**
 - Missing: receipt verification endpoint (consumer can verify signature offline)

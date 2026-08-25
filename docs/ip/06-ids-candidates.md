@@ -79,7 +79,53 @@ mechanisms, so all are IDS candidates.
 | 20b | [jamjet-labs/jamjet](https://github.com/jamjet-labs/jamjet) | **Enforces budgets** and emits signed receipts with a hash-chained `previousReceiptHash` plus pre/post-execution signatures. Reaches mechanism 1 (budget enforcement in an agent gateway) and mechanisms 3–4. |
 | 20c | [sangaraju1988/latch](https://github.com/sangaraju1988/latch) | Python library pairing **idempotency with a budget guardrail**, plus circuit breaker and saga/compensation, with a Redis backend for cross-process idempotency. Closest to Set B; note compensation is a different answer from crash-state classification. No signed receipts. |
 | 20d | [TraceAgent](https://www.traceagent.dev/) | Append-only SHA-256 hash-chained receipts. **Verified only that receipts are hash-chained**; issuer signature and offline verifiability are *unverified*. Do not characterize it as offline-verifiable without a primary source. |
-| 20e | [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | Active proposal for independently verifiable compliance receipts. Disclose as a large-vendor entrant in the same space. |
+| 20e | [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | **Upgraded 2026-08-25 — no longer a proposal; it ships.** Offline-verifiable decision receipts: **Ed25519 signatures over RFC 8785 (JCS) canonical payloads**, hash-chained via `previousReceiptHash`, verifiable without operator infrastructure ([Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/tutorials/33-offline-verifiable-receipts.md), [issue #1499](https://github.com/microsoft/agent-governance-toolkit/issues/1499)). **Now among the most material references in this package**: it reaches mechanisms 3 and 4 with the same primitives this repo uses, and it is backed by a large vendor with resources to prosecute. **Establish the publication date of the tutorial and of the merged implementation** — it bears directly on §102(a)(1). Carries **no** ledger, spend, or idempotency construct, so on the materials read it does not reach mechanisms 1 or 2. |
+
+### C.1a Receipt protocols surfaced 2026-08-25
+
+A third research pass ([`../market-research-2026-08.md`](../market-research-2026-08.md)
+§9) roughly doubled the known size of this category. **None has been
+independently re-verified for this package; counsel must read the primaries.**
+
+The column that matters to this package is the last one. On the materials read,
+**every reference below reaches only the evidence-side mechanisms (3 and 4) and
+none reaches the settlement-side mechanisms (1 and 2)** — which is the same
+conclusion [`02-prior-art-landscape.md`](02-prior-art-landscape.md) §7 reached
+independently, and it strengthens the recommendation there to file promptly on
+the settlement mechanisms and treat the receipt mechanisms as dependent claims.
+
+| # | Reference | Relevance | Reaches |
+| --- | --- | --- | --- |
+| 22a | *Notarized Agents: Receiver-Attested Confidential Receipts for AI Agent Actions* ("Sello"), [arXiv:2606.04193](https://arxiv.org/html/2606.04193) | **The single most useful reference for counsel in this batch, as a map rather than as art.** A preprint proposing receiver-side signing (COSE_Sign1 over an HPKE-encrypted payload, published to public transparency logs) whose related-work section surveys **eight** receipt protocols. Its own §8.4 names coupling to payment/settlement as future work and **explicitly unimplemented**. Give counsel this paper first — it enumerates most of the rows below and is a dated printed publication. | 3, 4 |
+| 22b | [Pipelock / PipeLab](https://github.com/luckyPipewrench/pipelock) | Agent firewall emitting **mediator-signed Ed25519 action receipts**, hash-chained and offline-verifiable, from an out-of-process sidecar. Also publishes a signer-position taxonomy (in-process / operator-mediator / third-party witness). Security and egress centre of gravity; no wallet, budget, or charge-once semantics. | 3, 4 |
+| 22c | Signet | Bilateral co-signed receipts; encryption key not separated from the signing identity; no transparency-log integration. **Known only through 22a's related-work table — no primary source located.** Counsel should locate the primary before relying on or distinguishing it. | 3, 4 |
+| 22d | Agent Passport System (APS), attributed to T. Pidlisnyi, 2025 | Four receipt types — ActionReceipt, AuthorityBoundaryReceipt, CustodyReceipt, ContestabilityReceipt — signed by the executing agent. The **AuthorityBoundaryReceipt** is worth reading against the permit-scope claims. Via 22a. | 3, 4 |
+| 22e | `draft-nivalto-agentroa` | Egress-gateway signing within the operator's trust domain, with SCITT transparency-log integration. Via 22a. | 3, 4 |
+| 22f | Agent Receipts | Platform-signed Ed25519 receipts; signer on the operator side. Via 22a. | 3, 4 |
+| 22g | Attested Intelligence | MCP governance proxy with hash-linked continuity chains, distributed point-to-point rather than via public logs. Via 22a — note an "Attested Intelligence" also appears in the §3 "category noise" row of the market research. | 3, 4 |
+
+### C.1b Citations that could not be verified — resolve before any IDS
+
+An acquisition-data-room draft (2026-08-26, external compilers) cited the
+following as close-watch prior art. **A 2026-08-25 check could not locate any of
+them**, and the first does not resolve to a valid USPTO publication format.
+
+| Cited as | Status |
+| --- | --- |
+| **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" | **Not found.** Number format does not resolve to a USPTO publication. |
+| **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" | **Not found.** Same format concern. |
+| **US 12,300,000 B2** — PayPal, generic cryptographic receipts | **Not verified.** A round-numbered grant warrants a direct USPTO check. |
+
+**Do not place any of these on an IDS until pulled from USPTO.** The duty of
+candor requires disclosing known material art; it does not license citing
+references that may not exist, and a fabricated or mis-transcribed citation in an
+IDS is far worse than an omitted one. Two of the three name direct competitors,
+so if real they are highly material and must be found. Either way this is
+counsel's to resolve, not the compilers'.
+
+The same draft cites Daon **US 12,688,261** as "Filed ~2023" where item 1 of this
+document records it **issued 2026-07-21**. Reconcile filing date against issue
+date before either number is used.
 
 ### C.2 Third-party problem reports
 

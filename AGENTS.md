@@ -50,14 +50,28 @@ proof, or the stranger test as customer validation.
 
 ## Product Wedge Candidates
 
-When making product or architecture recommendations, evaluate these wedges:
+When making product or architecture recommendations, evaluate these wedges.
+**They are not peers — the ordering is the point.** The 2026-08 competitive
+sweep ([`docs/market-research-2026-08.md`](docs/market-research-2026-08.md), and
+§9 for the 2026-08-25 re-test) established that signed, offline-verifiable
+receipts are **table stakes**, not a wedge: they ship in Microsoft's
+`agent-governance-toolkit`, Pipelock, and protect-mcp/ScopeBlind. Lead with the
+debit, cite the signature as supporting evidence, never as the differentiator.
+See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 
-- agent authorization gateway
-- signed receipt ledger for agent actions
-- usage metering layer for agent tools
-- MCP governance proxy
-- secure delegated tool execution API
-- agent audit log platform
+1. **exactly-once economic authorization at the gateway boundary** — one
+   accepted idempotency key, one gateway dispatch, one ledger debit, one
+   receipt, linked by a single persisted chain. This is the wedge.
+2. **crash-semantics accounting** — a genuinely ambiguous post-dispatch outcome
+   becomes a distinct receipted state rather than a silent redispatch.
+3. agent authorization gateway
+4. usage metering layer for agent tools
+5. MCP governance proxy
+6. secure delegated tool execution API
+7. **signed receipt ledger for agent actions — demoted 2026-08.** Real here and
+   worth saying, but no longer differentiating. Do not build or pitch around it
+   as the wedge.
+8. **agent audit log platform — demoted 2026-08**, same reason.
 
 Do not recommend "full agent middleware platform" unless the narrower wedges are already credible.
 
@@ -68,10 +82,11 @@ Prioritize:
 - delegated authority
 - permit lifecycle
 - scoped authorization
-- signed receipts
-- usage metering
-- replay protection
 - idempotency
+- replay protection
+- billing/accounting integrity under crash
+- usage metering
+- signed receipts
 - tenant isolation
 - tool execution safety
 - auditability
