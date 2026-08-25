@@ -437,8 +437,8 @@ the debit, not with the signature — see [`../WEDGE.md`](../WEDGE.md).
    plus commitment mode make emitting our receipts in its envelope
    structurally cheap. Detail: `market-research-2026-08.md` §8.1.)*
 2. **A large vendor is in the category.** `agent-governance-toolkit` **ships**
-   offline-verifiable receipts as of 2026-08-25 (was an open
-   proposal for independently verifiable compliance receipts.
+   offline-verifiable receipts as of 2026-08-25 (was an open proposal for
+   independently verifiable compliance receipts).
 3. **The build-vs-buy default is a free library.** latch is MIT and
    `pip install`-shaped. The counter-argument — an in-process decorator is not
    a boundary the agent cannot bypass, and a cache is not evidence — has to be

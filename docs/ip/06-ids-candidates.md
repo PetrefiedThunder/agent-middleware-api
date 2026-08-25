@@ -88,8 +88,10 @@ A third research pass ([`../market-research-2026-08.md`](../market-research-2026
 independently re-verified for this package; counsel must read the primaries.**
 
 The column that matters to this package is the last one. On the materials read,
-**every reference below reaches only the evidence-side mechanisms (3 and 4) and
-none reaches the settlement-side mechanisms (1 and 2)** — which is the same
+**every reference below whose primary source was read reaches only the
+evidence-side mechanisms (3 and 4) and none reaches the settlement-side
+mechanisms (1 and 2)** — Signet (22c) is excluded from that statement, since its
+reach is reported through a third party rather than established — which is the same
 conclusion [`02-prior-art-landscape.md`](02-prior-art-landscape.md) §7 reached
 independently, and it strengthens the recommendation there to file promptly on
 the settlement mechanisms and treat the receipt mechanisms as dependent claims.
@@ -98,7 +100,7 @@ the settlement mechanisms and treat the receipt mechanisms as dependent claims.
 | --- | --- | --- | --- |
 | 22a | *Notarized Agents: Receiver-Attested Confidential Receipts for AI Agent Actions* ("Sello"), [arXiv:2606.04193](https://arxiv.org/html/2606.04193) | **The single most useful reference for counsel in this batch, as a map rather than as art.** A preprint proposing receiver-side signing (COSE_Sign1 over an HPKE-encrypted payload, published to public transparency logs) whose related-work section surveys **eight** receipt protocols. Its own §8.4 names coupling to payment/settlement as future work and **explicitly unimplemented**. Give counsel this paper first — it enumerates most of the rows below and is a dated printed publication. | 3, 4 |
 | 22b | [Pipelock / PipeLab](https://github.com/luckyPipewrench/pipelock) | Agent firewall emitting **mediator-signed Ed25519 action receipts**, hash-chained and offline-verifiable, from an out-of-process sidecar. Also publishes a signer-position taxonomy (in-process / operator-mediator / third-party witness). Security and egress centre of gravity; no wallet, budget, or charge-once semantics. | 3, 4 |
-| 22c | Signet | Bilateral co-signed receipts; encryption key not separated from the signing identity; no transparency-log integration. **Known only through 22a's related-work table — no primary source located.** Counsel should locate the primary before relying on or distinguishing it. | 3, 4 |
+| 22c | Signet | Bilateral co-signed receipts; encryption key not separated from the signing identity; no transparency-log integration. **Known only through 22a's related-work table — no primary source located.** Counsel should locate the primary before relying on or distinguishing it. | *reported* 3, 4 — **not established**, and excluded from the blanket statement above until a primary source is read |
 | 22d | Agent Passport System (APS), attributed to T. Pidlisnyi, 2025 | Four receipt types — ActionReceipt, AuthorityBoundaryReceipt, CustodyReceipt, ContestabilityReceipt — signed by the executing agent. The **AuthorityBoundaryReceipt** is worth reading against the permit-scope claims. Via 22a. | 3, 4 |
 | 22e | `draft-nivalto-agentroa` | Egress-gateway signing within the operator's trust domain, with SCITT transparency-log integration. Via 22a. | 3, 4 |
 | 22f | Agent Receipts | Platform-signed Ed25519 receipts; signer on the operator side. Via 22a. | 3, 4 |

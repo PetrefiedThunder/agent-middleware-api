@@ -153,13 +153,19 @@ the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
   checked before the tool is allowed to run, not after."
 - "Trying a different tool with the same permit is denied, and the denial is
   itself signed and moves no money."
-- "The receipt's signature covers the ledger entry, the idempotency record, and
-  the dispatch attempt *together*. Plenty of tools sign receipts; that binding
+- "The receipt's signature covers the ledger entry and the idempotency record
+  together — and, **when the call goes to the configured upstream MCP tool**,
+  the dispatch attempt as well. Plenty of tools sign receipts; that binding
   is what lets you check the relationship between authority, money and outcome
   instead of taking three separate assertions on trust — and you can check the
   signature offline, without us. What actually *prevents* the second charge is
   one layer down: the ledger's `operation_key` uniqueness constraint and the
   idempotency replay path. The signature is evidence, not enforcement."
+- **Do not overstate the local proof.** `trust-plane-echo` is the *local*
+  reference tool, so the receipt this demo produces has no `dispatch_attempt_id`
+  and binds two identifiers, not three. Demonstrate the three-way binding only
+  when running the partner's configured upstream tool. Claiming it off the local
+  proof is the exact overclaim a partner engineer will check first.
 - If asked about crashes: "For the configured upstream tool, if we die after the
   request leaves the gateway but before the acknowledgement arrives, that becomes
   a durable `delivery_uncertain` state. The charge stands and we never redispatch,

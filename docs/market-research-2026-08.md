@@ -124,7 +124,7 @@ What survives is narrower and, usefully, matches
 | Budget enforcement | ✅ (wallet ledger) | ❌ | ✅ (caps) | ✅ (guardrail) | ❌ |
 | Idempotency / no duplicate **gateway dispatch** (effects inside an arbitrary upstream tool are *not* guaranteed — that needs the tool to honour the forwarded key) | ✅ | ❌ | ✅ (replay) | ✅ | ❌ |
 | **Debit bound to the idempotency record** | ✅ | ❌ | ❓ **not verified** — budgets and replay are documented as separate features, with no stated binding | ❌ | ❌ |
-| **Ambiguous post-dispatch outcome is a distinct, receipted state** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Ambiguous post-dispatch outcome is a distinct, receipted state** (configured upstream MCP tool only; a local-tool crash resolves to `needs_manual_review` with no receipt) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Human-in-the-loop approval | ✅ (permit requests) | ❌ | ✅ | ❌ | ✅ (authority trail) |
 | Compliance framework mapping | ❌ (deliberate) | ❌ | ❌ | ❌ | ✅ |
 
@@ -411,10 +411,16 @@ answer to a buyer asking why they should trust our signature.
 Re-tested against Microsoft (shipped), Pipelock, Signet, and the eight protocols
 surveyed in §9.4. **Both bolded §4 rows still hold as of 2026-08-25:**
 
-- **Debit bound to the idempotency record** — no system we reviewed *documents* binding a receipt
-  to a settled charge. Microsoft's receipts carry no spend or ledger construct
-  (§9.1). Sello names payment coupling as future work and explicitly
-  "unimplemented" (its §8.4). Pipelock is an egress firewall with no ledger.
+- **Debit bound to the idempotency record** — no system we reviewed *documents*
+  binding a debit to an idempotency record. Microsoft's receipts carry no spend
+  or ledger construct at all (§9.1); Pipelock is an egress firewall with no
+  ledger. **`jamjet` remains unresolved** (§7 question 3): it enforces budgets
+  and replays runs, and whether it binds the two is still an open question, so
+  this row is a scope statement rather than a negative result.
+  *Receipt-layer context only:* Sello's survey names payment coupling as future
+  work and "unimplemented" (its §8.4). That is receipt-to-settlement, a
+  different property from debit-to-idempotency — supporting context, not
+  evidence for this row.
 - **Ambiguous post-dispatch outcome is a distinct, receipted state** — untouched
   by any of the new entrants.
 
