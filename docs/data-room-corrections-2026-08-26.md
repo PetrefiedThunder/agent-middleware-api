@@ -146,29 +146,63 @@ the same tier Pipelock ships and one below third-party witness signing.
 `site/llms.txt` already labels the published proof "self-issued." The room should
 not imply a higher tier than the repo does.
 
-## C4 — Three cited patents could not be verified
+## C4 — Three cited patents are fabricated. This is the most serious item here.
 
-`Technical Evidence Index` §5.3 lists as close-watch threats:
+`Technical Evidence Index` §5.3 lists three close-watch threats, two rated
+**HIGH**. All three were resolved against Google Patents on 2026-08-25. **Every
+one is a real patent number attached to an invented title and assignee.**
 
-| Cited as | Status, checked 2026-08-25 |
+| Cited as | What that number actually is |
 | --- | --- |
-| **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" | **Not found.** The number format does not resolve to a valid USPTO publication. |
-| **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" | **Not found.** Same format concern. |
-| **US 12,300,000 B2** — PayPal, generic cryptographic receipts | **Not verified.** Round-numbered grant; needs a direct USPTO check. |
+| **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" (HIGH) | **Turck Holding GmbH** — *"Signal transmission system … between a field device and a superordinate unit."* Industrial automation, HART protocol. Published 2024-03-14. |
+| **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" (HIGH) | **Duecker Group GmbH** — *"Angled transfer with roller chain."* A roller conveyor. Published 2024-02-01. |
+| **US 12,300,000 B2** — PayPal, cryptographic receipts | **Here Global BV** — *"Computer-vision-based object motion detection."* Issued 2025-05-13. |
 
 Only Daon **US 12,688,261** is corroborated by
 [`ip/06-ids-candidates.md`](ip/06-ids-candidates.md). The room dates it "Filed
 ~2023" where that file records **issued 2026-07-21** — reconcile.
 
-Two distinct risks. In a buyer's room, an unverifiable citation that a patent
-analyst cannot pull is a credibility loss on the section where credibility
-matters most. On an **IDS**, it is worse: a fabricated or mis-transcribed
-reference is materially more damaging than an omitted one. Both are now recorded
-in [`ip/06-ids-candidates.md`](ip/06-ids-candidates.md) §C.1b as unresolved, for
-counsel.
+**Why this is worse than a citation error.** A mis-keyed digit produces one
+wrong reference. It does not produce three, each landing in an unrelated field
+(industrial sensors, conveyors, computer vision), each paired with a title and
+assignee that happen to support the argument in the section where it appears.
+That pattern — correct format, invented content, argument-shaped — is what
+hallucinated citations look like. These were not transcribed from a search; they
+appear to have been generated.
 
-**Action.** Pull each from USPTO or drop it. If Anthropic and Skyfire filings in
-this space do exist, they are highly material and must be found properly.
+**What it costs, in order.**
+
+1. **In a buyer's room this is the worst place to be caught.** A patent analyst
+   pulls cited art as a matter of routine. Three fabrications in the IP section
+   does not read as sloppiness — it raises the question of what else in the room
+   was generated rather than verified, and it puts the *genuine* engineering
+   evidence under suspicion it does not deserve.
+2. **The filing urgency argument is unsupported.** Two HIGH ratings drove the
+   "file provisionals immediately" sequencing. Nothing supports them. The
+   recommendation may still be right — the Daon art and the grace-period
+   deadline are real — but it must be re-argued from evidence that exists.
+3. **The competitor patent search has not actually been done.** These
+   placeholders occupy the space where a real search would sit. Treat that work
+   as outstanding, not complete.
+4. **Audit the rest of the draft.** Same-document claims that no one has
+   sourced — the acquisition comparables and the ~$110M figure in C7 especially
+   — now need checking before a buyer sees them.
+
+**Skyfire is a real company and a real gap.** [Skyfire Systems,
+Inc.](https://www.crunchbase.com/organization/skyfire-systems) runs a payment
+network for AI agents with programmable wallets, verified agent identity (KYA),
+and the KYAPay protocol — genuinely adjacent to the economic claims this product
+leads with, and closer to them than anything in
+[`market-research-2026-08.md`](market-research-2026-08.md) §3, which does not
+track it at all. The fabricated citation created a false impression that Skyfire
+had been assessed. It has not been. No published filings were located, which is
+expected for a company that launched in August 2024 — applications from around
+launch would only begin publishing near February 2026.
+
+**Action.** Strike all three citations. Have counsel run assignee-based searches
+on Skyfire Systems, Nevermined, and Payman, and add Skyfire to the competitive
+set on its merits. Re-derive the filing recommendation from the Daon art and the
+grace-period deadline alone.
 
 ## C5 — Gap #4 is not real, and it understates the strongest asset in the package
 

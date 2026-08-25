@@ -253,7 +253,13 @@ built from §3 and §4.
    [§9.5](#95-reported-but-not-found).
 8. Do **AgentLedger** and **NotaryOS** exist under those names? Reported in the
    same sweep; not found. See [§9.5](#95-reported-but-not-found).
-9. Now that the largest vendor in the category ships offline-verifiable receipts
+9. Does any **agent payment network** — Skyfire, Nevermined, Payman — bind a
+   charge to an idempotency record, or define behaviour for an ambiguous
+   post-dispatch outcome? None was assessed on this, because §3 scoped the
+   survey to MCP governance products. If one does, it is a closer competitor to
+   the [§4](#4-where-this-product-actually-sits) rows than any gateway surveyed
+   here. See [§9.6](#96-a-gap-this-section-does-not-cover-agent-payment-networks).
+10. Now that the largest vendor in the category ships offline-verifiable receipts
    ([§9.1](#91-correction--microsoft-has-shipped-not-proposed)), does the
    *self-issued* nature of our own signature become the objection rather than the
    asset? Pipelock's signer taxonomy — in-process / operator-mediator /
@@ -454,6 +460,37 @@ than as §3 rows, per the provenance discipline at the top of this document:
 - **AgentLedger** — not found.
 - **NotaryOS** — not found. (Note the Sello survey does name an "Agent Receipts"
   project and an "Attested Intelligence"; neither matches this description.)
+
+### 9.6 A gap this section does not cover: agent payment networks
+
+Every project in §3 was selected as an *MCP governance* competitor. That framing
+has a blind spot, and chasing the §9.5 names surfaced it.
+
+[**Skyfire Systems, Inc.**](https://www.crunchbase.com/organization/skyfire-systems)
+runs a payment network for AI agents: programmable wallets, verified agent
+identity ("KYA"), the KYAPay protocol, and partnerships with F5 and Visa. It is
+not an MCP gateway and does not compete on permits or receipts — but wallets and
+agent spend are the *economic* half this document now leads with, and §3 does not
+track it. Nevermined and Payman occupy adjacent ground;
+[`settlement-rails.md`](settlement-rails.md) treats them as settlement rails to
+integrate rather than as competitors, which may still be right.
+
+**Verification: Verified** that the company and product exist (announcements read
+2026-08-25). **Not assessed:** whether any of them binds spend to an idempotency
+record or defines crash semantics — the question §4 actually turns on.
+
+Two reasons this belongs on the record rather than in a table row yet. First, it
+is genuinely a different category — payment rails, not a governance boundary —
+and forcing it into the §4 matrix would compare unlike things. Second, an
+acquisition-draft citation purporting to describe a Skyfire patent turned out to
+be fabricated (see [`ip/06-ids-candidates.md`](ip/06-ids-candidates.md) §C.1b),
+which had created a false impression that this lane was already assessed. It was
+not.
+
+**Open question, added to §7:** does any agent payment network — Skyfire,
+Nevermined, Payman — bind a charge to an idempotency record or define behaviour
+for an ambiguous post-dispatch outcome? If one does, it is a closer competitor to
+the §4 rows than any MCP gateway surveyed here.
 
 Absence of a search hit is not evidence of absence. These stay open until someone
 produces a source.

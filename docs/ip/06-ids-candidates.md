@@ -104,24 +104,60 @@ the settlement mechanisms and treat the receipt mechanisms as dependent claims.
 | 22f | Agent Receipts | Platform-signed Ed25519 receipts; signer on the operator side. Via 22a. | 3, 4 |
 | 22g | Attested Intelligence | MCP governance proxy with hash-linked continuity chains, distributed point-to-point rather than via public logs. Via 22a — note an "Attested Intelligence" also appears in the §3 "category noise" row of the market research. | 3, 4 |
 
-### C.1b Citations that could not be verified — resolve before any IDS
+### C.1b Fabricated citations — do not disclose, and do not rely on
 
-An acquisition-data-room draft (2026-08-26, external compilers) cited the
-following as close-watch prior art. **A 2026-08-25 check could not locate any of
-them**, and the first does not resolve to a valid USPTO publication format.
+An acquisition-data-room draft (2026-08-26, external compilers) cited three
+patents as close-watch prior art, two of them rated a **HIGH** threat. **All
+three were resolved against Google Patents on 2026-08-25. Every one is a real
+patent number attached to an invented title and assignee.**
 
-| Cited as | Status |
+| Cited as | What that number actually is |
 | --- | --- |
-| **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" | **Not found.** Number format does not resolve to a USPTO publication. |
-| **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" | **Not found.** Same format concern. |
-| **US 12,300,000 B2** — PayPal, generic cryptographic receipts | **Not verified.** A round-numbered grant warrants a direct USPTO check. |
+| **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" (rated HIGH) | **Turck Holding GmbH**, *"Signal transmission system for transmitting a main process variable and further data between a field device and a superordinate unit."* Industrial automation, HART protocol over optocouplers. Filed 2023-09-06, published 2024-03-14. |
+| **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" (rated HIGH) | **Duecker Group GmbH**, *"Angled transfer with roller chain."* A roller-conveyor mechanism. App. 18/032,225, published 2024-02-01. |
+| **US 12,300,000 B2** — PayPal, cryptographic receipts for online transactions | **Here Global BV**, *"Method and apparatus for computer-vision-based object motion detection."* Issued 2025-05-13. |
 
-**Do not place any of these on an IDS until pulled from USPTO.** The duty of
-candor requires disclosing known material art; it does not license citing
-references that may not exist, and a fabricated or mis-transcribed citation in an
-IDS is far worse than an omitted one. Two of the three name direct competitors,
-so if real they are highly material and must be found. Either way this is
-counsel's to resolve, not the compilers'.
+**This is the signature of hallucinated citations**, not transcription drift:
+plausible-looking numbers in the right format, paired with titles and assignees
+that match the argument being made. A mis-keyed digit produces one wrong
+reference; it does not produce three, each landing on an unrelated field, each
+conveniently supporting the section it appears in.
+
+**Consequences, in order of seriousness.**
+
+1. **Do not place these on an IDS.** Disclosing a reference that does not say
+   what the disclosure claims it says is worse than omitting it — it misleads
+   the examiner and wastes prosecution on art that does not exist.
+2. **The threat assessment built on them is void.** The data room rates the
+   "Anthropic" and "Skyfire" filings HIGH and lets them drive filing urgency.
+   Nothing supports that. Anthropic's actual published portfolio is AI/ML work
+   (agentic interface automation, prediction accuracy); nothing matching
+   "cryptographic proof of API consumption" was located.
+3. **The real search has not been done.** These placeholders may have displaced
+   a genuine competitor search rather than summarizing one. The Daon patents in
+   §A remain the only corroborated art in this package, and item 1's standing
+   instruction — order a professional patentability search — is now the more
+   urgent of the two, not the optional one.
+4. **Audit the rest of that draft.** Three fabricated citations in one section
+   means every other unsourced factual claim in the same document needs a check
+   before it reaches counsel or a buyer, including the acquisition comparables.
+
+**Skyfire is nonetheless worth a real search.** [Skyfire Systems,
+Inc.](https://www.crunchbase.com/organization/skyfire-systems) is a genuine
+company in the adjacent economic lane — a payment network for AI agents, with
+programmable wallets, verified agent identity (KYA), and the KYAPay protocol.
+That is closer to the *economic* claims here than anything currently in
+[`../market-research-2026-08.md`](../market-research-2026-08.md) §3, which does
+not track it at all. No published filings were located, which is expected: the
+company launched publicly in August 2024, so applications filed around launch
+would only begin publishing from roughly February 2026. Counsel should run a
+proper assignee search on Skyfire Systems, Inc. and on Nevermined and Payman —
+by assignee, not by keyword — rather than treating the fabricated cite above as
+having covered it.
+
+The same draft cites Daon **US 12,688,261** as "Filed ~2023" where item 1 of this
+document records it **issued 2026-07-21**. Reconcile filing date against issue
+date before either number is used.
 
 The same draft cites Daon **US 12,688,261** as "Filed ~2023" where item 1 of this
 document records it **issued 2026-07-21**. Reconcile filing date against issue
