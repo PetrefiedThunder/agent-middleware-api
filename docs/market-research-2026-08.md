@@ -375,8 +375,10 @@ stale.** The toolkit ships offline-verifiable decision receipts:
 - **Ed25519 signatures over RFC 8785 (JCS) canonical payloads** — the same
   algorithm and the standardized form of the canonicalization this repo uses.
 - **Hash-chained** via `previousReceiptHash`, for insertion/deletion detection.
-- Verified without access to operator infrastructure; a `covenantHash` binds the
-  receipt to the policy in force.
+- Verified without access to operator infrastructure. A `covenantHash` binds the
+  receipt to the policy in force — note this field is defined in the toolkit's
+  [verifiable-compliance-receipts proposal](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/proposals/verifiable-compliance-receipts.md),
+  not in Tutorial 33; cite the proposal for it.
 - Documented in [Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/tutorials/33-offline-verifiable-receipts.md),
   tracked in [issue #1499](https://github.com/microsoft/agent-governance-toolkit/issues/1499).
 
@@ -409,7 +411,7 @@ answer to a buyer asking why they should trust our signature.
 Re-tested against Microsoft (shipped), Pipelock, Signet, and the eight protocols
 surveyed in §9.4. **Both bolded §4 rows still hold as of 2026-08-25:**
 
-- **Debit bound to the idempotency record** — no surveyed system binds a receipt
+- **Debit bound to the idempotency record** — no system we reviewed *documents* binding a receipt
   to a settled charge. Microsoft's receipts carry no spend or ledger construct
   (§9.1). Sello names payment coupling as future work and explicitly
   "unimplemented" (its §8.4). Pipelock is an egress firewall with no ledger.

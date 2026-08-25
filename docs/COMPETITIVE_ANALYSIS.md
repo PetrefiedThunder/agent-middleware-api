@@ -395,7 +395,7 @@ Full analysis, with per-claim verification levels and market sizing:
 | [jamjet](https://github.com/jamjet-labs/jamjet) | Portable `policy.yaml` across adapters | Signed, hash-chained | ✅ caps | ✅ replay | Verified |
 | [latch](https://github.com/sangaraju1988/latch) | In-process Python library | ❌ none | ✅ guardrail | ✅ | Verified |
 | [TraceAgent](https://www.traceagent.dev/) | Audit layer for MCP calls | SHA-256 chained, compliance exports | ❌ | ❌ | Verified (vendor site) |
-| [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | Policy, identity, sandboxing | Proposed verifiable compliance receipts | — | — | Verified |
+| [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | Policy, identity, sandboxing | **Ships** offline-verifiable receipts (Ed25519 over RFC 8785 JCS, hash-chained) — updated 2026-08-25, was "proposed" | — | — | Verified |
 
 ### 9.2 What this does to §2.5 and §5.1
 

@@ -264,8 +264,19 @@ Status section records "9/9 PASSED". That is a second signal that the room was
 compiled against the older 1.2.0 main tree rather than the v1.3.0 review clone
 (see C1) — and it understates the evidence again.
 
+**Executed, not merely collected.** The `--collect-only` result above proves the
+suite is real, not that it passes. It has since been observed passing: the
+`postgres_permit_concurrency` job — the one carrying the "Prove governed MCP
+across two OS processes" step — completed **success** against a PostgreSQL
+service on this repository's own PR #370 runs
+([32910126565](https://github.com/PetrefiedThunder/agent-middleware-api/actions/runs/32910126565)
+and [32910910159](https://github.com/PetrefiedThunder/agent-middleware-api/actions/runs/32910910159),
+2026-08-25). Cite a job URL, never the collection count, when this is put in
+front of a buyer.
+
 **Action.** Strike gap #4, move these tests into the evidence index, and mark
-Invariant 4's empirical status **PROVED IN CI** rather than "Docker manual run,
+Invariant 4's empirical status **PROVED IN CI** — citing a passing job run —
+rather than "Docker manual run,
 not in CI." The failure-state matrix's "Empirical Status" column needs the same
 correction for rows 5, 7, 8 and 10. Re-run the adversarial count against the
 tree the room actually describes.
@@ -288,8 +299,11 @@ More broadly, all four entries in §5.1 are pitched as "novel at intersection" o
 "novel stack" — combination claims, per C2.
 [`ip/02-prior-art-landscape.md`](ip/02-prior-art-landscape.md) §7 ranks the
 **settlement-side** mechanisms first precisely because they stand alone:
-(1) crash-recovery classification of a charged-but-unfinalized operation,
-(2) atomic guarded reservation under weak isolation. Lead §5.1 with those two.
+**crash-recovery classification of a charged-but-unfinalized operation**
+(mechanism 2 in that document's numbering, ranked first) and **atomic guarded
+reservation under weak isolation** (mechanism 1, ranked second). Lead §5.1 with
+those two, and cite them by name — `02`'s rank order and its mechanism numbers
+run opposite to each other, so a bare "(1)" or "(2)" is ambiguous between them.
 
 ## C7 — Market comps are unverified and carry the valuation
 
@@ -349,5 +363,9 @@ diligence. The superlatives, the unverifiable citations, and the internal
 contradictions do not — and they are what a buyer will find first.
 
 *Compiled 2026-08-25 against commit state at review time. Every code reference
-above was checked directly; every external reference is recorded with its
-verification level in [`market-research-2026-08.md`](market-research-2026-08.md) §9.*
+above was checked directly. **Competitive** references are recorded with their
+verification level in [`market-research-2026-08.md`](market-research-2026-08.md)
+§9; the C4 patent citations were resolved against Google Patents and are recorded
+in [`ip/06-ids-candidates.md`](ip/06-ids-candidates.md) §C.1b; the USPTO and
+37 CFR authorities cited above are primary sources, not survey rows. No single
+section records all of them.*

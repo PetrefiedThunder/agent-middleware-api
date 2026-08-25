@@ -139,8 +139,10 @@ Lead with the debit. Signed receipts ship in several competing products now, so
 a track that opens on the signature opens on the least differentiated thing in
 the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 
-- "One agent action, one debit — no matter how many times the agent retries.
-  That is the whole product in one sentence."
+- "One agent action, one debit — no matter how many times the agent retries
+  under the same accepted idempotency key. That is the whole product in one
+  sentence." (A retry that mints a *new* key is a new operation and is charged
+  as one; the key is the unit of deduplication.)
 - "Watch the wallet. This call charges it exactly once, and the ledger entry is
   keyed to the idempotency record, so a duplicate debit cannot be written even
   under a race."
@@ -152,9 +154,12 @@ the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 - "Trying a different tool with the same permit is denied, and the denial is
   itself signed and moves no money."
 - "The receipt's signature covers the ledger entry, the idempotency record, and
-  the dispatch attempt *together*. Plenty of tools sign receipts; that binding is
-  what makes a duplicate charge impossible rather than merely detectable — and
-  you can verify it offline, without us."
+  the dispatch attempt *together*. Plenty of tools sign receipts; that binding
+  is what lets you check the relationship between authority, money and outcome
+  instead of taking three separate assertions on trust — and you can check the
+  signature offline, without us. What actually *prevents* the second charge is
+  one layer down: the ledger's `operation_key` uniqueness constraint and the
+  idempotency replay path. The signature is evidence, not enforcement."
 - If asked about crashes: "For the configured upstream tool, if we die after the
   request leaves the gateway but before the acknowledgement arrives, that becomes
   a durable `delivery_uncertain` state. The charge stands and we never redispatch,

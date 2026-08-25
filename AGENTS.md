@@ -60,10 +60,14 @@ debit, cite the signature as supporting evidence, never as the differentiator.
 See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 
 1. **exactly-once economic authorization at the gateway boundary** — one
-   accepted idempotency key, one gateway dispatch, one ledger debit, one
-   receipt, linked by a single persisted chain. This is the wedge.
-2. **crash-semantics accounting** — a genuinely ambiguous post-dispatch outcome
-   becomes a distinct receipted state rather than a silent redispatch.
+   accepted idempotency key yields at most one gateway dispatch and at most one
+   ledger debit, linked by a single persisted chain, with a receipt on every
+   path that finalizes or reconciles. This is the wedge. ("Exactly-once" is the
+   deduplication term of art: never a duplicate charge, not always a charge.)
+2. **crash-semantics accounting** — **for the configured upstream MCP tool**, a
+   genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
+   rather than a silent redispatch. Local governed tools fail closed into manual
+   review; they have no dispatch state machine.
 3. agent authorization gateway
 4. usage metering layer for agent tools
 5. MCP governance proxy
