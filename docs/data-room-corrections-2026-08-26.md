@@ -95,11 +95,26 @@ find either one, and the room's credibility rests on precision.
    charge — and exactly one receipt on paths that finalize or reconcile, which is
    every upstream path but not that local one.
 
-The same "exactly one … and one receipt" phrasing predates this review in
-[`../WEDGE.md`](../WEDGE.md) §"Signed receipts are table stakes now" and in
-[`market-research-2026-08.md`](market-research-2026-08.md) §4. Both need the
-same qualifier; changing the wedge's headline sentence is a product-owner call,
-not a documentation edit, so it is flagged here rather than made.
+**Applied repo-wide.** The same "exactly one … and one receipt" phrasing
+predated this review in [`../WEDGE.md`](../WEDGE.md) §"Signed receipts are table
+stakes now", [`market-research-2026-08.md`](market-research-2026-08.md) §4, and
+[`COMPETITIVE_ANALYSIS.md`](COMPETITIVE_ANALYSIS.md) §9. All three now read "at
+most one," and `WEDGE.md` carries a gloss defining what "exactly-once" means as
+a term of art — the deduplication guarantee, not a promise that every accepted
+call is charged.
+
+One instance was deliberately left alone: [`PROOF_MATRIX.md`](PROOF_MATRIX.md)
+says "exactly one ledger debit" while enumerating what a single successful proof
+run asserts. That is a true statement about an observed happy-path run, not a
+universal contract, and narrowing it would misdescribe the proof.
+
+**Why this is the stronger claim for a buyer, not a retreat.** "Never a
+duplicate charge" is the property a buyer is actually purchasing, and it is the
+one that survives their engineer reading the test suite. "Exactly one" does not:
+`test_post_side_effect_crash_requires_review_without_redispatch` falsifies it in
+the repository's own CI. A claim a diligence engineer can break in an afternoon
+costs more than the breadth it buys — the same reasoning
+[`../WEDGE.md`](../WEDGE.md) already applies to uniqueness superlatives.
 
 Keep the survey-scoped form — "no project we surveyed documents this," never
 "nobody does." An independent survey of eight receipt protocols (arXiv:2606.04193)

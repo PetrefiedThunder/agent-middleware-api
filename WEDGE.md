@@ -10,6 +10,15 @@ Or in one line:
 
 > Authorize one agent action. Charge it once. Prove what happened.
 
+**What "exactly-once" means here, precisely.** It is the distributed-systems
+term of art for the *deduplication* guarantee — no duplicate dispatch, no
+duplicate debit — not a promise that every accepted call results in a charge.
+Two paths produce no net debit at all: a crash before dispatch reconciles to a
+refund, and an out-of-scope or over-budget call is denied before money moves.
+The enforceable claim is **never a duplicate charge, not always a charge.**
+Every precise statement of the guarantee below says "at most one" for that
+reason. See [`docs/failure-semantics.md`](docs/failure-semantics.md).
+
 The core job is to put one enforceable **economic** boundary between autonomous
 agents and tools:
 
@@ -65,10 +74,11 @@ This does not change the wedge — it sharpens which half of it to lead with.
 The row no surveyed project is *documented* as occupying is the **economic**
 one:
 
-> One accepted idempotency key produces exactly one gateway dispatch, one
-> ledger debit, and one receipt, linked by a single persisted chain — and a
-> genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
-> rather than a silent redispatch.
+> One accepted idempotency key produces **at most one** gateway dispatch and
+> **at most one** ledger debit, linked by a single persisted chain, with a
+> receipt on every path that finalizes or reconciles — and a genuinely
+> ambiguous post-dispatch outcome becomes a distinct receipted state rather
+> than a silent redispatch.
 
 Two qualifications that must travel with that sentence.
 

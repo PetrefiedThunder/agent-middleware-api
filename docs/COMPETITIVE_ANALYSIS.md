@@ -411,10 +411,11 @@ nothing else produces per-call cryptographic evidence.
 
 The moat that survives verification is narrower and sits one layer down:
 
-> One accepted idempotency key produces exactly one gateway dispatch, one
-> ledger debit, and one receipt, linked by a single persisted chain — and a
-> genuinely ambiguous post-dispatch outcome becomes a distinct receipted state
-> rather than a silent redispatch.
+> One accepted idempotency key produces **at most one** gateway dispatch and
+> **at most one** ledger debit, linked by a single persisted chain, with a
+> receipt on every path that finalizes or reconciles — and a genuinely
+> ambiguous post-dispatch outcome becomes a distinct receipted state rather
+> than a silent redispatch.
 
 No project in §9.1 is *documented* as binding a debit to an idempotency record
 — jamjet's budgets and replay are described as independent features and the

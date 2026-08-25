@@ -130,8 +130,9 @@ What survives is narrower and, usefully, matches
 
 Read down the bolded rows. Several projects have receipts; several have
 budgets; several have idempotency. The cell **no surveyed project is documented
-as occupying** is that *one accepted idempotency key produces exactly one ledger
-debit and one receipt, and the record linking them is a single persisted chain*
+as occupying** is that *one accepted idempotency key produces at most one ledger
+debit, with a receipt on every path that finalizes or reconciles, and the record
+linking them is a single persisted chain*
 — plus the refusal to silently redispatch when the outcome is genuinely unknown
 (`delivery_uncertain`, per `ELEVATOR_PITCH.md`).
 
