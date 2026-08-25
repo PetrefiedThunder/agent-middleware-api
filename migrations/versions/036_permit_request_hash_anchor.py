@@ -28,7 +28,6 @@ def upgrade():
     """
     # SQLite doesn't support ALTER COLUMN, so we add the column as nullable,
     # backfill it, then recreate the table with the NOT NULL constraint.
-    from sqlalchemy import inspect
     conn = op.get_bind()
     dialect_name = conn.dialect.name
     
