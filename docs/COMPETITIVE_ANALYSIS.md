@@ -413,9 +413,9 @@ The moat that survives verification is narrower and sits one layer down:
 
 > One accepted idempotency key produces **at most one** gateway dispatch and
 > **at most one** ledger debit, linked by a single persisted chain, with a
-> receipt on every path that finalizes or reconciles — and a genuinely
-> ambiguous post-dispatch outcome becomes a distinct receipted state rather
-> than a silent redispatch.
+> receipt on every path that finalizes or reconciles — and, **for the configured
+> upstream MCP tool**, a genuinely ambiguous post-dispatch outcome becomes a
+> distinct receipted state rather than a silent redispatch.
 
 No project in §9.1 is *documented* as binding a debit to an idempotency record
 — jamjet's budgets and replay are described as independent features and the
@@ -436,7 +436,8 @@ the debit, not with the signature — see [`../WEDGE.md`](../WEDGE.md).
    nothing binding a debit to an idempotency record, and its namespaced types
    plus commitment mode make emitting our receipts in its envelope
    structurally cheap. Detail: `market-research-2026-08.md` §8.1.)*
-2. **A large vendor is in the category.** `agent-governance-toolkit` has an open
+2. **A large vendor is in the category.** `agent-governance-toolkit` **ships**
+   offline-verifiable receipts as of 2026-08-25 (was an open
    proposal for independently verifiable compliance receipts.
 3. **The build-vs-buy default is a free library.** latch is MIT and
    `pip install`-shaped. The counter-argument — an in-process decorator is not

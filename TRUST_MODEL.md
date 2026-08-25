@@ -46,8 +46,11 @@ review instead (see below). The ledger entry carries
 the idempotency record's identity as its `operation_key` under a uniqueness
 constraint, so a duplicate debit cannot be written even if two processes race.
 Replaying the same request under the same accepted key returns the original
-result and receipt without a second dispatch or debit; replaying a *changed*
-request under that key fails closed with `409 Conflict`.
+result and receipt without a second dispatch or debit **once that record has
+reached a terminal state**; replaying a *changed* request under that key fails
+closed with `409 Conflict`. A record still in progress replays as in-progress,
+and a local attempt stranded by the crash below stays that way pending manual
+review rather than ever returning a receipt it does not have.
 
 **Why "at most one" and not "exactly one."** Two real paths produce neither a
 dispatch nor a net debit, and one produces no receipt at all:
@@ -92,10 +95,13 @@ permit, ledger entry, audit event, tool, request hash, response hash, and cost.
 Denied and failed governed attempts produce signed denial/failure receipts when
 a valid permit was present.
 
-The receipt's Ed25519 signature covers the **ledger entry, the idempotency
-record, and the dispatch attempt together**, so the issuer's statement about
-authority, money, and delivery outcome is one tamper-evident unit rather than
-three separable assertions. Signed receipts are widely available elsewhere; that
+For a governed call to the **configured upstream MCP tool**, the receipt's
+Ed25519 signature covers the **ledger entry, the idempotency record, and the
+dispatch attempt together**, so the issuer's statement about authority, money,
+and delivery outcome is one tamper-evident unit rather than three separable
+assertions. Local governed tools have no dispatch-attempt row, so their receipts
+bind the ledger entry and idempotency record only — the three-way binding is an
+upstream-path property, not a universal one. Signed receipts are widely available elsewhere; that
 binding is what this signature adds.
 
 **What offline verification does and does not establish.** The portable bundle

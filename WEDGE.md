@@ -88,10 +88,12 @@ response_rejected}`) covers the **configured upstream MCP tool**. Local governed
 tools have no attempt row and no ambiguous state; a crash there fails closed into
 manual review. Say "for the configured upstream tool" — `README.md` already does.
 
-**The signature adds the binding, not the evidence.** The receipt's Ed25519
-signature covers the ledger entry, the idempotency record, and the dispatch
-attempt *together*. That binding — not the fact of a signature — is the part no
-surveyed project documents.
+**The signature adds the binding, not the evidence.** For the configured
+upstream tool, the receipt's Ed25519 signature covers the ledger entry, the
+idempotency record, and the dispatch attempt *together* (local governed tools
+have no dispatch-attempt row, so their receipts bind the first two only). That
+binding — not the fact of a signature — is the part no surveyed project
+documents.
 
 State that as scope, not as exclusivity: several projects enforce budgets and
 several dedupe replays, and whether any of them *binds* the two is an open

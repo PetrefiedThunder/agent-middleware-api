@@ -122,7 +122,7 @@ What survives is narrower and, usefully, matches
 | Offline-verifiable signed receipts | ✅ | ✅ | ✅ | ❌ | ⚠️ hash-chained; issuer signature and offline key distribution **not verified** |
 | Hash-chained audit | ✅ (per-wallet) | ❌ | ✅ | ❌ | ✅ |
 | Budget enforcement | ✅ (wallet ledger) | ❌ | ✅ (caps) | ✅ (guardrail) | ❌ |
-| Idempotency / no duplicate execution | ✅ | ❌ | ✅ (replay) | ✅ | ❌ |
+| Idempotency / no duplicate **gateway dispatch** (effects inside an arbitrary upstream tool are *not* guaranteed — that needs the tool to honour the forwarded key) | ✅ | ❌ | ✅ (replay) | ✅ | ❌ |
 | **Debit bound to the idempotency record** | ✅ | ❌ | ❓ **not verified** — budgets and replay are documented as separate features, with no stated binding | ❌ | ❌ |
 | **Ambiguous post-dispatch outcome is a distinct, receipted state** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Human-in-the-loop approval | ✅ (permit requests) | ❌ | ✅ | ❌ | ✅ (authority trail) |

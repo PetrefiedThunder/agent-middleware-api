@@ -62,16 +62,20 @@ patent counsel.
 verified in this repository:
 
 > One accepted idempotency key produces at most one gateway dispatch and at most
-> one ledger debit — and the receipt's Ed25519 signature covers the ledger entry,
-> the idempotency record, and the dispatch attempt together, so the issuer's
-> statement about authority, money, and outcome is one tamper-evident unit rather
-> than three separable assertions. No project we surveyed documents that binding.
+> one ledger debit — and, for the configured upstream MCP tool, the receipt's
+> Ed25519 signature covers the ledger entry, the idempotency record, and the
+> dispatch attempt together, so the issuer's statement about authority, money,
+> and outcome is one tamper-evident unit rather than three separable assertions.
+> No project we surveyed documents that binding.
 
 Code evidence: `ledger_entry_id`, `idempotency_record_id` and
 `dispatch_attempt_id` are all inside one signed canonical payload
 (`app/services/receipts.py:85,:95,:97`), enforced at write time by
 `attach_charge` (`app/services/mcp_dispatch_attempts.py:653`) and by `unique=True`
-foreign keys (`app/db/models.py:781-790`).
+foreign keys (`app/db/models.py:781-790`). Note `dispatch_attempt_id` is present
+only on upstream receipts — the local path mints without one
+(`app/routers/mcp.py:1754-1774`) — so cite the three-way binding as an
+upstream-path property. Overstating it as universal is the same error as C8.
 
 **Two precision limits this sentence must respect** — both raised in review of
 this document and confirmed against the code and tests. A buyer's engineer will
