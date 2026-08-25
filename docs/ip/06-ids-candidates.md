@@ -159,10 +159,6 @@ The same draft cites Daon **US 12,688,261** as "Filed ~2023" where item 1 of thi
 document records it **issued 2026-07-21**. Reconcile filing date against issue
 date before either number is used.
 
-The same draft cites Daon **US 12,688,261** as "Filed ~2023" where item 1 of this
-document records it **issued 2026-07-21**. Reconcile filing date against issue
-date before either number is used.
-
 ### C.2 Third-party problem reports
 
 These are double-edged and counsel should treat them as such: they evidence a
