@@ -96,16 +96,37 @@ def test_invalid_control_plane_value_is_not_trusted(baked, monkeypatch, garbage)
     assert get_build_provenance() == "unstamped"
 
 
-def test_unreadable_baked_stamp_does_not_raise(baked, monkeypatch):
-    """Provenance is a reporting surface: it must never take a service down."""
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("unreadable"),
+        PermissionError("permission denied"),
+        IsADirectoryError("is a directory"),
+    ],
+)
+def test_filesystem_errors_never_propagate(baked, monkeypatch, error):
+    """Provenance is a reporting surface: it must never take a service down.
+
+    Path.exists() can itself raise on the Python versions this project
+    supports, so the whole probe - not just the read - has to be guarded.
+    A raising filesystem degrades to "no stamp", never to an exception
+    escaping into gather_dependency_report().
+    """
     baked(SHA_A)
 
     def _boom(*args, **kwargs):
-        raise OSError("unreadable")
+        raise error
 
     monkeypatch.setattr(
         type(build_metadata._BUILD_SHA_FILE), "read_text", _boom, raising=True
     )
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", SHA_A)
+    assert get_build_provenance() == "control_plane_only"
+
+
+def test_missing_stamp_file_is_not_an_error(baked, monkeypatch):
+    """FileNotFoundError is an OSError subclass - absence is the common path."""
+    baked(None)
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", SHA_A)
     assert get_build_provenance() == "control_plane_only"
 
@@ -117,3 +138,34 @@ def test_reported_sha_precedence_is_unchanged(baked, monkeypatch):
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", SHA_B)
     assert build_metadata.get_build_commit_sha() == SHA_B
     assert get_build_provenance() == "mismatch"
+
+
+# ---------------------------------------------------------------------------
+# The health -> preflight contract.
+#
+# The classifier is only useful if its value actually reaches the surface the
+# release gate reads. If the public projection ever drops or renames this key,
+# check_live() silently takes its older-image note path and the gate passes
+# without verifying provenance at all - so pin both ends.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_full_dependency_report_publishes_build_provenance(baked, monkeypatch):
+    from app.core import health
+
+    baked(SHA_A)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", SHA_A)
+    report = await health.gather_dependency_report()
+    assert report["build_provenance"] == "stamped"
+
+
+@pytest.mark.anyio
+async def test_public_dependency_report_publishes_build_provenance(baked, monkeypatch):
+    from app.core import health
+
+    baked(None)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", SHA_A)
+    full = await health.gather_dependency_report()
+    public = health.build_public_dependency_report(full)
+    assert public["build_provenance"] == "control_plane_only"

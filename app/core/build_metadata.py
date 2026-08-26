@@ -78,12 +78,16 @@ def get_build_provenance() -> str:
     down. Gate on it from the release preflight instead.
     """
 
+    # Read without an exists() pre-check: on the Python versions this project
+    # supports, Path.exists() can itself propagate an OSError rather than
+    # returning False, which would break the never-raises guarantee above.
+    # A missing file raises FileNotFoundError, an OSError subclass, so one
+    # guarded read covers absence and inaccessibility alike.
     baked = ""
-    if _BUILD_SHA_FILE.exists():
-        try:
-            baked = _BUILD_SHA_FILE.read_text(encoding="utf-8").strip()
-        except Exception:
-            baked = ""
+    try:
+        baked = _BUILD_SHA_FILE.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        baked = ""
     if not _GIT_SHA_RE.fullmatch(baked):
         baked = ""
 
