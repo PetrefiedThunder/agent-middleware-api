@@ -184,9 +184,14 @@ Recorded rather than silently edited, matching the convention at the top of
    for its receipt format. A draft standard for receipts is the more serious
    threat: if the receipt format standardizes elsewhere, receipts become table
    stakes and only the ledger semantics differentiate.
-2. **Microsoft is in the category.** `agent-governance-toolkit` has an open
-   proposal for independently verifiable compliance receipts. Assume the
-   evidence layer commoditizes.
+2. **Microsoft is in the category.** `agent-governance-toolkit` **ships**
+   offline-verifiable decision receipts — Ed25519 over RFC 8785 JCS,
+   hash-chained (§9.1, re-tested 2026-08-25). *As first written this row said it
+   "has an open proposal for independently verifiable compliance receipts," and
+   the risk was stated as "assume the evidence layer commoditizes." It did, and
+   faster than this risk assumed; the proposal wording is kept here only as the
+   dated record of what was true in §3.* The forward-looking half of the risk is
+   spent: treat the evidence layer as commoditized rather than commoditizing.
 3. **latch wins the default build-vs-buy.** Free, MIT, `pip install`, no
    operational surface. The honest answer is that a library the agent can
    bypass is not a boundary, and an in-process cache is not evidence — but that
@@ -376,16 +381,26 @@ stale.** The toolkit ships offline-verifiable decision receipts:
   signature algorithm this repo uses. The canonicalization is *related but not
   identical*: this repo's `awi-canonical-json/1` deliberately differs from JCS on
   decimal normalization and datetime coercion (see `ip/06-ids-candidates.md`
-  item 7). Do not describe the signing inputs as interchangeable.
+  item 7). Do not describe the signing inputs as interchangeable. Both rules are
+  pinned by fixtures in
+  [`tests/test_canonical_json_fixtures.py`](../tests/test_canonical_json_fixtures.py)
+  — RFC 8785 defines neither Python type, so a `Decimal` canonicalizes to a
+  quoted fixed-point string where the same value as a float stays a bare JSON
+  number. That is the divergence, and it is now testable rather than asserted.
 - **Hash-chained** via `previousReceiptHash`, for insertion/deletion detection.
 - Verified without access to operator infrastructure. A `covenantHash` binds the
   receipt to the policy in force — note this field is defined in the toolkit's
-  [verifiable-compliance-receipts proposal](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/proposals/verifiable-compliance-receipts.md),
+  [verifiable-compliance-receipts proposal](https://github.com/microsoft/agent-governance-toolkit/blob/86d98387d81db10082652df848741c3fc99a2a55/docs/proposals/verifiable-compliance-receipts.md),
   not in Tutorial 33; cite the proposal for it.
-- Documented in [Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/tutorials/33-offline-verifiable-receipts.md),
+- Documented in [Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/86d98387d81db10082652df848741c3fc99a2a55/docs/tutorials/33-offline-verifiable-receipts.md),
   tracked in [issue #1499](https://github.com/microsoft/agent-governance-toolkit/issues/1499).
 
 **Verification: Verified** — tutorial read directly, 2026-08-25.
+
+**Both links are pinned to commit `86d9838`**, the revision current when this row
+was written and the last to touch either file. A buyer-facing verification record
+has to be reproducible, and a `blob/main` link stops matching what was read the
+moment that branch moves. Re-pin, do not un-pin, if these are re-read later.
 
 `§6` risk 2 said "assume the evidence layer commoditizes." It has, faster than
 that risk assumed, and the party that did it is the largest vendor in the
