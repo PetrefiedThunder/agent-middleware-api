@@ -455,22 +455,26 @@ def check_live(
     # something else — a Railway rebuild from a connected GitHub source, for
     # instance, which a plain variable write is enough to trigger.
     #
-    # An absent key means the deployed image predates this field rather than
-    # that provenance is good, so it is reported and not silently passed. It is
-    # deliberately not a hard failure: that would fail every deploy of an older
-    # image. Once a stamped release is out, the key is always present.
-    provenance = body.get("build_provenance")
-    if provenance is None:
+    # Key presence, not truthiness, for the same reason as the dogfood check
+    # below: a genuinely absent key means the deployed image predates this
+    # field, which is reported and not silently passed but is deliberately not
+    # a hard failure — that would fail every deploy of an older image. A
+    # *published* null is a different thing entirely. The field exists and does
+    # not say "stamped", so it must fail closed like any other non-stamped
+    # value. Once a stamped release is out, the key is always present.
+    if "build_provenance" not in body:
         print(
             "[preflight] NOTE build_provenance absent from /health/dependencies "
             "— deployed image predates this field; provenance not verified"
         )
-    elif provenance != "stamped":
-        failures.append(
-            f"build_provenance={provenance!r} — the running image was not built "
-            "by `railway up --build-arg COMMIT_SHA=...`; it did not come "
-            "through the documented release path"
-        )
+    else:
+        provenance = body["build_provenance"]
+        if provenance != "stamped":
+            failures.append(
+                f"build_provenance={provenance!r} — the running image was not "
+                "built by `railway up --build-arg COMMIT_SHA=...`; it did not "
+                "come through the documented release path"
+            )
 
     # Key presence, not truthiness: a *published* null must still fail the
     # exactly-false requirement below — only a genuinely absent key (the

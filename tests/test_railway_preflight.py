@@ -1119,3 +1119,20 @@ def test_live_rejects_unrecognized_provenance_value(monkeypatch):
     _patch_get(monkeypatch, {**HEALTHY, "build_provenance": "something_new"})
 
     assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_rejects_explicit_null_provenance(monkeypatch, capsys):
+    """A published null is not an absent key.
+
+    `body.get()` would conflate the two and route an explicit null onto the
+    older-image note path, letting a build with no provenance value pass the
+    gate. The field is present and does not say "stamped", so it fails closed -
+    matching how the dogfood check treats a published null.
+    """
+    _patch_get(monkeypatch, {**HEALTHY, "build_provenance": None})
+
+    assert preflight.check_live("https://api.example.com") is False
+
+    output = capsys.readouterr().out
+    assert "build_provenance" in output
+    assert "NOTE" not in output
