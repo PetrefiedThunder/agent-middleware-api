@@ -1238,11 +1238,14 @@
       if (game.over) return;
 
       var turn = 2.1 * dt;
+      // Turning reads only the direction flags. A drag sets those through the
+      // shell's swipe latch, so touch steers without this cabinet knowing
+      // anything about pointers — and, crucially, a hovering mouse does not
+      // steer at all. Treating pointerX as a turn RATE (which an earlier
+      // version did) spins the camera forever the moment the pointer rests
+      // anywhere off-centre, including on a desktop with no button held.
       if (input.left) cam.angle -= turn;
       if (input.right) cam.angle += turn;
-      // A pointer drag steers: the overlay is reachable on a phone, where
-      // there are no arrow keys at all.
-      if (input.pointerX != null) cam.angle += (input.pointerX - W / 2) * 0.004 * dt * 60;
       cam.dirX = Math.cos(cam.angle);
       cam.dirY = Math.sin(cam.angle);
 
@@ -1414,9 +1417,10 @@
       if (game.over) return;
 
       var turn = 2.4 * dt;
+      // Direction flags only — see the note in BLAST RADIUS on why a pointer
+      // position must not drive a camera.
       if (input.left) cam.angle -= turn;
       if (input.right) cam.angle += turn;
-      if (input.pointerX != null) cam.angle += (input.pointerX - W / 2) * 0.004 * dt * 60;
       cam.dirX = Math.cos(cam.angle);
       cam.dirY = Math.sin(cam.angle);
 
@@ -2389,8 +2393,13 @@
         if (invuln > 0) return;
         // A "high" spike hangs from above: it is the one you duck rather than
         // jump, so the two controls both have a reason to exist.
+        // A standing runner occupies GROUND-16..GROUND and a ducking one
+        // GROUND-8..GROUND, so a hanging spike has to reach below GROUND-16
+        // to threaten the first and stop above GROUND-8 to spare the second.
+        // At the original 26 it ended at GROUND-18 and cleared a standing
+        // runner entirely, which made ducking decorative.
         var sy = s.high ? GROUND - 44 : GROUND - s.h;
-        var sh = s.high ? 26 : s.h;
+        var sh = s.high ? 32 : s.h;
         if (s.x > 16 + 10 || s.x + s.w < 16 - 6) return;
         if (ry + rh < sy || ry > sy + sh) return;
         invuln = 1.2;
@@ -2420,7 +2429,7 @@
 
       spikes.forEach(function (s) {
         ctx.fillStyle = ink.danger;
-        if (s.high) ctx.fillRect(s.x, GROUND - 44, s.w, 26);
+        if (s.high) ctx.fillRect(s.x, GROUND - 44, s.w, 32);
         else ctx.fillRect(s.x, GROUND - s.h, s.w, s.h);
       });
 
@@ -2866,6 +2875,15 @@
     swipeFrom = null;
     pointerHeld = false;
     if (!keyFire && pointerFireSteps <= 0) input.fire = false;
+    // Lifting the pointer ends the gesture, so both the aim and any direction
+    // the swipe latched have to go with it. Previously only pointerleave
+    // cleared the aim and nothing ever cleared the latch, which left a
+    // direction held down after the finger was gone — harmless on the
+    // cabinets that latch a heading of their own, but on a first-person
+    // cabinet it is a camera that never stops turning.
+    input.pointerX = null;
+    input.pointerY = null;
+    clearDirections();
   }
 
   /* Run once per simulation step, before the cabinet reads input, so a tap's
