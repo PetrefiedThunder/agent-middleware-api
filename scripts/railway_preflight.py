@@ -449,6 +449,29 @@ def check_live(
     if body.get("enable_proof_surfaces"):
         failures.append("enable_proof_surfaces=true — must be false in production")
 
+    # Build provenance: did this image come through the documented release
+    # path? Only `railway up --build-arg COMMIT_SHA=...` bakes the stamp, so
+    # anything other than "stamped" means the running image was built by
+    # something else — a Railway rebuild from a connected GitHub source, for
+    # instance, which a plain variable write is enough to trigger.
+    #
+    # An absent key means the deployed image predates this field rather than
+    # that provenance is good, so it is reported and not silently passed. It is
+    # deliberately not a hard failure: that would fail every deploy of an older
+    # image. Once a stamped release is out, the key is always present.
+    provenance = body.get("build_provenance")
+    if provenance is None:
+        print(
+            "[preflight] NOTE build_provenance absent from /health/dependencies "
+            "— deployed image predates this field; provenance not verified"
+        )
+    elif provenance != "stamped":
+        failures.append(
+            f"build_provenance={provenance!r} — the running image was not built "
+            "by `railway up --build-arg COMMIT_SHA=...`; it did not come "
+            "through the documented release path"
+        )
+
     # Key presence, not truthiness: a *published* null must still fail the
     # exactly-false requirement below — only a genuinely absent key (the
     # post-#348 public projection) earns the discovery fallback.
