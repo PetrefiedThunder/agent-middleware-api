@@ -166,7 +166,12 @@ the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
   and binds two identifiers, not three. Demonstrate the three-way binding only
   when running the partner's configured upstream tool. Claiming it off the local
   proof is the exact overclaim a partner engineer will check first.
-- If asked about crashes: "For the configured upstream tool, if we die after the
+- If asked about a crash on **this local demo tool**: "An incomplete idempotency
+  record stays in progress — the replay you just saw only returns a receipt once
+  the record is terminal. If a crash could have landed the side effect, the
+  record goes to operator review and is deliberately never retried. We would
+  rather block one call than fire it twice."
+- If asked about crashes **on the configured upstream tool**: "If we die after the
   request leaves the gateway but before the acknowledgement arrives, that becomes
   a durable `delivery_uncertain` state. The charge stands and we never redispatch,
   because we can no longer prove the call did not land. We would rather be

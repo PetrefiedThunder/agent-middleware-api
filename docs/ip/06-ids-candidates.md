@@ -98,7 +98,7 @@ the settlement mechanisms and treat the receipt mechanisms as dependent claims.
 
 | # | Reference | Relevance | Reaches |
 | --- | --- | --- | --- |
-| 22a | *Notarized Agents: Receiver-Attested Confidential Receipts for AI Agent Actions* ("Sello"), [arXiv:2606.04193](https://arxiv.org/html/2606.04193) | **The single most useful reference for counsel in this batch, as a map rather than as art.** A preprint proposing receiver-side signing (COSE_Sign1 over an HPKE-encrypted payload, published to public transparency logs) whose related-work section surveys **eight** receipt protocols. Its own §8.4 names coupling to payment/settlement as future work and **explicitly unimplemented**. Give counsel this paper first — it enumerates most of the rows below and is a dated printed publication. | 3, 4 |
+| 22a | *Notarized Agents: Receiver-Attested Confidential Receipts for AI Agent Actions* ("Sello"), [arXiv:2606.04193](https://arxiv.org/html/2606.04193) | **The single most useful reference for counsel in this batch, as a map rather than as art.** A preprint proposing receiver-side signing (COSE_Sign1 over an HPKE-encrypted payload, published to public transparency logs) whose related-work section surveys the receipt protocols listed at 22b-22g below plus `draft-farley-acta` (item 9a). Its own text claims eight; seven distinct names were extracted, so **counsel should read the table directly rather than rely on a count**. Its own §8.4 names coupling to payment/settlement as future work and **explicitly unimplemented**. Give counsel this paper first — it enumerates most of the rows below and is a dated printed publication. | 3, 4 |
 | 22b | [Pipelock / PipeLab](https://github.com/luckyPipewrench/pipelock) | Agent firewall emitting **mediator-signed Ed25519 action receipts**, hash-chained and offline-verifiable, from an out-of-process sidecar. Also publishes a signer-position taxonomy (in-process / operator-mediator / third-party witness). Security and egress centre of gravity; no wallet, budget, or charge-once semantics. | 3, 4 |
 | 22c | Signet | Bilateral co-signed receipts; encryption key not separated from the signing identity; no transparency-log integration. **Known only through 22a's related-work table — no primary source located.** Counsel should locate the primary before relying on or distinguishing it. | *reported* 3, 4 — **not established**, and excluded from the blanket statement above until a primary source is read |
 | 22d | Agent Passport System (APS), attributed to T. Pidlisnyi, 2025 | Four receipt types — ActionReceipt, AuthorityBoundaryReceipt, CustodyReceipt, ContestabilityReceipt — signed by the executing agent. The **AuthorityBoundaryReceipt** is worth reading against the permit-scope claims. Via 22a. | 3, 4 |
@@ -127,7 +127,15 @@ conveniently supporting the section it appears in.
 
 **Consequences, in order of seriousness.**
 
-1. **Do not place these on an IDS.** Disclosing a reference that does not say
+1. **Verify each number against USPTO, then let counsel decide disclosure.**
+   The resolutions above come from Google Patents, not USPTO, and a USPTO search
+   for **US 2024/0034567 A1** returned no record at all — so treat the
+   alternate-assignee mapping as *indicative*, not established, until each
+   number, title, assignee and date is confirmed against USPTO. Note also that
+   under **37 CFR 1.97(h)** an IDS is not an admission that a listed reference
+   is material or is prior art, so a metadata error is not by itself a reason a
+   number can never be submitted. What is clear is narrower: do not disclose
+   these *as described here*, because disclosing a reference that does not say
    what the disclosure claims it says is worse than omitting it — it misleads
    the examiner and wastes prosecution on art that does not exist.
 2. **The threat assessment built on them is void.** The data room rates the

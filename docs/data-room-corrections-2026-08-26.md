@@ -121,9 +121,10 @@ costs more than the breadth it buys — the same reasoning
 [`../WEDGE.md`](../WEDGE.md) already applies to uniqueness superlatives.
 
 Keep the survey-scoped form — "no project we surveyed documents this," never
-"nobody does." An independent survey of eight receipt protocols (arXiv:2606.04193)
-found none binding receipts to settlement, which is better third-party support
-than a superlative.
+"nobody does." An independent survey (arXiv:2606.04193) found none of the receipt
+protocols it names binding receipts to settlement. That is receipt-layer
+context, not a test of the debit/idempotency binding — useful, but do not cite
+it as proof of the §4 rows.
 
 ## C3 — "Independent validation" is the stranger test, and the room's own rules say so
 

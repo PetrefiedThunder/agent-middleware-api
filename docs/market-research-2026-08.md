@@ -129,8 +129,8 @@ What survives is narrower and, usefully, matches
 | Compliance framework mapping | ❌ (deliberate) | ❌ | ❌ | ❌ | ✅ |
 
 Read down the bolded rows. Several projects have receipts; several have
-budgets; several have idempotency. The cell **no surveyed project is documented
-as occupying** is that *one accepted idempotency key produces at most one ledger
+budgets; several have idempotency. The cell **no other surveyed project is
+documented as occupying** (this system occupies it, which is the point) is that *one accepted idempotency key produces at most one ledger
 debit, with a receipt on every path that finalizes or reconciles, and the record
 linking them is a single persisted chain*
 — plus the refusal to silently redispatch when the outcome is genuinely unknown
@@ -408,7 +408,7 @@ answer to a buyer asking why they should trust our signature.
 
 ### 9.3 Dated re-test of the §4 differentiating rows
 
-Re-tested against Microsoft (shipped), Pipelock, Signet, and the eight protocols
+Re-tested against Microsoft (shipped), Pipelock, Signet, and the protocols
 surveyed in §9.4. **Both bolded §4 rows still hold as of 2026-08-25:**
 
 - **Debit bound to the idempotency record** — no system we reviewed *documents*
@@ -439,16 +439,19 @@ premise that "the actor is not a reliable narrator of its own actions" — with
 COSE_Sign1 over an HPKE-encrypted payload and public transparency logs.
 
 Its value here is less the proposal than its **related-work table**, which
-enumerates eight receipt protocols and is the most complete map of this category
+enumerates the receipt protocols named below and is the most complete map of
+this category
 found to date: Signet, Pipelock, Agent Passport System, `draft-farley-acta`
 (already tracked at §8.1), `draft-nivalto-agentroa`, Agent Receipts, and
 Attested Intelligence.
 
 Two consequences. First, the receipt category is materially larger than §3
 records — this doubles the known set. Second, and more useful: **an independent
-survey of eight protocols found none binding receipts to settlement.** Sello's
+survey found none of the protocols it names binding receipts to settlement.** Sello's
 own claimed novelty is receiver-side signing plus transparency logs, not
-economics. That is stronger third-party support for the §4 rows than our own
+economics. That is useful independent context on the *receipt* layer — it is not
+evidence for the §4 debit/idempotency rows, which it does not test. Read it as a
+map of the category, not as support for our own
 sweep could produce.
 
 **Verification: Verified** — paper read directly, 2026-08-25. Note it is a
