@@ -105,10 +105,14 @@ surveyed documents this," never "nobody does."
 still holds — but the neighbourhood got more crowded, not less. Microsoft's
 `agent-governance-toolkit` now **ships** offline-verifiable receipts (Ed25519
 over RFC 8785 JCS, hash-chained), where §3 had recorded only a proposal;
-Pipelock ships mediator-signed receipts; and an independent survey of eight
-receipt protocols (arXiv:2606.04193) found **none** binding receipts to
-settlement. Treat signed offline receipts as fully commoditized from that date.
-This is a re-test on a date, not a permanent result.
+Pipelock ships mediator-signed receipts; and an independent survey
+(arXiv:2606.04193) compares the receipt protocols it names on receiver-side
+signing, encryption, transparency logs and discovery — and treats coupling to
+settlement as an open opportunity rather than a property any of them has. Useful
+receipt-layer context; it does not itself test the debit/idempotency binding.
+
+Treat signed offline receipts as fully commoditized from that date. This is a
+re-test on a date, not a permanent result.
 
 Lead with the debit. Cite the signature as supporting evidence, never as the
 differentiator, and never as a superlative — see **What Not To Claim Yet**.

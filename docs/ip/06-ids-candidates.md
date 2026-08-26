@@ -79,7 +79,7 @@ mechanisms, so all are IDS candidates.
 | 20b | [jamjet-labs/jamjet](https://github.com/jamjet-labs/jamjet) | **Enforces budgets** and emits signed receipts with a hash-chained `previousReceiptHash` plus pre/post-execution signatures. Reaches mechanism 1 (budget enforcement in an agent gateway) and mechanisms 3–4. |
 | 20c | [sangaraju1988/latch](https://github.com/sangaraju1988/latch) | Python library pairing **idempotency with a budget guardrail**, plus circuit breaker and saga/compensation, with a Redis backend for cross-process idempotency. Closest to Set B; note compensation is a different answer from crash-state classification. No signed receipts. |
 | 20d | [TraceAgent](https://www.traceagent.dev/) | Append-only SHA-256 hash-chained receipts. **Verified only that receipts are hash-chained**; issuer signature and offline verifiability are *unverified*. Do not characterize it as offline-verifiable without a primary source. |
-| 20e | [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | **Upgraded 2026-08-25 — no longer a proposal; it ships.** Offline-verifiable decision receipts: **Ed25519 signatures over RFC 8785 (JCS) canonical payloads**, hash-chained via `previousReceiptHash`, verifiable without operator infrastructure ([Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/tutorials/33-offline-verifiable-receipts.md), [issue #1499](https://github.com/microsoft/agent-governance-toolkit/issues/1499)). **Now among the most material references in this package**: it reaches mechanisms 3 and 4 with the same primitives this repo uses, and it is backed by a large vendor with resources to prosecute. **Establish the publication date of the tutorial and of the merged implementation** — it bears directly on §102(a)(1). Carries **no** ledger, spend, or idempotency construct, so on the materials read it does not reach mechanisms 1 or 2. |
+| 20e | [microsoft/agent-governance-toolkit](https://github.com/microsoft/agent-governance-toolkit) | **Upgraded 2026-08-25 — no longer a proposal; it ships.** Offline-verifiable decision receipts: **Ed25519 signatures over RFC 8785 (JCS) canonical payloads**, hash-chained via `previousReceiptHash`, verifiable without operator infrastructure ([Tutorial 33](https://github.com/microsoft/agent-governance-toolkit/blob/main/docs/tutorials/33-offline-verifiable-receipts.md), [issue #1499](https://github.com/microsoft/agent-governance-toolkit/issues/1499)). **Now among the most material references in this package**: it reaches mechanisms 3 and 4 using the same Ed25519 signature algorithm and the same receipt-and-hash-chain concepts (its JCS canonicalization is related to, but not identical with, this repo's `awi-canonical-json/1` — see item 7), and it is backed by a large vendor with resources to prosecute. **Establish the publication date of the tutorial and of the merged implementation** — it bears directly on §102(a)(1). Carries **no** ledger, spend, or idempotency construct, so on the materials read it does not reach mechanisms 1 or 2. |
 
 ### C.1a Receipt protocols surfaced 2026-08-25
 
@@ -109,11 +109,14 @@ the settlement mechanisms and treat the receipt mechanisms as dependent claims.
 ### C.1b Fabricated citations — do not disclose, and do not rely on
 
 An acquisition-data-room draft (2026-08-26, external compilers) cited three
-patents as close-watch prior art, two of them rated a **HIGH** threat. **All
-three were resolved against Google Patents on 2026-08-25. Every one is a real
-patent number attached to an invented title and assignee.**
+patents as close-watch prior art, two of them rated a **HIGH** threat. **All three were looked up against Google Patents on 2026-08-25, and each
+resolves to a real patent in an unrelated field — none matching the cited title
+or assignee.** Treat the mappings below as indicative, not established: they come
+from Google Patents rather than USPTO, and a USPTO search for US 2024/0034567 A1
+returned no record at all. What is already clear is that the citations do not
+support what the draft says they support.
 
-| Cited as | What that number actually is |
+| Cited as | Google Patents result — **indicative, pending USPTO confirmation** |
 | --- | --- |
 | **US 2024/0089012 A1** — Anthropic, "Cryptographic proof of API consumption" (rated HIGH) | **Turck Holding GmbH**, *"Signal transmission system for transmitting a main process variable and further data between a field device and a superordinate unit."* Industrial automation, HART protocol over optocouplers. Filed 2023-09-06, published 2024-03-14. |
 | **US 2024/0034567 A1** — Skyfire, "Receipt-based API billing for AI agents" (rated HIGH) | **Duecker Group GmbH**, *"Angled transfer with roller chain."* A roller-conveyor mechanism. App. 18/032,225, published 2024-02-01. |
@@ -158,9 +161,10 @@ company in the adjacent economic lane — a payment network for AI agents, with
 programmable wallets, verified agent identity (KYA), and the KYAPay protocol.
 That is closer to the *economic* claims here than anything currently in
 [`../market-research-2026-08.md`](../market-research-2026-08.md) §3, which does
-not track it at all. No published filings were located, which is expected: the
-company launched publicly in August 2024, so applications filed around launch
-would only begin publishing from roughly February 2026. Counsel should run a
+not track it at all. **No assignee search has been run, so Skyfire's filing
+status is unassessed — not a negative result.** Publication timing turns on each
+application's **earliest priority date**, not on the company's August 2024
+public launch, so the launch date establishes nothing about what is on file. Counsel should run a
 proper assignee search on Skyfire Systems, Inc. and on Nevermined and Payman —
 by assignee, not by keyword — rather than treating the fabricated cite above as
 having covered it.

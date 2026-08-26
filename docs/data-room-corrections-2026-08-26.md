@@ -288,7 +288,7 @@ naming the test that covers it. All of the below run in the
 | 5 | After dispatch, before acknowledgement | `test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain`; `test_kill_after_remote_effect_never_redispatches_the_effect` |
 | 7 | After durable dispatch commit | `test_kill_after_remote_effect_never_redispatches_the_effect` |
 | 8 | After charge commit, before receipt signing | `test_receipt_commit_survives_worker_death_and_reconciles` |
-| 10 | Client retries after success | `test_delivery_uncertain_replay_never_redispatches` (replay returns the stored terminal receipt, `dispatch_count == 1`) |
+| 10 | Client retries after a terminal outcome | `test_kill_after_remote_effect_never_redispatches_the_effect` — its `_assert_replayed_terminal` step replays the same receipt and asserts the upstream snapshot is unchanged. (**Not** `test_delivery_uncertain_replay_never_redispatches`: that lives in `tests/test_delivery_uncertain_replay.py`, which the `postgres_permit_concurrency` job does not run.) |
 | — | Pre-dispatch crash (row 3/4 boundary) | `test_kill_between_debit_and_dispatch_refunds_without_dispatching` |
 | — | Local post-effect crash | `test_post_side_effect_crash_requires_review_without_redispatch` |
 

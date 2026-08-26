@@ -373,7 +373,10 @@ proposal for independently verifiable compliance receipts." **That row is now
 stale.** The toolkit ships offline-verifiable decision receipts:
 
 - **Ed25519 signatures over RFC 8785 (JCS) canonical payloads** — the same
-  algorithm and the standardized form of the canonicalization this repo uses.
+  signature algorithm this repo uses. The canonicalization is *related but not
+  identical*: this repo's `awi-canonical-json/1` deliberately differs from JCS on
+  decimal normalization and datetime coercion (see `ip/06-ids-candidates.md`
+  item 7). Do not describe the signing inputs as interchangeable.
 - **Hash-chained** via `previousReceiptHash`, for insertion/deletion detection.
 - Verified without access to operator infrastructure. A `covenantHash` binds the
   receipt to the policy in force — note this field is defined in the toolkit's

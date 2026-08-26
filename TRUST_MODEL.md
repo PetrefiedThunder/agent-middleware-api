@@ -43,8 +43,9 @@ persisted chain — and **exactly one receipt on every path that finalizes or
 reconciles**. The dispatch half of that guarantee is enforced by a durable
 dispatch state machine that exists **only on the upstream path**; local governed
 tools have no attempt row and fail closed into manual review instead (see
-below), so for them the debit and receipt guarantees hold but the dispatch state
-machine does not. The ledger entry carries
+below), so for them the at-most-one debit guarantee still applies, but a receipt
+exists only on a finalized or reconciled path — a post-effect crash can leave
+the debit recorded with no receipt, pending manual review (see below). The ledger entry carries
 the idempotency record's identity as its `operation_key` under a uniqueness
 constraint, so a duplicate debit cannot be written even if two processes race.
 Replaying the same request under the same accepted key returns the original
@@ -110,7 +111,11 @@ binding is what this signature adds.
 (`GET /v1/receipts/{id}/portable`) carries the `signing_input`, the signature,
 and a key reference — not the ledger or dispatch records themselves. A holder
 with no credential here can therefore verify that *this issuer signed these
-identifiers together and nothing has been altered since*. They cannot
+identifiers together and nothing has been altered since* — provided they already
+hold the trusted key set. The bundle carries a key *reference*, not the key:
+`verify_bundle` takes a caller-supplied key set, normally fetched once from the
+unauthenticated `/.well-known/trust-keys.json` and pinned. Offline means no call
+to the issuer at verification time, not zero setup. They cannot
 independently confirm that the named ledger entry carries the matching
 `operation_key`, because that record does not travel with the bundle.
 

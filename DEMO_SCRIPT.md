@@ -141,8 +141,10 @@ the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 
 - "One agent action, at most one debit — no matter how many times the agent
   retries under the same accepted idempotency key. That is the whole product in one
-  sentence." (A retry that mints a *new* key is a new operation and is charged
-  as one; the key is the unit of deduplication.)
+  sentence." (A retry that mints a *new* key is a new operation, evaluated under
+  its own permit, budget and crash outcome — it may be charged, denied, or
+  refunded like any other. The key is the unit of deduplication, not a promise
+  of a charge.)
 - "Watch the wallet. This call charges it exactly once, and the ledger entry is
   keyed to the idempotency record, so a duplicate debit cannot be written even
   under a race."
