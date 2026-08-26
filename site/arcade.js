@@ -1073,16 +1073,24 @@
         var top = Math.floor(H / 2 - size / 2 + (p.s.lift || 0) / p.ty);
         var left = Math.floor(screenX - size / 2);
 
+        var visible = 0;
         for (var x = left; x < left + size; x += COLUMN_W) {
           if (x < 0 || x >= W) continue;
           if (zbuf[x] != null && p.ty >= zbuf[x]) continue;
+          visible += 1;
           ctx.fillStyle = p.s.color;
           ctx.fillRect(x, Math.max(0, top), COLUMN_W, Math.min(H - Math.max(0, top), size));
         }
 
         // A label band, so the thing you are shooting says what it is. The
         // whole point of these cabinets is the vocabulary.
-        if (p.s.label && p.ty < 7 && size > 22) {
+        //
+        // Gated on a column of the sprite actually having survived the depth
+        // test. The body columns are rejected against zbuf individually, but
+        // the label was painted unconditionally — so a call standing behind a
+        // wall announced itself through it, which both looks broken and gives
+        // away a target the corridor is supposed to be hiding.
+        if (visible > 0 && p.s.label && p.ty < 7 && size > 22) {
           ctx.fillStyle = ink.bg;
           ctx.fillRect(left, top - 9, size, 8);
           ctx.fillStyle = p.s.color;
@@ -2624,16 +2632,22 @@
     }
   }
 
+  /* Returns "" for a run that did not beat the stored best, "stored" when the
+     new best was written, and "unstored" when it was a best but the write
+     failed. The three are distinct because the run-complete screen tells the
+     visitor their score was kept, and saying that after a quota error or in a
+     window with storage blocked is simply untrue — the reload that loses it
+     is coming either way, and the honest line costs nothing. */
   function recordBest(id, score) {
     var all = loadBest();
-    if (typeof all[id] === "number" && all[id] >= score) return false;
+    if (typeof all[id] === "number" && all[id] >= score) return "";
     all[id] = score;
     try {
       window.localStorage.setItem(BEST_KEY, JSON.stringify(all));
     } catch (error) {
-      // Full quota or blocked storage. The run still happened.
+      return "unstored";
     }
-    return true;
+    return "stored";
   }
 
   function inkPalette() {
@@ -3060,6 +3074,13 @@
       button.hidden = !match;
       if (match) shown += 1;
     });
+    // Repick immediately rather than letting the running demo finish. It draws
+    // from the filtered pool, so leaving it alone shows a PUZZLE cabinet under
+    // an FPS-only filter until it happens to die — and under reduced motion,
+    // where no loop is running to cycle it, indefinitely.
+    pickAttract();
+    drawAttract();
+
     announce(
       shown + (shown === 1 ? " cabinet" : " cabinets") +
       (genre === "ALL" ? " available." : " in " + genre + ".")
@@ -3279,13 +3300,19 @@
 
     var heading = el("p", "arcade-over-heading", "RUN COMPLETE — " + current.name);
     nodes.over.appendChild(heading);
-    var improved = recordBest(current.id, game.score);
+    var bestState = recordBest(current.id, game.score);
     nodes.over.appendChild(
       el("p", "arcade-over-score", game.score + " RECEIPTS SCORED. NONE OF THEM COUNT.")
     );
-    if (improved) {
+    if (bestState) {
       nodes.over.appendChild(
-        el("p", "arcade-over-best", "NEW BEST ON " + current.name + " — STORED IN THIS BROWSER ONLY")
+        el(
+          "p",
+          "arcade-over-best",
+          bestState === "stored"
+            ? "NEW BEST ON " + current.name + " — STORED IN THIS BROWSER ONLY"
+            : "NEW BEST ON " + current.name + " — NOT SAVED, STORAGE IS UNAVAILABLE"
+        )
       );
     }
     nodes.over.appendChild(buildReceipt(current, game.score, random));
