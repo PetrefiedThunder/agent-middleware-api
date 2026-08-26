@@ -483,9 +483,16 @@ track it. Nevermined and Payman occupy adjacent ground;
 [`settlement-rails.md`](settlement-rails.md) treats them as settlement rails to
 integrate rather than as competitors, which may still be right.
 
-**Verification: Verified** that the company and product exist (announcements read
-2026-08-25). **Not assessed:** whether any of them binds spend to an idempotency
-record or defines crash semantics — the question §4 actually turns on.
+**Verification: Verified** that the company and product exist — primary
+announcements read 2026-08-25:
+[launch, 2024-08-21](https://www.businesswire.com/news/home/20240821247203/en/Introducing-Skyfire-Payment-Rails-for-AI);
+[enterprise GA, 2025-03-06](https://www.businesswire.com/news/home/20250306938250/en/Skyfire-Exits-Beta-with-Enterprise-Ready-Payment-Network-for-AI-Agents);
+[KYAPay, 2025-06-26](https://www.businesswire.com/news/home/20250626772489/en/Skyfire-Launches-Open-KYAPay-Protocol-With-Agent-Checkout);
+[Visa demo, 2025-12-18](https://www.businesswire.com/news/home/20251218520399/en/Skyfire-Demonstrates-Secure-Agentic-Commerce-Purchase-Using-the-KYAPay-Protocol-and-Visa-Intelligent-Commerce).
+**Open, not concluded:** no assignee search has been run, so "no published
+filings" is *not searched*, not *not found*. **Not assessed:** whether any of
+these binds spend to an idempotency record or defines crash semantics — the
+question §4 actually turns on.
 
 Two reasons this belongs on the record rather than in a table row yet. First, it
 is genuinely a different category — payment rails, not a governance boundary —

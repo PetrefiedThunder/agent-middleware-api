@@ -74,11 +74,12 @@ This does not change the wedge — it sharpens which half of it to lead with.
 The row no surveyed project is *documented* as occupying is the **economic**
 one:
 
-> One accepted idempotency key produces **at most one** gateway dispatch and
-> **at most one** ledger debit, linked by a single persisted chain, with a
-> receipt on every path that finalizes or reconciles — and, **for the configured
-> upstream MCP tool**, a genuinely ambiguous post-dispatch outcome becomes a
-> distinct receipted state rather than a silent redispatch.
+> One accepted idempotency key produces **at most one** gateway dispatch **to
+> the configured upstream MCP tool** and **at most one** ledger debit, linked by
+> a single persisted chain, with a receipt on every path that finalizes or
+> reconciles — and, on that same upstream path, a genuinely ambiguous
+> post-dispatch outcome becomes a distinct receipted state rather than a silent
+> redispatch.
 
 Two qualifications that must travel with that sentence.
 

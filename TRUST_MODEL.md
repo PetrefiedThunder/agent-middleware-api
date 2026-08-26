@@ -37,12 +37,14 @@ This is the primitive the rest of the model exists to protect, and the one that
 distinguishes this system — signed receipts do not (see
 [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now").
 
-One accepted idempotency key produces **at most one gateway dispatch and at most
-one ledger debit**, linked by a single persisted chain — and **exactly one
-receipt on every path that finalizes or reconciles**. The durable dispatch state
-machine that backs the dispatch half of this covers the **configured upstream
-MCP tool**; local governed tools have no attempt row and fail closed into manual
-review instead (see below). The ledger entry carries
+One accepted idempotency key produces **at most one gateway dispatch to the
+configured upstream MCP tool, and at most one ledger debit**, linked by a single
+persisted chain — and **exactly one receipt on every path that finalizes or
+reconciles**. The dispatch half of that guarantee is enforced by a durable
+dispatch state machine that exists **only on the upstream path**; local governed
+tools have no attempt row and fail closed into manual review instead (see
+below), so for them the debit and receipt guarantees hold but the dispatch state
+machine does not. The ledger entry carries
 the idempotency record's identity as its `operation_key` under a uniqueness
 constraint, so a duplicate debit cannot be written even if two processes race.
 Replaying the same request under the same accepted key returns the original

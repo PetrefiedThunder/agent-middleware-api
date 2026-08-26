@@ -139,8 +139,8 @@ Lead with the debit. Signed receipts ship in several competing products now, so
 a track that opens on the signature opens on the least differentiated thing in
 the demo. See [`WEDGE.md`](WEDGE.md) §"Signed receipts are table stakes now".
 
-- "One agent action, one debit — no matter how many times the agent retries
-  under the same accepted idempotency key. That is the whole product in one
+- "One agent action, at most one debit — no matter how many times the agent
+  retries under the same accepted idempotency key. That is the whole product in one
   sentence." (A retry that mints a *new* key is a new operation and is charged
   as one; the key is the unit of deduplication.)
 - "Watch the wallet. This call charges it exactly once, and the ledger entry is

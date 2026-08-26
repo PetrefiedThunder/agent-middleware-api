@@ -278,9 +278,26 @@ and [32910910159](https://github.com/PetrefiedThunder/agent-middleware-api/actio
 2026-08-25). Cite a job URL, never the collection count, when this is put in
 front of a buyer.
 
+**Row-to-test mapping.** Do not mark a failure-state row PROVED IN CI without
+naming the test that covers it. All of the below run in the
+`postgres_permit_concurrency` job cited above:
+
+| Matrix row | Boundary | Test |
+| --- | --- | --- |
+| 5 | After dispatch, before acknowledgement | `test_kill_after_dispatch_checkpoint_is_charged_delivery_uncertain`; `test_kill_after_remote_effect_never_redispatches_the_effect` |
+| 7 | After durable dispatch commit | `test_kill_after_remote_effect_never_redispatches_the_effect` |
+| 8 | After charge commit, before receipt signing | `test_receipt_commit_survives_worker_death_and_reconciles` |
+| 10 | Client retries after success | `test_delivery_uncertain_replay_never_redispatches` (replay returns the stored terminal receipt, `dispatch_count == 1`) |
+| — | Pre-dispatch crash (row 3/4 boundary) | `test_kill_between_debit_and_dispatch_refunds_without_dispatching` |
+| — | Local post-effect crash | `test_post_side_effect_crash_requires_review_without_redispatch` |
+
+Rows 1, 2, 6 and 9 have **no** dedicated multiprocess test. Leave their empirical
+status as-is; a passing job URL is evidence for the rows named above and for no
+others.
+
 **Action.** Strike gap #4, move these tests into the evidence index, and mark
-Invariant 4's empirical status **PROVED IN CI** — citing a passing job run —
-rather than "Docker manual run,
+rows 5, 7, 8 and 10 plus Invariant 4 **PROVED IN CI** — citing both the job run
+and the row's test from the table above — rather than "Docker manual run,
 not in CI." The failure-state matrix's "Empirical Status" column needs the same
 correction for rows 5, 7, 8 and 10. Re-run the adversarial count against the
 tree the room actually describes.
