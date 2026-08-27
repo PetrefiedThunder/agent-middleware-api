@@ -14333,6 +14333,811 @@
     return game;
   }
 
+  /* ---- 89. BUBBLE QUEUE --------------------------------------------------
+
+     Fire matching entries into a descending queue; three of a kind detach.
+     The ceiling comes down on a timer, so a shot that does not clear anything
+     costs you twice. */
+  function cabinetBubbleQueue(random) {
+    var COLS = 10;
+    var CELL = 24;
+    var OX = (W - COLS * CELL) / 2;
+    var KINDS = 4;
+
+    var game = { id: "bubble-queue", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var rows, shot, aim, loaded, dropTimer, level, held;
+
+    function seed() {
+      rows = [];
+      for (var r = 0; r < 4; r += 1) {
+        var row = [];
+        for (var c = 0; c < COLS; c += 1) row.push(1 + Math.floor(random() * KINDS));
+        rows.push(row);
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      aim = 0;
+      shot = null;
+      loaded = 1 + Math.floor(random() * KINDS);
+      dropTimer = 10;
+      level = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+      seed();
+    };
+
+    function clearFrom(r, c, kind, seen) {
+      if (r < 0 || c < 0 || r >= rows.length || c >= COLS) return [];
+      var key = r + ":" + c;
+      if (seen[key] || rows[r][c] !== kind) return [];
+      seen[key] = true;
+      var out = [{ r: r, c: c }];
+      return out
+        .concat(clearFrom(r - 1, c, kind, seen))
+        .concat(clearFrom(r + 1, c, kind, seen))
+        .concat(clearFrom(r, c - 1, kind, seen))
+        .concat(clearFrom(r, c + 1, kind, seen));
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      dropTimer -= dt;
+
+      if (dropTimer <= 0) {
+        dropTimer = Math.max(4, 10 - level * 0.4);
+        var row = [];
+        for (var c = 0; c < COLS; c += 1) row.push(1 + Math.floor(random() * KINDS));
+        rows.unshift(row);
+        if (rows.length > 7) {
+          game.lives -= 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          seed();
+        }
+      }
+
+      if (input.left) aim -= 1.8 * dt;
+      if (input.right) aim += 1.8 * dt;
+      aim = clamp(aim, -1.1, 1.1);
+
+      if (shot) {
+        shot.x += Math.sin(aim) * 220 * dt;
+        shot.y -= 220 * dt;
+        if (shot.x < OX || shot.x > OX + COLS * CELL) shot.x = clamp(shot.x, OX, OX + COLS * CELL);
+        var landRow = Math.floor((shot.y - 20) / CELL);
+        if (shot.y <= 20 + rows.length * CELL) {
+          var col = clamp(Math.floor((shot.x - OX) / CELL), 0, COLS - 1);
+          var r = clamp(landRow, 0, rows.length - 1);
+          rows[r][col] = shot.kind;
+          var group = clearFrom(r, col, shot.kind, {});
+          if (group.length >= 3) {
+            group.forEach(function (g) {
+              rows[g.r][g.c] = 0;
+              bits.burst(OX + g.c * CELL + CELL / 2, 20 + g.r * CELL + CELL / 2, 4, { colour: "verify", speed: 50, life: 0.35 });
+            });
+            game.score += group.length * 15;
+            dropTimer = Math.min(dropTimer + group.length * 0.5, 12);
+            fx.flash("verify", 0.6);
+            if (rows.every(function (rw) { return rw.every(function (v) { return !v; }); })) {
+              level += 1;
+              game.score += 150;
+              seed();
+            }
+          } else {
+            dropTimer -= 1;
+          }
+          shot = null;
+          loaded = 1 + Math.floor(random() * KINDS);
+        }
+        return;
+      }
+
+      if (input.fire && !held) {
+        held = true;
+        shot = { x: W / 2, y: H - 30, kind: loaded };
+      } else if (!input.fire) held = false;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      var colours = ["grid", "verify", "brass", "danger", "bright"];
+      rows.forEach(function (row, r) {
+        row.forEach(function (v, c) {
+          if (!v) return;
+          ctx.fillStyle = ink[colours[v]] || ink.grid;
+          ctx.fillRect(OX + c * CELL + 2, 20 + r * CELL + 2, CELL - 4, CELL - 4);
+          ctx.fillStyle = ink.bg;
+          ctx.fillRect(OX + c * CELL + 7, 20 + r * CELL + 7, CELL - 14, CELL - 14);
+        });
+      });
+      bits.draw(ctx, ink);
+      if (shot) {
+        ctx.fillStyle = ink[colours[shot.kind]];
+        ctx.fillRect(Math.round(shot.x) - 8, Math.round(shot.y) - 8, 16, 16);
+      }
+      ctx.fillStyle = ink[colours[loaded]];
+      ctx.fillRect(W / 2 - 8, H - 26, 16, 16);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(W / 2 + Math.sin(aim) * 26) - 2, Math.round(H - 26 - Math.cos(aim) * 26) - 2, 4, 4);
+      drawBar(ctx, ink, 6, 6, W - 12, 4, dropTimer / 10, dropTimer < 3 ? "danger" : "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 6, H - 6);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + rows.length + " ROWS"; };
+    return game;
+  }
+
+  /* ---- 90. SCOPE MATCH ---------------------------------------------------
+
+     Fall through rotating rings, and only the sector matching your current
+     scope lets you pass. Your colour changes at every gate, so the read has
+     to be done again each time. */
+  function cabinetScopeMatch(random) {
+    var COLOURS = ["verify", "brass", "danger", "bright"];
+
+    var game = { id: "scope-match", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var ball, rings, scroll, speed, mine, held, passed;
+
+    function makeRing(y) {
+      return { y: y, spin: (random() < 0.5 ? -1 : 1) * (0.9 + random() * 1.1), angle: random() * Math.PI * 2, passed: false };
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      ball = { y: 40, vy: 0 };
+      rings = [];
+      for (var i = 0; i < 5; i += 1) rings.push(makeRing(160 + i * 150));
+      scroll = 0;
+      speed = 44;
+      mine = 0;
+      passed = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      speed = Math.min(120, 44 + passed * 2.4);
+
+      // One button: hold to slow the descent, release to drop.
+      ball.vy += (input.fire || input.up ? -260 : 300) * dt;
+      ball.vy = clamp(ball.vy, -90, 150);
+      scroll += Math.max(12, speed + ball.vy * 0.4) * dt;
+
+      rings.forEach(function (r) {
+        r.angle += r.spin * dt;
+        var sy = r.y - scroll;
+        if (r.passed || sy > 90) return;
+        r.passed = true;
+        passed += 1;
+        // The gate at the ball's x (centre) is the sector currently facing up.
+        var sector = Math.floor((((r.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 2)) % 4;
+        if (sector === mine) {
+          game.score += 30;
+          mine = Math.floor(random() * COLOURS.length);
+          fx.flash("verify", 0.6);
+          bits.burst(W / 2, 90, 8, { colour: COLOURS[mine], speed: 60, life: 0.4 });
+        } else {
+          game.lives -= 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      });
+
+      while (rings.filter(function (r) { return !r.passed; }).length < 4) {
+        var deepest = rings.reduce(function (a, r) { return Math.max(a, r.y); }, scroll);
+        rings.push(makeRing(deepest + 140 + random() * 60));
+      }
+      rings = rings.filter(function (r) { return r.y - scroll > -60; });
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      rings.forEach(function (r) {
+        var sy = r.y - scroll;
+        if (sy < -40 || sy > H + 40) return;
+        for (var s = 0; s < 4; s += 1) {
+          var a = r.angle + (s * Math.PI) / 2;
+          ctx.fillStyle = ink[COLOURS[s]];
+          ctx.fillRect(
+            Math.round(W / 2 + Math.cos(a) * 52) - 9,
+            Math.round(sy + Math.sin(a) * 18) - 5,
+            18, 10
+          );
+        }
+        ctx.fillStyle = ink.grid;
+        ctx.fillRect(W / 2 - 60, Math.round(sy) - 1, 120, 2);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink[COLOURS[mine]];
+      ctx.fillRect(W / 2 - 7, 84, 14, 14);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(W / 2 - 3, 88, 6, 6);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("GATES " + passed, 4, 12);
+      centreText(ctx, ink, "MATCH THE SECTOR TO YOUR SCOPE", H - 8, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "GATES " + passed; };
+    return game;
+  }
+
+  /* ---- 91. REORDER -------------------------------------------------------
+
+     A sliding tile puzzle over a sequence that has to end up in order. One
+     blank, four moves, and an optimal solution you will not find. */
+  function cabinetReorder(random) {
+    var SIZE = 4;
+    var CELL = 40;
+    var OX = (W - SIZE * CELL) / 2;
+    var OY = 46;
+
+    var game = { id: "reorder", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var tiles, blank, moves, level, held, message, messageAge;
+
+    function shuffle() {
+      tiles = [];
+      for (var i = 0; i < SIZE * SIZE; i += 1) tiles.push(i);
+      blank = SIZE * SIZE - 1;
+      // Shuffled by legal moves, so every board is solvable.
+      var steps = 30 + level * 12;
+      for (var s = 0; s < steps; s += 1) {
+        var options = neighbours(blank);
+        var pick = options[Math.floor(random() * options.length)];
+        tiles[blank] = tiles[pick];
+        tiles[pick] = SIZE * SIZE - 1;
+        blank = pick;
+      }
+      moves = 0;
+    }
+
+    function neighbours(i) {
+      var out = [];
+      var x = i % SIZE, y = Math.floor(i / SIZE);
+      if (x > 0) out.push(i - 1);
+      if (x < SIZE - 1) out.push(i + 1);
+      if (y > 0) out.push(i - SIZE);
+      if (y < SIZE - 1) out.push(i + SIZE);
+      return out;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      shuffle();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      // Arrows move a tile INTO the blank, which is the convention every
+      // player of this genre already has in their hands.
+      var from = -1;
+      if (input.left) from = blank % SIZE < SIZE - 1 ? blank + 1 : -1;
+      else if (input.right) from = blank % SIZE > 0 ? blank - 1 : -1;
+      else if (input.up) from = blank + SIZE < SIZE * SIZE ? blank + SIZE : -1;
+      else if (input.down) from = blank - SIZE >= 0 ? blank - SIZE : -1;
+      if (from < 0) { fx.shake(2); return; }
+
+      tiles[blank] = tiles[from];
+      tiles[from] = SIZE * SIZE - 1;
+      blank = from;
+      moves += 1;
+
+      var solvedIt = tiles.every(function (v, i) { return v === i; });
+      if (solvedIt) {
+        level += 1;
+        game.score += Math.max(60, 400 - moves * 4);
+        message = "IN ORDER — LEVEL " + level;
+        messageAge = 0;
+        fx.flash("verify", 1);
+        shuffle();
+      } else if (moves > 160 + level * 30) {
+        game.lives -= 1;
+        message = "OUT OF PATIENCE";
+        messageAge = 0;
+        fx.shake(8);
+        if (game.lives <= 0) { game.over = true; return; }
+        shuffle();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "PUT THE SEQUENCE BACK IN ORDER", 24, "dim", 7);
+      tiles.forEach(function (v, i) {
+        if (v === SIZE * SIZE - 1) return;
+        var x = OX + (i % SIZE) * CELL;
+        var y = OY + Math.floor(i / SIZE) * CELL;
+        ctx.fillStyle = v === i ? ink.verify : ink.wall[1];
+        ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+        ctx.font = '10px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.bg;
+        ctx.fillText(String(v + 1), x + CELL / 2 - 1, y + CELL / 2);
+        ctx.textAlign = "left";
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("MOVES " + moves, 6, 16);
+      ctx.fillText("LEVEL " + level, W - 66, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · MOVES " + moves; };
+    return game;
+  }
+
+  /* ---- 92. BREAKER -------------------------------------------------------
+
+     A paddle, a ball, and a wall of deprecated endpoints. The twist over the
+     original is that some bricks respawn: a deprecation nobody finished is
+     back next release. */
+  function cabinetBreaker(random) {
+    var COLS = 10;
+    var ROWS = 5;
+    var BW = 30;
+    var BH = 14;
+    var OX = (W - COLS * BW) / 2;
+
+    var game = { id: "breaker", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var paddle, ball, bricks, level, combo;
+
+    function seed() {
+      bricks = [];
+      for (var r = 0; r < ROWS; r += 1) {
+        for (var c = 0; c < COLS; c += 1) {
+          bricks.push({
+            x: OX + c * BW,
+            y: 30 + r * BH,
+            alive: true,
+            zombie: random() < Math.min(0.28, 0.06 + level * 0.03),
+            timer: 0
+          });
+        }
+      }
+    }
+
+    function serve() {
+      ball = { x: W / 2, y: H - 40, vx: (random() - 0.5) * 90, vy: -150 };
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      paddle = { x: W / 2, w: 52 };
+      level = 1;
+      combo = 0;
+      fx.reset();
+      bits.clear();
+      seed();
+      serve();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      var speed = 168 * dt;
+      if (input.left) paddle.x -= speed;
+      if (input.right) paddle.x += speed;
+      if (input.pointerX != null) paddle.x = input.pointerX;
+      paddle.x = clamp(paddle.x, paddle.w / 2, W - paddle.w / 2);
+
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      if (ball.x < 4) { ball.x = 4; ball.vx = Math.abs(ball.vx); }
+      if (ball.x > W - 4) { ball.x = W - 4; ball.vx = -Math.abs(ball.vx); }
+      if (ball.y < 14) { ball.y = 14; ball.vy = Math.abs(ball.vy); }
+
+      if (ball.y > H - 26 && ball.y < H - 18 && Math.abs(ball.x - paddle.x) < paddle.w / 2 + 3) {
+        ball.vy = -Math.abs(ball.vy);
+        ball.vx += (ball.x - paddle.x) * 3.2;
+        ball.vx = clamp(ball.vx, -190, 190);
+        combo = 0;
+        fx.shake(1);
+      }
+
+      bricks.forEach(function (b) {
+        if (b.zombie && !b.alive) {
+          b.timer -= dt;
+          if (b.timer <= 0) b.alive = true;
+        }
+        if (!b.alive) return;
+        if (ball.x < b.x || ball.x > b.x + BW - 2) return;
+        if (ball.y < b.y || ball.y > b.y + BH - 2) return;
+        b.alive = false;
+        b.timer = 5 + random() * 4;
+        ball.vy = -ball.vy;
+        combo += 1;
+        game.score += 10 * Math.min(6, combo);
+        bits.burst(b.x + BW / 2, b.y + BH / 2, 5, { colour: b.zombie ? "danger" : "brass", speed: 50, life: 0.35 });
+        fx.shake(2);
+      });
+
+      if (bricks.every(function (b) { return !b.alive; })) {
+        level += 1;
+        game.score += 200;
+        fx.flash("verify", 1);
+        seed();
+        serve();
+      }
+
+      if (ball.y > H + 6) {
+        game.lives -= 1;
+        combo = 0;
+        fx.shake(10);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        serve();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      bricks.forEach(function (b) {
+        if (!b.alive) {
+          if (!b.zombie) return;
+          ctx.fillStyle = ink.grid;
+          ctx.fillRect(b.x + 1, b.y + 1, BW - 4, 2);
+          return;
+        }
+        ctx.fillStyle = b.zombie ? ink.danger : ink.wall[1];
+        ctx.fillRect(b.x + 1, b.y + 1, BW - 4, BH - 4);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(b.x + 3, b.y + 3, BW - 8, BH - 8);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(paddle.x - paddle.w / 2), H - 20, paddle.w, 6);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(ball.x) - 3, Math.round(ball.y) - 3, 6, 6);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 4, 12);
+      if (combo > 1) ctx.fillText("×" + combo, W - 34, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · ×" + Math.max(1, combo); };
+    return game;
+  }
+
+  /* ---- 93. BANK SHOT -----------------------------------------------------
+
+     Pocket the target balls off the cushions. Aim and power, one shot, and a
+     cue ball that keeps whatever momentum you gave it — the whole game is
+     thinking one bounce further than feels necessary. */
+  function cabinetBankShot(random) {
+    var game = { id: "bank-shot", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var cue, balls, pockets, aim, power, charging, shots, rack, message, messageAge;
+
+    function setup() {
+      cue = { x: 60, y: H / 2, vx: 0, vy: 0 };
+      balls = [];
+      for (var i = 0; i < 3 + Math.min(3, rack); i += 1) {
+        balls.push({ x: 150 + random() * 130, y: 40 + random() * (H - 80), vx: 0, vy: 0, in: false });
+      }
+      shots = 3 + Math.floor(rack / 2);
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      rack = 1;
+      aim = 0;
+      power = 0.4;
+      charging = false;
+      messageAge = 9;
+      pockets = [
+        { x: 8, y: 20 }, { x: W - 8, y: 20 }, { x: 8, y: H - 12 },
+        { x: W - 8, y: H - 12 }, { x: W / 2, y: 20 }, { x: W / 2, y: H - 12 }
+      ];
+      fx.reset();
+      bits.clear();
+      setup();
+    };
+
+    function moving() {
+      if (Math.hypot(cue.vx, cue.vy) > 4) return true;
+      return balls.some(function (b) { return !b.in && Math.hypot(b.vx, b.vy) > 4; });
+    }
+
+    function physics(b, dt) {
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vx *= 0.988;
+      b.vy *= 0.988;
+      if (b.x < 8) { b.x = 8; b.vx = Math.abs(b.vx); }
+      if (b.x > W - 8) { b.x = W - 8; b.vx = -Math.abs(b.vx); }
+      if (b.y < 20) { b.y = 20; b.vy = Math.abs(b.vy); }
+      if (b.y > H - 12) { b.y = H - 12; b.vy = -Math.abs(b.vy); }
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (moving()) {
+        physics(cue, dt);
+        balls.forEach(function (b) {
+          if (b.in) return;
+          physics(b, dt);
+          var d = Math.hypot(b.x - cue.x, b.y - cue.y);
+          if (d < 11 && d > 0.01) {
+            var nx = (b.x - cue.x) / d, ny = (b.y - cue.y) / d;
+            var speed = Math.hypot(cue.vx, cue.vy);
+            b.vx += nx * speed * 0.8;
+            b.vy += ny * speed * 0.8;
+            cue.vx *= 0.35;
+            cue.vy *= 0.35;
+            fx.shake(2);
+          }
+          pockets.forEach(function (p) {
+            if (b.in || Math.hypot(p.x - b.x, p.y - b.y) > 11) return;
+            b.in = true;
+            game.score += 60;
+            bits.burst(p.x, p.y, 8, { colour: "verify", speed: 50, life: 0.4 });
+            fx.flash("verify", 0.6);
+          });
+        });
+        pockets.forEach(function (p) {
+          if (Math.hypot(p.x - cue.x, p.y - cue.y) > 11) return;
+          cue.x = 60; cue.y = H / 2; cue.vx = cue.vy = 0;
+          message = "SCRATCH";
+          messageAge = 0;
+          fx.shake(8);
+        });
+
+        if (!moving()) {
+          if (balls.every(function (b) { return b.in; })) {
+            rack += 1;
+            game.score += 200;
+            message = "RACK CLEARED";
+            messageAge = 0;
+            setup();
+          } else if (shots <= 0) {
+            game.lives -= 1;
+            message = "OUT OF SHOTS";
+            messageAge = 0;
+            if (game.lives <= 0) { game.over = true; return; }
+            setup();
+          }
+        }
+        return;
+      }
+
+      if (input.left) aim -= 2 * dt;
+      if (input.right) aim += 2 * dt;
+      if (input.fire) {
+        charging = true;
+        power = Math.min(1, power + dt * 0.85);
+      } else if (charging) {
+        charging = false;
+        shots -= 1;
+        cue.vx = Math.cos(aim) * (80 + power * 260);
+        cue.vy = Math.sin(aim) * (80 + power * 260);
+        power = 0.2;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(4, 16, W - 8, H - 28);
+      pockets.forEach(function (p) {
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(p.x - 7, p.y - 7, 14, 14);
+      });
+      balls.forEach(function (b) {
+        if (b.in) return;
+        ctx.fillStyle = ink.brass;
+        ctx.fillRect(Math.round(b.x) - 5, Math.round(b.y) - 5, 10, 10);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(b.x) - 2, Math.round(b.y) - 2, 4, 4);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(cue.x) - 5, Math.round(cue.y) - 5, 10, 10);
+      if (!moving()) {
+        ctx.fillStyle = ink.bright;
+        for (var t = 1; t < 5; t += 1) {
+          ctx.fillRect(Math.round(cue.x + Math.cos(aim) * t * 10) - 1, Math.round(cue.y + Math.sin(aim) * t * 10) - 1, 3, 3);
+        }
+        drawBar(ctx, ink, 8, 6, 80, 5, power, "brass");
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("SHOTS " + shots, W - 96, 12);
+      ctx.fillText("RACK " + rack, W - 44, 12);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 4, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "RACK " + rack + " · SHOTS " + shots; };
+    return game;
+  }
+
+  /* ---- 94. DRAW WEIGHT ---------------------------------------------------
+
+     Archery with wind and a drop. Hold to draw, release to loose, and the
+     arrow does not travel in a straight line no matter how much you would
+     like it to. */
+  function cabinetDrawWeight(random) {
+    var game = { id: "draw-weight", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var draw, angle, arrow, target, wind, round, hits, held, message, messageAge;
+
+    function place() {
+      target = { x: 190 + random() * (W - 220), y: 40 + random() * (H - 100), r: Math.max(9, 22 - round) };
+      wind = (random() - 0.5) * 46;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      draw = 0;
+      angle = -0.35;
+      arrow = null;
+      round = 1;
+      hits = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      place();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (arrow) {
+        arrow.vy += 130 * dt;
+        arrow.vx += wind * dt;
+        arrow.x += arrow.vx * dt;
+        arrow.y += arrow.vy * dt;
+        var d = Math.hypot(arrow.x - target.x, arrow.y - target.y);
+        if (d < target.r) {
+          var inner = d < target.r * 0.4;
+          hits += 1;
+          round += 1;
+          game.score += inner ? 150 : 70;
+          message = inner ? "GOLD" : "ON THE TARGET";
+          messageAge = 0;
+          fx.flash("verify", 1);
+          bits.burst(target.x, target.y, 12, { colour: "verify", speed: 60, life: 0.5 });
+          arrow = null;
+          place();
+          return;
+        }
+        if (arrow.x > W + 10 || arrow.y > H + 10) {
+          arrow = null;
+          game.lives -= 1;
+          message = "MISSED";
+          messageAge = 0;
+          fx.shake(7);
+          if (game.lives <= 0) { game.over = true; return; }
+          place();
+        }
+        return;
+      }
+
+      if (input.up) angle -= 1.1 * dt;
+      if (input.down) angle += 1.1 * dt;
+      angle = clamp(angle, -1.2, 0.5);
+      if (input.fire) {
+        held = true;
+        draw = Math.min(1, draw + dt * 0.8);
+      } else if (held) {
+        held = false;
+        arrow = {
+          x: 26, y: H - 60,
+          vx: Math.cos(angle) * (90 + draw * 200),
+          vy: Math.sin(angle) * (90 + draw * 200)
+        };
+        draw = 0;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, 0, H * 0.72);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 22, W, 22);
+      var r = target.r;
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(target.x - r, target.y - r, r * 2, r * 2);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(target.x - r * 0.6, target.y - r * 0.6, r * 1.2, r * 1.2);
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(target.x - r * 0.25, target.y - r * 0.25, r * 0.5, r * 0.5);
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(20, H - 74, 10, 22);
+      if (arrow) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(arrow.x) - 4, Math.round(arrow.y) - 1, 9, 2);
+      } else {
+        ctx.fillStyle = ink.bright;
+        for (var t = 1; t < 4; t += 1) {
+          ctx.fillRect(Math.round(26 + Math.cos(angle) * t * 12) - 1, Math.round(H - 60 + Math.sin(angle) * t * 12) - 1, 3, 3);
+        }
+        drawBar(ctx, ink, 8, 8, 74, 6, draw, draw > 0.85 ? "danger" : "brass");
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WIND " + (wind > 0 ? "→" : "←") + Math.abs(wind).toFixed(0), 8, 26);
+      ctx.fillText("ROUND " + round, W - 70, 14);
+      if (messageAge < 2) centreText(ctx, ink, message, 40, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · HITS " + hits; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -15125,6 +15930,60 @@
       controls: "SPACE leap",
       pad: "tap",
       make: cabinetHandoff
+    },
+    {
+      id: "bubble-queue",
+      name: "BUBBLE QUEUE",
+      genre: "BUBBLE",
+      tagline: "A shot that clears nothing costs you twice.",
+      controls: "← → aim · SPACE fire",
+      pad: "lr+fire",
+      make: cabinetBubbleQueue
+    },
+    {
+      id: "scope-match",
+      name: "SCOPE MATCH",
+      genre: "RINGS",
+      tagline: "Your scope changes at every gate. Read it again.",
+      controls: "SPACE hold to slow the fall",
+      pad: "tap",
+      make: cabinetScopeMatch
+    },
+    {
+      id: "reorder",
+      name: "REORDER",
+      genre: "SLIDE",
+      tagline: "One blank, four moves, an optimum you will not find.",
+      controls: "arrows slide a tile in",
+      pad: "dpad",
+      make: cabinetReorder
+    },
+    {
+      id: "breaker",
+      name: "BREAKER",
+      genre: "BREAKOUT",
+      tagline: "A deprecation nobody finished is back next release.",
+      controls: "← → paddle",
+      pad: "lr",
+      make: cabinetBreaker
+    },
+    {
+      id: "bank-shot",
+      name: "BANK SHOT",
+      genre: "POOL",
+      tagline: "Think one bounce further than feels necessary.",
+      controls: "← → aim · SPACE hold to power",
+      pad: "lr+fire",
+      make: cabinetBankShot
+    },
+    {
+      id: "draw-weight",
+      name: "DRAW WEIGHT",
+      genre: "ARCHERY",
+      tagline: "Wind, drop, and no straight lines.",
+      controls: "↑ ↓ elevation · SPACE hold to draw",
+      pad: "ud+fire",
+      make: cabinetDrawWeight
     }
   ];
 
