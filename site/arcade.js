@@ -6334,13 +6334,7 @@
       var pressed = input.fire || input.up || input.down;
       if (!pressed) held = false;
 
-      if (input.up && !held) {
-        held = true;
-        pick = (pick + UPGRADES.length - 1) % UPGRADES.length;
-      } else if (input.down && !held) {
-        held = true;
-        pick = (pick + 1) % UPGRADES.length;
-      } else if (input.fire && !held) {
+      if (input.fire && !held) {
         held = true;
         // Fire buys when you can afford the highlighted line, and mints by
         // hand when you cannot. One button, and it always does the thing the
@@ -6358,6 +6352,12 @@
           bits.burst(W / 2, 96, 4, { colour: "brass", speed: 50, life: 0.4 });
           fx.pop(W / 2 + (random() - 0.5) * 40, 92, "+" + era, "brass");
         }
+      } else if (input.up && !held) {
+        held = true;
+        pick = (pick + UPGRADES.length - 1) % UPGRADES.length;
+      } else if (input.down && !held) {
+        held = true;
+        pick = (pick + 1) % UPGRADES.length;
       }
 
       if (quotaLeft <= 0) {
@@ -7253,11 +7253,12 @@
       if (!pressed) held = false;
       else if (!held) {
         held = true;
-        if (input.left) cursor.x = Math.max(0, cursor.x - 1);
-        else if (input.right) cursor.x = Math.min(COLS - 1, cursor.x + 1);
-        else if (input.up) cursor.y = Math.max(0, cursor.y - 1);
-        else if (input.down) cursor.y = Math.min(ROWS - 1, cursor.y + 1);
-        else if (input.fire) {
+        // Fire is tested before the directions, here and in every other
+        // edge-triggered cabinet. Holding a direction and tapping the action
+        // is the ordinary gesture on the touch pad, and a chain that reads
+        // the arrows first silently eats the tap for as long as the thumb is
+        // down — which reads as an action button that only works sometimes.
+        if (input.fire) {
           var taken = towers.some(function (t) { return t.x === cursor.x && t.y === cursor.y; });
           if (onPath(cursor.x, cursor.y)) {
             message = "THE PATH IS NOT YOURS TO BUILD ON";
@@ -7273,7 +7274,10 @@
             towers.push({ x: cursor.x, y: cursor.y, cool: 0 });
             fx.flash("verify", 0.6);
           }
-        }
+        } else if (input.left) cursor.x = Math.max(0, cursor.x - 1);
+        else if (input.right) cursor.x = Math.min(COLS - 1, cursor.x + 1);
+        else if (input.up) cursor.y = Math.max(0, cursor.y - 1);
+        else if (input.down) cursor.y = Math.min(ROWS - 1, cursor.y + 1);
       }
 
       spawnTimer -= dt;
@@ -7445,14 +7449,18 @@
       if (held) return;
       held = true;
 
-      if (input.left) pick = (pick + hand.length - 1) % hand.length;
+      if (input.fire) {
+        playCard();
+      } else if (input.left) pick = (pick + hand.length - 1) % hand.length;
       else if (input.right) pick = (pick + 1) % hand.length;
       else if (input.down || input.up) {
         // End turn: the deliberate skip the genre needs, on the axis the hand
         // does not use.
         phase = "foe";
         timer = 0.7;
-      } else if (input.fire) {
+      }
+
+      function playCard() {
         var card = hand[pick];
         if (!card) return;
         if (card.cost > energy) {
@@ -7680,6 +7688,729 @@
     };
 
     game.hud = function () { return "WAVE " + wave + " · CORE " + Math.max(0, core.hp); };
+    return game;
+  }
+
+  /* ---- 37. COLD MOVE -----------------------------------------------------
+
+     Crate-pushing. Shove each cold record onto a pad; a record shoved into a
+     corner is stuck forever, and so is the run — the genre's whole tension is
+     that it has no undo and neither does a migration. */
+  function cabinetColdMove(random) {
+    var CELL = 18;
+    var COLS = 11;
+    var ROWS = 9;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 40;
+
+    var game = { id: "cold-move", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var walls, crates, pads, hero, level, moves, held, message, messageAge;
+
+    function build() {
+      walls = [];
+      for (var y = 0; y < ROWS; y += 1) {
+        var row = [];
+        for (var x = 0; x < COLS; x += 1) {
+          row.push(x === 0 || y === 0 || x === COLS - 1 || y === ROWS - 1 ? 1 : 0);
+        }
+        walls.push(row);
+      }
+      // Interior blocks, never on the border ring the player needs to walk.
+      var blocks = Math.min(7, 2 + level);
+      for (var b = 0; b < blocks; b += 1) {
+        var bx = 2 + Math.floor(random() * (COLS - 4));
+        var by = 2 + Math.floor(random() * (ROWS - 4));
+        walls[by][bx] = 1;
+      }
+      crates = [];
+      pads = [];
+      var count = Math.min(4, 1 + Math.floor(level / 2));
+      for (var c = 0; c < count; c += 1) {
+        var cx, cy, guard = 0;
+        do {
+          cx = 2 + Math.floor(random() * (COLS - 4));
+          cy = 2 + Math.floor(random() * (ROWS - 4));
+          guard += 1;
+        } while (guard < 60 && (walls[cy][cx] || crates.some(function (k) { return k.x === cx && k.y === cy; })));
+        walls[cy][cx] = 0;
+        crates.push({ x: cx, y: cy });
+        var px, py, pguard = 0;
+        do {
+          px = 1 + Math.floor(random() * (COLS - 2));
+          py = 1 + Math.floor(random() * (ROWS - 2));
+          pguard += 1;
+        } while (pguard < 60 && (walls[py][px] || pads.some(function (k) { return k.x === px && k.y === py; })));
+        walls[py][px] = 0;
+        pads.push({ x: px, y: py });
+      }
+      hero = { x: 1, y: 1 };
+      walls[1][1] = 0;
+      moves = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    function crateAt(x, y) {
+      for (var i = 0; i < crates.length; i += 1) if (crates[i].x === x && crates[i].y === y) return crates[i];
+      return null;
+    }
+
+    function solved() {
+      return pads.every(function (p) { return crateAt(p.x, p.y); });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+
+      var dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      var dy = dx ? 0 : (input.down ? 1 : 0) - (input.up ? 1 : 0);
+      if (!dx && !dy) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      var nx = hero.x + dx, ny = hero.y + dy;
+      if (walls[ny] && walls[ny][nx]) return;
+      var crate = crateAt(nx, ny);
+      if (crate) {
+        var bx = nx + dx, by = ny + dy;
+        if ((walls[by] && walls[by][bx]) || crateAt(bx, by)) return;
+        crate.x = bx;
+        crate.y = by;
+        if (pads.some(function (p) { return p.x === bx && p.y === by; })) {
+          fx.flash("verify", 0.6);
+          game.score += 15;
+        }
+      }
+      hero.x = nx;
+      hero.y = ny;
+      moves += 1;
+
+      if (solved()) {
+        level += 1;
+        game.score += 100;
+        message = "FILED — LEVEL " + level;
+        messageAge = 0;
+        fx.flash("verify", 1);
+        build();
+      } else if (moves > 90 + level * 20) {
+        // The soft failure the genre lacks: no undo, so a wedged board has to
+        // end on a clock rather than on the player noticing.
+        game.lives -= 1;
+        message = "WEDGED — RESHUFFLING";
+        messageAge = 0;
+        fx.shake(8);
+        if (game.lives <= 0) { game.over = true; return; }
+        build();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var y = 0; y < ROWS; y += 1) {
+        for (var x = 0; x < COLS; x += 1) {
+          if (!walls[y][x]) continue;
+          ctx.fillStyle = ink.wall[1];
+          ctx.fillRect(OX + x * CELL, OY + y * CELL, CELL - 1, CELL - 1);
+        }
+      }
+      pads.forEach(function (p) {
+        ctx.fillStyle = ink.grid;
+        ctx.fillRect(OX + p.x * CELL + 3, OY + p.y * CELL + 3, CELL - 7, CELL - 7);
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(OX + p.x * CELL + 7, OY + p.y * CELL + 7, 3, 3);
+      });
+      crates.forEach(function (c) {
+        var on = pads.some(function (p) { return p.x === c.x && p.y === c.y; });
+        ctx.fillStyle = on ? ink.verify : ink.brass;
+        ctx.fillRect(OX + c.x * CELL + 2, OY + c.y * CELL + 2, CELL - 5, CELL - 5);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(OX + c.x * CELL + 5, OY + c.y * CELL + 5, CELL - 11, CELL - 11);
+      });
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(OX + hero.x * CELL + 4, OY + hero.y * CELL + 3, CELL - 9, CELL - 6);
+
+      centreText(ctx, ink, "COLD MOVE — NO UNDO", 20, "dim");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 6, 32);
+      ctx.fillText("MOVES " + moves, W - 74, 32);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 8, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · MOVES " + moves; };
+    return game;
+  }
+
+  /* ---- 38. QUORUM FLIP ---------------------------------------------------
+
+     Lights-out on a grid of nodes. Toggling one toggles its neighbours, the
+     goal is unanimity, and the reason it is hard is the reason distributed
+     consensus is hard: every local fix has non-local consequences. */
+  function cabinetQuorumFlip(random) {
+    var SIZE = 5;
+    var CELL = 30;
+    var OX = (W - SIZE * CELL) / 2;
+    var OY = 52;
+
+    var game = { id: "quorum-flip", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var cells, cursor, round, taps, held, message, messageAge;
+
+    function toggle(x, y) {
+      if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) return;
+      cells[y * SIZE + x] = !cells[y * SIZE + x];
+    }
+
+    function deal() {
+      cells = [];
+      for (var i = 0; i < SIZE * SIZE; i += 1) cells.push(true);
+      // Scrambled by playing legal moves backwards, so every board is
+      // guaranteed solvable — a random fill is not, and half of them would be
+      // impossible.
+      var shuffles = Math.min(14, 3 + round * 2);
+      for (var s = 0; s < shuffles; s += 1) {
+        var x = Math.floor(random() * SIZE);
+        var y = Math.floor(random() * SIZE);
+        toggle(x, y); toggle(x - 1, y); toggle(x + 1, y); toggle(x, y - 1); toggle(x, y + 1);
+      }
+      taps = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      round = 1;
+      cursor = { x: 2, y: 2 };
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        toggle(cursor.x, cursor.y);
+        toggle(cursor.x - 1, cursor.y);
+        toggle(cursor.x + 1, cursor.y);
+        toggle(cursor.x, cursor.y - 1);
+        toggle(cursor.x, cursor.y + 1);
+        taps += 1;
+        fx.shake(2);
+        if (cells.every(function (c) { return c; })) {
+          round += 1;
+          game.score += 120 - Math.min(100, taps * 4);
+          message = "QUORUM — ROUND " + round;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          deal();
+        } else if (taps > 12 + round * 3) {
+          game.lives -= 1;
+          message = "NO CONSENSUS";
+          messageAge = 0;
+          fx.shake(8);
+          if (game.lives <= 0) { game.over = true; return; }
+          deal();
+        }
+      } else if (input.left) cursor.x = Math.max(0, cursor.x - 1);
+      else if (input.right) cursor.x = Math.min(SIZE - 1, cursor.x + 1);
+      else if (input.up) cursor.y = Math.max(0, cursor.y - 1);
+      else if (input.down) cursor.y = Math.min(SIZE - 1, cursor.y + 1);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "GET EVERY NODE TO AGREE", 26, "dim");
+      for (var i = 0; i < SIZE * SIZE; i += 1) {
+        var x = OX + (i % SIZE) * CELL;
+        var y = OY + Math.floor(i / SIZE) * CELL;
+        ctx.fillStyle = cells[i] ? ink.verify : ink.wall[3];
+        ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 8, y + 8, CELL - 17, CELL - 17);
+      }
+      var cx = OX + cursor.x * CELL, cy = OY + cursor.y * CELL;
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(cx, cy, CELL - 1, 2);
+      ctx.fillRect(cx, cy + CELL - 3, CELL - 1, 2);
+      ctx.fillRect(cx, cy, 2, CELL - 1);
+      ctx.fillRect(cx + CELL - 3, cy, 2, CELL - 1);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUND " + round, 6, 16);
+      ctx.fillText("TAPS " + taps, W - 62, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · TAPS " + taps; };
+    return game;
+  }
+
+  /* ---- 39. IDEMPOTENCY ---------------------------------------------------
+
+     Memory pairs. Every request has exactly one twin, and turning the same
+     pair up twice is the definition of the property this cabinet is named
+     after: doing it again changes nothing. */
+  function cabinetIdempotency(random) {
+    var COLS = 6;
+    var ROWS = 4;
+    var CELL = 40;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 52;
+    var FACES = ["GET", "PUT", "DEL", "SUM", "SIG", "TTL", "ACK", "NAK", "REF", "IDX", "TXN", "SEQ"];
+
+    var game = { id: "idempotency", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var cards, cursor, first, second, holdTimer, round, tries, held, message, messageAge;
+
+    function deal() {
+      var pool = [];
+      for (var i = 0; i < (COLS * ROWS) / 2; i += 1) {
+        pool.push(FACES[i % FACES.length], FACES[i % FACES.length]);
+      }
+      for (var s = pool.length - 1; s > 0; s -= 1) {
+        var j = Math.floor(random() * (s + 1));
+        var t = pool[s]; pool[s] = pool[j]; pool[j] = t;
+      }
+      cards = pool.map(function (face) { return { face: face, up: false, done: false }; });
+      first = null;
+      second = null;
+      holdTimer = 0;
+      tries = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      round = 1;
+      cursor = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+
+      if (holdTimer > 0) {
+        holdTimer -= dt;
+        if (holdTimer <= 0) {
+          if (first.face === second.face) {
+            first.done = second.done = true;
+            game.score += 30;
+            fx.flash("verify", 0.7);
+          } else {
+            first.up = second.up = false;
+          }
+          first = second = null;
+          if (cards.every(function (c) { return c.done; })) {
+            round += 1;
+            game.score += 150 - Math.min(120, tries * 5);
+            message = "ALL PAIRS — ROUND " + round;
+            messageAge = 0;
+            deal();
+          }
+        }
+        return;
+      }
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var card = cards[cursor];
+        if (card.done || card.up) return;
+        card.up = true;
+        if (!first) { first = card; return; }
+        second = card;
+        tries += 1;
+        holdTimer = 0.55;
+        if (tries > 14 + round * 4) {
+          game.lives -= 1;
+          message = "TOO MANY REPLAYS";
+          messageAge = 0;
+          fx.shake(7);
+          if (game.lives <= 0) { game.over = true; return; }
+          deal();
+        }
+      } else if (input.left) cursor = (cursor + cards.length - 1) % cards.length;
+      else if (input.right) cursor = (cursor + 1) % cards.length;
+      else if (input.up) cursor = (cursor + cards.length - COLS) % cards.length;
+      else if (input.down) cursor = (cursor + COLS) % cards.length;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "TURN THE SAME REQUEST TWICE", 28, "dim");
+      cards.forEach(function (card, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        if (card.done) {
+          ctx.fillStyle = ink.grid;
+          ctx.fillRect(x + 3, y + 3, CELL - 7, CELL - 7);
+        } else if (card.up) {
+          ctx.fillStyle = ink.brass;
+          ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+          ctx.font = '8px "IBM Plex Mono", monospace';
+          ctx.textAlign = "center";
+          ctx.fillStyle = ink.bg;
+          ctx.fillText(card.face, x + CELL / 2 - 1, y + CELL / 2);
+          ctx.textAlign = "left";
+        } else {
+          ctx.fillStyle = ink.wall[2];
+          ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+          ctx.fillStyle = ink.wall[3];
+          ctx.fillRect(x + 8, y + 8, CELL - 17, CELL - 17);
+        }
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x, y, CELL - 1, 2);
+          ctx.fillRect(x, y + CELL - 3, CELL - 1, 2);
+          ctx.fillRect(x, y, 2, CELL - 1);
+          ctx.fillRect(x + CELL - 3, y, 2, CELL - 1);
+        }
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUND " + round, 6, 16);
+      ctx.fillText("REPLAYS " + tries, W - 84, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · REPLAYS " + tries; };
+    return game;
+  }
+
+  /* ---- 40. REPLAY ORDER --------------------------------------------------
+
+     Watch a sequence, then reproduce it. An audit log is only useful if you
+     can replay it in order, and one wrong step invalidates the whole thing —
+     which is both how this genre works and how a hash chain works. */
+  function cabinetReplayOrder(random) {
+    var PADS = [
+      { key: "left", label: "◀", colour: "danger" },
+      { key: "up", label: "▲", colour: "verify" },
+      { key: "down", label: "▼", colour: "brass" },
+      { key: "right", label: "▶", colour: "bright" }
+    ];
+
+    var game = { id: "replay-order", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var order, step, phase, timer, lit, held, round, message, messageAge;
+
+    function extend() {
+      order.push(Math.floor(random() * PADS.length));
+      phase = "show";
+      step = 0;
+      timer = 0.45;
+      lit = -1;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      order = [];
+      round = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      extend();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+
+      if (phase === "show") {
+        timer -= dt;
+        if (timer > 0) return;
+        if (lit >= 0) {
+          lit = -1;
+          timer = 0.12;
+          step += 1;
+          if (step >= order.length) {
+            phase = "input";
+            step = 0;
+          }
+          return;
+        }
+        lit = order[step];
+        timer = Math.max(0.16, 0.44 - order.length * 0.012);
+        return;
+      }
+
+      var pressedIndex = -1;
+      for (var i = 0; i < PADS.length; i += 1) if (input[PADS[i].key]) pressedIndex = i;
+      if (pressedIndex < 0) { held = false; lit = -1; return; }
+      if (held) return;
+      held = true;
+      lit = pressedIndex;
+
+      if (pressedIndex === order[step]) {
+        step += 1;
+        game.score += 4;
+        if (step >= order.length) {
+          round += 1;
+          game.score += 25 + order.length * 5;
+          message = "REPLAYED " + order.length + " IN ORDER";
+          messageAge = 0;
+          fx.flash("verify", 0.8);
+          extend();
+        }
+      } else {
+        game.lives -= 1;
+        fx.shake(9);
+        fx.flash("danger", 1);
+        message = "OUT OF ORDER AT STEP " + (step + 1);
+        messageAge = 0;
+        if (game.lives <= 0) { game.over = true; return; }
+        order = [];
+        extend();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, phase === "show" ? "WATCH THE LOG" : "REPLAY IT", 24, phase === "show" ? "brass" : "verify");
+      centreText(ctx, ink, "LENGTH " + order.length, 38, "dim");
+
+      PADS.forEach(function (pad, i) {
+        var x = 24 + i * 70;
+        var on = lit === i;
+        ctx.fillStyle = on ? ink[pad.colour] : ink.wall[3];
+        ctx.fillRect(x, 70, 56, 90);
+        ctx.fillStyle = on ? ink.bg : ink[pad.colour];
+        ctx.font = '16px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillText(pad.label, x + 28, 115);
+        ctx.textAlign = "left";
+      });
+
+      // Progress dots, so a long chain reads as progress rather than as luck.
+      for (var d = 0; d < order.length; d += 1) {
+        var dx = 10 + d * 7;
+        if (dx > W - 10) break;
+        ctx.fillStyle = phase === "input" && d < step ? ink.verify : ink.grid;
+        ctx.fillRect(dx, 178, 5, 5);
+      }
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUND " + round, 6, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, 204, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · LEN " + order.length; };
+    return game;
+  }
+
+  /* ---- 41. MATCH POLICY --------------------------------------------------
+
+     Swap adjacent rules to line three of a kind up. Cleared rules fall out of
+     the stack and the ones above drop into their place, which is exactly what
+     happens to a policy file nobody is maintaining. */
+  function cabinetMatchPolicy(random) {
+    var COLS = 7;
+    var ROWS = 8;
+    var CELL = 26;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 30;
+    var KINDS = 5;
+
+    var game = { id: "match-policy", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var grid, cursor, held, chain, settle, moves, level;
+
+    function at(x, y) { return grid[y * COLS + x]; }
+    function set(x, y, v) { grid[y * COLS + x] = v; }
+
+    function fill() {
+      grid = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) grid.push(1 + Math.floor(random() * KINDS));
+    }
+
+    function findRuns() {
+      var marks = {};
+      for (var y = 0; y < ROWS; y += 1) {
+        for (var x = 0; x < COLS - 2; x += 1) {
+          var v = at(x, y);
+          if (v && v === at(x + 1, y) && v === at(x + 2, y)) {
+            marks[y * COLS + x] = marks[y * COLS + x + 1] = marks[y * COLS + x + 2] = true;
+          }
+        }
+      }
+      for (var x2 = 0; x2 < COLS; x2 += 1) {
+        for (var y2 = 0; y2 < ROWS - 2; y2 += 1) {
+          var v2 = at(x2, y2);
+          if (v2 && v2 === at(x2, y2 + 1) && v2 === at(x2, y2 + 2)) {
+            marks[y2 * COLS + x2] = marks[(y2 + 1) * COLS + x2] = marks[(y2 + 2) * COLS + x2] = true;
+          }
+        }
+      }
+      return Object.keys(marks);
+    }
+
+    function collapse() {
+      for (var x = 0; x < COLS; x += 1) {
+        var write = ROWS - 1;
+        for (var y = ROWS - 1; y >= 0; y -= 1) {
+          if (at(x, y)) { set(x, write, at(x, y)); write -= 1; }
+        }
+        while (write >= 0) { set(x, write, 1 + Math.floor(random() * KINDS)); write -= 1; }
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      cursor = { x: 3, y: 4 };
+      held = false;
+      chain = 0;
+      settle = 0.01;
+      moves = 30;
+      level = 1;
+      fx.reset();
+      bits.clear();
+      fill();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (settle > 0) {
+        settle -= dt;
+        if (settle > 0) return;
+        var runs = findRuns();
+        if (runs.length) {
+          chain += 1;
+          game.score += runs.length * 10 * chain;
+          runs.forEach(function (key) {
+            var idx = parseInt(key, 10);
+            bits.burst(OX + (idx % COLS) * CELL + CELL / 2, OY + Math.floor(idx / COLS) * CELL + CELL / 2, 3,
+              { colour: "bright", speed: 40, life: 0.35 });
+            grid[idx] = 0;
+          });
+          fx.shake(2 + chain);
+          collapse();
+          settle = 0.16;
+          return;
+        }
+        chain = 0;
+      }
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        // Fire swaps with the tile to the right, wrapping to the row below at
+        // the edge: one button, and every adjacency is still reachable.
+        var tx = cursor.x < COLS - 1 ? cursor.x + 1 : cursor.x;
+        var ty = cursor.x < COLS - 1 ? cursor.y : Math.min(ROWS - 1, cursor.y + 1);
+        if (tx === cursor.x && ty === cursor.y) return;
+        var a = at(cursor.x, cursor.y), b = at(tx, ty);
+        set(cursor.x, cursor.y, b); set(tx, ty, a);
+        moves -= 1;
+        if (!findRuns().length) {
+          set(cursor.x, cursor.y, a); set(tx, ty, b); // no match: swap back
+          fx.shake(3);
+        } else {
+          settle = 0.08;
+        }
+        if (moves <= 0) {
+          game.lives -= 1;
+          moves = 30;
+          if (game.lives <= 0) { game.over = true; return; }
+          level += 1;
+          fill();
+          settle = 0.2;
+        }
+        return;
+      }
+      if (input.left) cursor.x = Math.max(0, cursor.x - 1);
+      else if (input.right) cursor.x = Math.min(COLS - 1, cursor.x + 1);
+      else if (input.up) cursor.y = Math.max(0, cursor.y - 1);
+      else if (input.down) cursor.y = Math.min(ROWS - 1, cursor.y + 1);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      var palette = ["grid", "danger", "verify", "brass", "wall", "bright"];
+      for (var i = 0; i < COLS * ROWS; i += 1) {
+        var v = grid[i];
+        if (!v) continue;
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        var key = palette[v];
+        ctx.fillStyle = key === "wall" ? ink.wall[1] : ink[key];
+        ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 6, y + 6, CELL - 13, CELL - 13);
+      }
+      var cx = OX + cursor.x * CELL, cy = OY + cursor.y * CELL;
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(cx, cy, CELL - 1, 2);
+      ctx.fillRect(cx, cy + CELL - 3, CELL - 1, 2);
+      ctx.fillRect(cx, cy, 2, CELL - 1);
+      ctx.fillRect(cx + CELL - 3, cy, 2, CELL - 1);
+      bits.draw(ctx, ink);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = moves < 8 ? ink.danger : ink.dim;
+      ctx.fillText("SWAPS " + moves, 6, 18);
+      if (chain > 1) centreText(ctx, ink, "CASCADE ×" + chain, 18, "verify");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "SWAPS " + moves + " · CHAIN " + chain; };
     return game;
   }
 
@@ -8007,6 +8738,51 @@
       controls: "← → aim · SPACE fire",
       pad: "lr+fire",
       make: cabinetBackstop
+    },
+    {
+      id: "cold-move",
+      name: "COLD MOVE",
+      genre: "SOKOBAN",
+      tagline: "Push each record onto its pad. There is no undo.",
+      controls: "arrows push",
+      pad: "dpad",
+      make: cabinetColdMove
+    },
+    {
+      id: "quorum-flip",
+      name: "QUORUM FLIP",
+      genre: "LIGHTS",
+      tagline: "Every local fix has non-local consequences.",
+      controls: "arrows move · SPACE flip",
+      pad: "dpad+fire",
+      make: cabinetQuorumFlip
+    },
+    {
+      id: "idempotency",
+      name: "IDEMPOTENCY",
+      genre: "MEMORY",
+      tagline: "Every request has exactly one twin.",
+      controls: "arrows move · SPACE turn",
+      pad: "dpad+fire",
+      make: cabinetIdempotency
+    },
+    {
+      id: "replay-order",
+      name: "REPLAY ORDER",
+      genre: "SEQUENCE",
+      tagline: "A log is only useful if you can replay it in order.",
+      controls: "← ↑ ↓ → repeat the log",
+      pad: "lanes",
+      make: cabinetReplayOrder
+    },
+    {
+      id: "match-policy",
+      name: "MATCH POLICY",
+      genre: "MATCH-3",
+      tagline: "Line up three rules and watch the file collapse.",
+      controls: "arrows move · SPACE swap",
+      pad: "dpad+fire",
+      make: cabinetMatchPolicy
     }
   ];
 
