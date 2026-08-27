@@ -5980,6 +5980,1709 @@
     return game;
   }
 
+  /* ---- 26. RATE GATE -----------------------------------------------------
+
+     One button, one bird-shaped request, an endless run of rate limits with a
+     gap in them. The genre that ate mobile in 2013, and the purest expression
+     of this product's most-asked question: how many calls per second is that
+     tool actually going to let you make? */
+  function cabinetRateGate(random) {
+    var PACKET = makeSprite([
+      "..111...",
+      ".1122111",
+      "11222211",
+      ".1112211",
+      "...11111"
+    ], ["verify", "bright"]);
+    var GRAVITY = 460;
+    var FLAP = -158;
+
+    var game = { id: "rate-gate", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var bird, gates, scroll, speed, held, best, message, messageAge;
+
+    function spawnGate(x) {
+      var gap = Math.max(46, 78 - game.score * 0.5);
+      var top = 26 + random() * (H - gap - 60);
+      gates.push({ x: x, top: top, gap: gap, scored: false });
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      bird = { y: H / 2, vy: 0, tilt: 0 };
+      gates = [];
+      scroll = 0;
+      speed = 62;
+      held = false;
+      best = 0;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 3; i += 1) spawnGate(W + i * 110);
+    };
+
+    function crash(reason) {
+      game.lives -= 1;
+      fx.shake(9);
+      fx.flash("danger", 1);
+      bits.burst(70, bird.y, 14, { colour: "danger", speed: 70, life: 0.5 });
+      message = reason;
+      messageAge = 0;
+      if (game.lives <= 0) {
+        game.over = true;
+        return;
+      }
+      bird.y = H / 2;
+      bird.vy = 0;
+      gates = [];
+      for (var i = 0; i < 3; i += 1) spawnGate(W + i * 110);
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+      scroll += speed * dt;
+      speed = Math.min(120, 62 + game.score * 0.7);
+
+      // Edge-triggered: a held key is one flap, not lift.
+      if (input.fire || input.up) {
+        if (!held) {
+          held = true;
+          bird.vy = FLAP;
+          bits.burst(66, bird.y + 4, 3, { colour: "dim", speed: 26, angle: Math.PI * 0.5, spread: 1, life: 0.3 });
+        }
+      } else {
+        held = false;
+      }
+
+      bird.vy += GRAVITY * dt;
+      bird.y += bird.vy * dt;
+      bird.tilt = clamp(bird.vy / 260, -1, 1);
+
+      if (bird.y < 4 || bird.y > H - 10) {
+        crash(bird.y < 4 ? "CEILING — THAT IS ALSO A LIMIT" : "FLOOR — REQUEST DROPPED");
+        return;
+      }
+
+      for (var i = gates.length - 1; i >= 0; i -= 1) {
+        var g = gates[i];
+        g.x -= speed * dt;
+        if (!g.scored && g.x + 12 < 66) {
+          g.scored = true;
+          game.score += 1;
+          if (game.score > best) best = game.score;
+          fx.pop(66, bird.y - 14, "+1", "verify");
+          bits.burst(78, bird.y, 4, { colour: "verify", speed: 40, life: 0.35 });
+        }
+        if (g.x < -16) {
+          gates.splice(i, 1);
+          spawnGate(gates.length ? gates[gates.length - 1].x + 96 + random() * 30 : W + 60);
+          continue;
+        }
+        // The packet is 8 wide and sits at x=62..70.
+        if (g.x < 74 && g.x + 12 > 62 && (bird.y < g.top || bird.y > g.top + g.gap)) {
+          crash("THROTTLED AT THE GATE");
+          return;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, scroll * 0.5, 30);
+      fx.begin(ctx);
+
+      gates.forEach(function (g) {
+        ctx.fillStyle = ink.wall[2];
+        ctx.fillRect(g.x, 0, 12, g.top);
+        ctx.fillRect(g.x, g.top + g.gap, 12, H - g.top - g.gap);
+        ctx.fillStyle = ink.brass;
+        ctx.fillRect(g.x - 2, g.top - 6, 16, 6);
+        ctx.fillRect(g.x - 2, g.top + g.gap, 16, 6);
+      });
+
+      bits.draw(ctx, ink);
+      // Tilt is faked with a vertical offset per column rather than a real
+      // rotation: rotating a canvas at this scale resamples the sprite and
+      // undoes the whole pixel grid.
+      PACKET.drawAt(ctx, ink, 66, bird.y + bird.tilt * 2, 1);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("PASSED " + game.score, 4, 12);
+      if (messageAge < 1.8) centreText(ctx, ink, message, 30, "danger");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "GATES " + game.score + " · " + Math.round(speed) + " rps"; };
+    return game;
+  }
+
+  /* ---- 27. MERGE LEDGER --------------------------------------------------
+
+     The sliding-merge grid, which is the puzzle every phone had for a year.
+     Entries slide, equal entries combine, and the board fills whether or not
+     you were ready — which is what a ledger does. */
+  function cabinetMergeLedger(random) {
+    var SIZE = 4;
+    var CELL = 34;
+    var OX = (W - SIZE * CELL) / 2;
+    var OY = 44;
+
+    var game = { id: "merge-ledger", score: 0, lives: 1, over: false };
+    var fx = makeFx();
+    var grid, held, best, moved, message, messageAge;
+
+    function empties() {
+      var out = [];
+      for (var i = 0; i < SIZE * SIZE; i += 1) if (!grid[i]) out.push(i);
+      return out;
+    }
+
+    function spawn() {
+      var free = empties();
+      if (!free.length) return;
+      grid[free[Math.floor(random() * free.length)]] = random() < 0.85 ? 1 : 2;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 1;
+      game.over = false;
+      grid = [];
+      for (var i = 0; i < SIZE * SIZE; i += 1) grid.push(0);
+      held = false;
+      best = 1;
+      messageAge = 9;
+      fx.reset();
+      spawn();
+      spawn();
+    };
+
+    /* One slide routine, fed a traversal order per direction. Four hand-rolled
+       copies of this is how merge bugs get in — the classic being a row that
+       merges twice in one move. */
+    function slide(dx, dy) {
+      moved = false;
+      var merged = {};
+      var xs = [], ys = [];
+      for (var i = 0; i < SIZE; i += 1) { xs.push(i); ys.push(i); }
+      if (dx > 0) xs.reverse();
+      if (dy > 0) ys.reverse();
+
+      ys.forEach(function (y) {
+        xs.forEach(function (x) {
+          var from = y * SIZE + x;
+          if (!grid[from]) return;
+          var cx = x, cy = y;
+          while (true) {
+            var nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) break;
+            var to = ny * SIZE + nx;
+            var here = cy * SIZE + cx;
+            if (!grid[to]) {
+              grid[to] = grid[here];
+              grid[here] = 0;
+              cx = nx; cy = ny;
+              moved = true;
+              continue;
+            }
+            if (grid[to] === grid[here] && !merged[to]) {
+              grid[to] += 1;
+              grid[here] = 0;
+              merged[to] = true;
+              moved = true;
+              game.score += Math.pow(2, grid[to]);
+              if (grid[to] > best) best = grid[to];
+              fx.pop(OX + nx * CELL + CELL / 2, OY + ny * CELL, "×2", "verify");
+              fx.shake(3);
+            }
+            break;
+          }
+        });
+      });
+    }
+
+    function stuck() {
+      if (empties().length) return false;
+      for (var y = 0; y < SIZE; y += 1) {
+        for (var x = 0; x < SIZE; x += 1) {
+          var v = grid[y * SIZE + x];
+          if (x + 1 < SIZE && grid[y * SIZE + x + 1] === v) return false;
+          if (y + 1 < SIZE && grid[(y + 1) * SIZE + x] === v) return false;
+        }
+      }
+      return true;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+
+      var dx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      var dy = dx ? 0 : (input.down ? 1 : 0) - (input.up ? 1 : 0);
+      if (!dx && !dy) {
+        held = false;
+        return;
+      }
+      if (held) return;
+      held = true;
+
+      slide(dx, dy);
+      if (moved) spawn();
+      if (stuck()) {
+        game.lives = 0;
+        game.over = true;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(OX - 3, OY - 3, SIZE * CELL + 6, SIZE * CELL + 6);
+
+      for (var i = 0; i < SIZE * SIZE; i += 1) {
+        var x = OX + (i % SIZE) * CELL;
+        var y = OY + Math.floor(i / SIZE) * CELL;
+        var v = grid[i];
+        ctx.fillStyle = v ? (v >= 9 ? ink.bright : v >= 6 ? ink.brass : v >= 3 ? ink.verify : ink.wall[1]) : ink.grid;
+        ctx.fillRect(x + 1, y + 1, CELL - 3, CELL - 3);
+        if (!v) continue;
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = v >= 3 ? ink.bg : ink.ink;
+        ctx.fillText(String(Math.pow(2, v)), x + CELL / 2 - 1, y + CELL / 2);
+        ctx.textAlign = "left";
+      }
+
+      centreText(ctx, ink, "MERGE THE LEDGER", 18, "dim");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("TOP ENTRY " + Math.pow(2, best), 4, H - 8);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "TOP " + Math.pow(2, best); };
+    return game;
+  }
+
+  /* ---- 28. TAP FORGE -----------------------------------------------------
+
+     The idle game, which is the genre that admits what metering already knows:
+     the number only ever goes up, and the interesting decision is what to buy
+     with it. Tap to mint a receipt by hand; spend receipts on workers who mint
+     them for you; the quota rises faster than you do.
+
+     A retry is lost by missing a quota, so there is a fail state — an idle
+     game with no clock is a spreadsheet. */
+  function cabinetTapForge(random) {
+    var UPGRADES = [
+      { name: "SIGNER", cost: 25, rate: 1.2 },
+      { name: "BATCHER", cost: 120, rate: 5 },
+      { name: "SHARD", cost: 600, rate: 22 },
+      { name: "REGION", cost: 2800, rate: 95 }
+    ];
+
+    var game = { id: "tap-forge", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var bank, owned, pick, rate, quota, quotaLeft, era, held, message, messageAge;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      bank = 0;
+      owned = [0, 0, 0, 0];
+      pick = 0;
+      rate = 0;
+      era = 1;
+      quota = 40;
+      quotaLeft = 30;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+    };
+
+    function cost(i) {
+      return Math.floor(UPGRADES[i].cost * Math.pow(1.6, owned[i]));
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      // Passive income, then the quota clock. Both run whether or not the
+      // human is doing anything, which is the joke and the genre.
+      var earned = rate * dt;
+      bank += earned;
+      game.score += Math.floor(earned);
+      quotaLeft -= dt;
+
+      var pressed = input.fire || input.up || input.down;
+      if (!pressed) held = false;
+
+      if (input.up && !held) {
+        held = true;
+        pick = (pick + UPGRADES.length - 1) % UPGRADES.length;
+      } else if (input.down && !held) {
+        held = true;
+        pick = (pick + 1) % UPGRADES.length;
+      } else if (input.fire && !held) {
+        held = true;
+        // Fire buys when you can afford the highlighted line, and mints by
+        // hand when you cannot. One button, and it always does the thing the
+        // player has the resources for.
+        var price = cost(pick);
+        if (bank >= price) {
+          bank -= price;
+          owned[pick] += 1;
+          rate += UPGRADES[pick].rate;
+          fx.flash("verify", 0.8);
+          fx.pop(W / 2, 70, UPGRADES[pick].name + " +1", "verify");
+        } else {
+          bank += era;
+          game.score += era;
+          bits.burst(W / 2, 96, 4, { colour: "brass", speed: 50, life: 0.4 });
+          fx.pop(W / 2 + (random() - 0.5) * 40, 92, "+" + era, "brass");
+        }
+      }
+
+      if (quotaLeft <= 0) {
+        if (game.score >= quota) {
+          era += 1;
+          quota = Math.floor(quota * 3.4);
+          quotaLeft = 30;
+          fx.flash("verify", 1);
+          message = "QUOTA MET — ERA " + era;
+          messageAge = 0;
+        } else {
+          game.lives -= 1;
+          quotaLeft = 30;
+          fx.shake(8);
+          fx.flash("danger", 1);
+          message = "QUOTA MISSED";
+          messageAge = 0;
+          if (game.lives <= 0) game.over = true;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+
+      centreText(ctx, ink, "RECEIPTS MINTED", 16, "dim");
+      centreText(ctx, ink, String(Math.floor(bank)), 34, "bright", 16);
+      centreText(ctx, ink, rate.toFixed(1) + "/s PASSIVE", 48, "verify");
+
+      bits.draw(ctx, ink);
+      drawPanel(ctx, ink, 8, 58, W - 16, 46);
+      centreText(ctx, ink, "TAP TO MINT BY HAND", 82, "dim");
+
+      drawPanel(ctx, ink, 8, 110, W - 16, 74);
+      UPGRADES.forEach(function (u, i) {
+        var y = 124 + i * 16;
+        var afford = bank >= cost(i);
+        if (i === pick) {
+          ctx.fillStyle = ink.grid;
+          ctx.fillRect(10, y - 9, W - 20, 14);
+        }
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.fillStyle = afford ? ink.verify : ink.dim;
+        ctx.fillText(u.name + " ×" + owned[i], 16, y);
+        ctx.textAlign = "right";
+        ctx.fillText(cost(i) + " rc", W - 16, y);
+        ctx.textAlign = "left";
+      });
+
+      drawBar(ctx, ink, 8, 196, W - 16, 6, quotaLeft / 30, quotaLeft < 8 ? "danger" : "brass");
+      centreText(ctx, ink, "QUOTA " + game.score + " / " + quota, 214, game.score >= quota ? "verify" : "danger");
+      if (messageAge < 2) centreText(ctx, ink, message, 230, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ERA " + era + " · " + rate.toFixed(1) + "/s"; };
+    return game;
+  }
+
+  /* ---- 29. DROP STACK ----------------------------------------------------
+
+     Stack the deploys. Each one swings across and lands where you dropped it;
+     whatever hangs over the edge shears off, so the tower narrows toward
+     nothing and the only question is how many you get before it does. */
+  function cabinetDropStack(random) {
+    var game = { id: "drop-stack", score: 0, lives: 1, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var stack, current, camera, held, perfect;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 1;
+      game.over = false;
+      stack = [{ x: W / 2 - 40, w: 80 }];
+      camera = 0;
+      perfect = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+      nextSlab();
+    };
+
+    function nextSlab() {
+      var top = stack[stack.length - 1];
+      var speed = Math.min(150, 58 + stack.length * 4);
+      // Starting flush over the tower rather than off-screen: a slab that
+      // begins beyond the edge makes the first second of every run an
+      // unwinnable tap, which reads as the cabinet cheating rather than as
+      // the player being early.
+      current = {
+        x: top.x,
+        w: top.w,
+        dir: stack.length % 2 ? 1 : -1,
+        speed: speed
+      };
+    }
+
+    function drop() {
+      var top = stack[stack.length - 1];
+      var left = Math.max(current.x, top.x);
+      var right = Math.min(current.x + current.w, top.x + top.w);
+      var overlap = right - left;
+
+      if (overlap <= 0) {
+        bits.burst(current.x + current.w / 2, H - 40 - stack.length * 8 + camera, 16, {
+          colour: "danger", speed: 80, life: 0.6, gravity: 200
+        });
+        fx.shake(10);
+        game.lives = 0;
+        game.over = true;
+        return;
+      }
+
+      var lost = current.w - overlap;
+      if (lost < 2) {
+        // Landing flush is worth rewarding, and is the only way to stop the
+        // tower narrowing: a stacker with no perfect bonus always ends the same.
+        perfect += 1;
+        overlap = Math.min(96, overlap + 2);
+        left = Math.max(0, left - 1);
+        game.score += 12 + perfect * 4;
+        fx.flash("verify", 0.7);
+        fx.pop(left + overlap / 2, H - 46 - stack.length * 8 + camera, "FLUSH ×" + perfect, "verify");
+      } else {
+        perfect = 0;
+        game.score += 5;
+        bits.burst(lost > 0 && current.x < top.x ? left : right, H - 40 - stack.length * 8 + camera, 6, {
+          colour: "brass", speed: 40, life: 0.5, gravity: 260
+        });
+      }
+
+      stack.push({ x: left, w: overlap });
+      fx.shake(2);
+      if (stack.length > 8) camera += 8;
+      nextSlab();
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      current.x += current.dir * current.speed * dt;
+      if (current.x < -current.w) current.dir = 1;
+      if (current.x > W) current.dir = -1;
+
+      if (input.fire) {
+        if (!held) {
+          held = true;
+          drop();
+        }
+      } else {
+        held = false;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, camera * 2, 26);
+      fx.begin(ctx);
+
+      stack.forEach(function (slab, i) {
+        var y = H - 24 - i * 8 + camera;
+        if (y < -10 || y > H) return;
+        ctx.fillStyle = i === stack.length - 1 ? ink.verify : i % 2 ? ink.wall[1] : ink.wall[2];
+        ctx.fillRect(Math.round(slab.x), y, Math.round(slab.w), 8);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(slab.x), y + 7, Math.round(slab.w), 1);
+      });
+
+      var cy = H - 24 - stack.length * 8 + camera;
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(Math.round(current.x), cy, Math.round(current.w), 8);
+
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("HEIGHT " + stack.length, 4, 12);
+      if (perfect > 1) centreText(ctx, ink, "FLUSH STREAK ×" + perfect, 26, "verify");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "HEIGHT " + stack.length + " · FLUSH " + perfect; };
+    return game;
+  }
+
+  /* ---- 30. SLICE QUEUE ---------------------------------------------------
+
+     Payloads arc up out of the queue and you cut them open in mid-air. The
+     signed ones are yours to inspect; the unsigned ones detonate, and the
+     whole skill is that they look almost identical for the half second you
+     have to decide. */
+  function cabinetSliceQueue(random) {
+    var game = { id: "slice-queue", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(80);
+    var items, blade, spawnTimer, wave, combo, comboTimer, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      items = [];
+      blade = { x: W / 2, y: H - 40, swing: 0 };
+      spawnTimer = 0.6;
+      wave = 1;
+      combo = 0;
+      comboTimer = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    function toss() {
+      var bad = random() < Math.min(0.34, 0.12 + wave * 0.02);
+      items.push({
+        x: 30 + random() * (W - 60),
+        y: H + 8,
+        vx: (random() - 0.5) * 46,
+        vy: -(132 + random() * 34),
+        bad: bad,
+        spin: random() * 6,
+        cut: false
+      });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      if (comboTimer > 0) comboTimer -= dt; else combo = 0;
+
+      // The blade tracks the pointer when there is one and the keys otherwise,
+      // so a phone slices by dragging and a keyboard slices by steering.
+      if (input.pointerX != null) {
+        blade.x = input.pointerX;
+        blade.y = input.pointerY;
+      } else {
+        var speed = 150 * dt;
+        if (input.left) blade.x -= speed;
+        if (input.right) blade.x += speed;
+        if (input.up) blade.y -= speed;
+        if (input.down) blade.y += speed;
+      }
+      blade.x = clamp(blade.x, 0, W);
+      blade.y = clamp(blade.y, 0, H);
+      blade.swing = Math.max(0, blade.swing - dt * 4);
+      if (input.fire && !held) {
+        held = true;
+        blade.swing = 1;
+      } else if (!input.fire) {
+        held = false;
+      }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.35, 1.1 - wave * 0.05);
+        toss();
+        if (random() < 0.3) toss();
+      }
+
+      for (var i = items.length - 1; i >= 0; i -= 1) {
+        var it = items[i];
+        it.vy += 190 * dt;
+        it.x += it.vx * dt;
+        it.y += it.vy * dt;
+        it.spin += dt * 5;
+
+        var hit = !it.cut && Math.abs(it.x - blade.x) < 13 && Math.abs(it.y - blade.y) < 13;
+        if (hit) {
+          it.cut = true;
+          if (it.bad) {
+            game.lives -= 1;
+            combo = 0;
+            fx.shake(10);
+            fx.flash("danger", 1);
+            bits.burst(it.x, it.y, 18, { colour: "danger", speed: 90, life: 0.6, gravity: 120 });
+            if (game.lives <= 0) { game.over = true; return; }
+          } else {
+            combo += 1;
+            comboTimer = 1.1;
+            game.score += 10 * Math.min(5, combo);
+            fx.pop(it.x, it.y - 8, combo > 1 ? "×" + combo : "+10", "verify");
+            bits.burst(it.x, it.y, 10, { colour: "verify", speed: 70, life: 0.5, gravity: 150 });
+          }
+          items.splice(i, 1);
+          continue;
+        }
+
+        if (it.y > H + 20) {
+          items.splice(i, 1);
+          if (!it.bad && !it.cut) {
+            // Only signed payloads cost anything when missed: letting an
+            // unsigned one fall past is exactly the right call.
+            game.lives -= 1;
+            combo = 0;
+            fx.flash("danger", 0.6);
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        }
+      }
+
+      wave = 1 + Math.floor(game.score / 250);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 12, W, 12);
+
+      items.forEach(function (it) {
+        var wobble = Math.sin(it.spin) * 2;
+        ctx.fillStyle = it.bad ? ink.danger : ink.brass;
+        ctx.fillRect(Math.round(it.x) - 7, Math.round(it.y) - 7 + wobble, 14, 14);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(it.x) - 4, Math.round(it.y) - 2 + wobble, 8, 2);
+        if (!it.bad) {
+          ctx.fillStyle = ink.verify;
+          ctx.fillRect(Math.round(it.x) - 2, Math.round(it.y) - 5 + wobble, 4, 2);
+        }
+      });
+
+      bits.draw(ctx, ink);
+
+      var reach = blade.swing > 0 ? 12 : 7;
+      ctx.fillStyle = blade.swing > 0 ? ink.bright : ink.ink;
+      ctx.fillRect(Math.round(blade.x) - reach, Math.round(blade.y) - 1, reach * 2, 2);
+      ctx.fillRect(Math.round(blade.x) - 1, Math.round(blade.y) - reach, 2, reach * 2);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WAVE " + wave, 4, 12);
+      if (combo > 1) centreText(ctx, ink, "COMBO ×" + combo, 24, "verify");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · COMBO " + combo; };
+    return game;
+  }
+
+  /* ---- 31. LANE HOP ------------------------------------------------------
+
+     Cross the lanes. Every lane is a service with its own traffic and its own
+     rhythm, the log rafts are batch windows that carry you if you time them,
+     and the board scrolls whether or not you moved — the genre's one cruelty
+     and the reason it is not just Frogger with the serial numbers filed off. */
+  function cabinetLaneHop(random) {
+    var LANE_H = 20;
+    var LANES = Math.ceil(H / LANE_H) + 2;
+
+    var game = { id: "lane-hop", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var lanes, hopper, scroll, best, held, drift;
+
+    function makeLane(index) {
+      var kind = index % 5 === 0 ? "safe" : random() < 0.55 ? "traffic" : "batch";
+      var speed = (40 + random() * 60) * (random() < 0.5 ? -1 : 1) * (1 + index * 0.008);
+      var things = [];
+      var count = kind === "safe" ? 0 : 2 + Math.floor(random() * 3);
+      for (var i = 0; i < count; i += 1) {
+        things.push({ x: (i * W) / count + random() * 30, w: kind === "batch" ? 44 : 22 });
+      }
+      return { kind: kind, speed: speed, things: things };
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      lanes = [];
+      for (var i = 0; i < LANES; i += 1) lanes.push(makeLane(i));
+      hopper = { x: W / 2, row: 2 };
+      scroll = 0;
+      best = 0;
+      drift = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    function laneAt(row) {
+      return lanes[row % lanes.length];
+    }
+
+    function die(reason) {
+      game.lives -= 1;
+      fx.shake(9);
+      fx.flash("danger", 1);
+      bits.burst(hopper.x, H - 30 - hopper.row * LANE_H + scroll, 14, { colour: "danger", speed: 80, life: 0.5 });
+      if (game.lives <= 0) { game.over = true; return; }
+      hopper.x = W / 2;
+      hopper.row = Math.max(0, hopper.row - 2);
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      lanes.forEach(function (lane) {
+        lane.things.forEach(function (t) {
+          t.x += lane.speed * dt;
+          if (t.x > W + 50) t.x = -50;
+          if (t.x < -50) t.x = W + 50;
+        });
+      });
+
+      var pressed = input.up || input.down || input.left || input.right;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.up) {
+          hopper.row += 1;
+          game.score += 5;
+          if (hopper.row > best) best = hopper.row;
+        } else if (input.down && hopper.row > 0) hopper.row -= 1;
+        else if (input.left) hopper.x -= 18;
+        else if (input.right) hopper.x += 18;
+        hopper.x = clamp(hopper.x, 8, W - 8);
+      }
+
+      // The camera creeps forward on its own; falling off the bottom is a loss.
+      scroll += (14 + best * 0.25) * dt;
+      var y = H - 30 - hopper.row * LANE_H + scroll;
+
+      var lane = laneAt(hopper.row);
+      if (lane.kind === "batch") {
+        // Riding a batch window carries you with it — and off the edge if you
+        // stay aboard too long.
+        var riding = lane.things.some(function (t) {
+          return hopper.x > t.x && hopper.x < t.x + t.w;
+        });
+        if (riding) {
+          hopper.x += lane.speed * dt;
+          drift = lane.speed;
+          if (hopper.x < 2 || hopper.x > W - 2) { die("carried off"); return; }
+        } else if (y < H && y > -10) {
+          die("no batch window");
+          return;
+        }
+      } else if (lane.kind === "traffic") {
+        var struck = lane.things.some(function (t) {
+          return hopper.x > t.x - 6 && hopper.x < t.x + t.w + 6;
+        });
+        if (struck) { die("hit by traffic"); return; }
+      }
+
+      if (y > H + 8) { die("fell behind"); return; }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+
+      for (var row = 0; row < LANES; row += 1) {
+        var y = H - 30 - row * LANE_H + scroll;
+        if (y < -LANE_H || y > H) continue;
+        var lane = laneAt(row);
+        ctx.fillStyle = lane.kind === "safe" ? ink.wall[3] : lane.kind === "batch" ? ink.grid : ink.bg;
+        ctx.fillRect(0, y - LANE_H + 4, W, LANE_H);
+        lane.things.forEach(function (t) {
+          ctx.fillStyle = lane.kind === "batch" ? ink.wall[1] : ink.danger;
+          ctx.fillRect(Math.round(t.x), y - LANE_H + 7, t.w, LANE_H - 6);
+          if (lane.kind !== "batch") {
+            ctx.fillStyle = ink.bright;
+            ctx.fillRect(Math.round(t.x) + (lane.speed > 0 ? t.w - 4 : 1), y - LANE_H + 9, 3, 3);
+          }
+        });
+      }
+
+      bits.draw(ctx, ink);
+      var hy = H - 30 - hopper.row * LANE_H + scroll;
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(hopper.x) - 5, Math.round(hy) - 10, 10, 10);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(Math.round(hopper.x) - 3, Math.round(hy) - 7, 2, 2);
+      ctx.fillRect(Math.round(hopper.x) + 1, Math.round(hy) - 7, 2, 2);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LANES " + best, 4, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LANE " + hopper.row + " · BEST " + best; };
+    return game;
+  }
+
+  /* ---- 32. SWARM ---------------------------------------------------------
+
+     The survivor auto-shooter. You never press fire — the revocation aura
+     fires itself on a timer and all you do is move, which is the whole design
+     insight of the genre and, as it happens, an accurate picture of a policy
+     engine: it is always running, and your only input is where you stand. */
+  function cabinetSwarm(random) {
+    var WALKER = makeSprite([
+      ".111.",
+      "12221",
+      "12221",
+      ".111.",
+      ".1.1."
+    ], ["danger", "bg"]);
+
+    var game = { id: "swarm", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(90);
+    var hero, mob, shots, level, xp, need, timer, cooldown, aura, spawnTimer, hurt;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      hero = { x: W / 2, y: H / 2, hp: 100 };
+      mob = [];
+      shots = [];
+      level = 1;
+      xp = 0;
+      need = 6;
+      timer = 0;
+      cooldown = 0;
+      aura = { rate: 0.75, damage: 1, count: 1 };
+      spawnTimer = 0;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+    };
+
+    function spawn() {
+      var edge = Math.floor(random() * 4);
+      var x = edge === 0 ? -8 : edge === 1 ? W + 8 : random() * W;
+      var y = edge === 2 ? -8 : edge === 3 ? H + 8 : random() * H;
+      // Capped, and scaling in both directions: an auto-shooter whose crowd
+      // stops getting faster is one a level-20 aura clears forever, which the
+      // random-hand soak found by surviving five minutes without trying.
+      if (mob.length > 90) return;
+      var elite = level > 6 && random() < 0.18;
+      mob.push({
+        x: x,
+        y: y,
+        hp: (1 + Math.floor(level / 3)) * (elite ? 4 : 1),
+        speed: (24 + level * 2.4) * (elite ? 0.8 : 1),
+        elite: elite
+      });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      timer += dt;
+      hurt = Math.max(0, hurt - dt);
+
+      var speed = 62 * dt;
+      var mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      var my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+      if (mx && my) { mx *= 0.7071; my *= 0.7071; }
+      hero.x = clamp(hero.x + mx * speed, 6, W - 6);
+      hero.y = clamp(hero.y + my * speed, 16, H - 6);
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.09, 1.1 - level * 0.06);
+        spawn();
+        if (level > 4) spawn();
+        if (level > 9 && random() < 0.6) spawn();
+      }
+
+      // The aura fires on its own, at the nearest targets, forever.
+      cooldown -= dt;
+      if (cooldown <= 0 && mob.length) {
+        cooldown = aura.rate;
+        var sorted = mob.slice().sort(function (a, b) {
+          return (a.x - hero.x) * (a.x - hero.x) + (a.y - hero.y) * (a.y - hero.y) -
+                 ((b.x - hero.x) * (b.x - hero.x) + (b.y - hero.y) * (b.y - hero.y));
+        });
+        for (var i = 0; i < Math.min(aura.count, sorted.length); i += 1) {
+          var t = sorted[i];
+          var d = Math.hypot(t.x - hero.x, t.y - hero.y) || 1;
+          shots.push({ x: hero.x, y: hero.y, vx: (t.x - hero.x) / d * 140, vy: (t.y - hero.y) / d * 140, life: 1.6 });
+        }
+      }
+
+      for (var s = shots.length - 1; s >= 0; s -= 1) {
+        var sh = shots[s];
+        sh.x += sh.vx * dt;
+        sh.y += sh.vy * dt;
+        sh.life -= dt;
+        if (sh.life <= 0) { shots.splice(s, 1); continue; }
+        for (var m = mob.length - 1; m >= 0; m -= 1) {
+          var e = mob[m];
+          if (Math.abs(e.x - sh.x) > 6 || Math.abs(e.y - sh.y) > 6) continue;
+          e.hp -= aura.damage;
+          shots.splice(s, 1);
+          if (e.hp <= 0) {
+            mob.splice(m, 1);
+            game.score += 5;
+            xp += 1;
+            bits.burst(e.x, e.y, 6, { colour: "danger", speed: 60, life: 0.4 });
+          }
+          break;
+        }
+      }
+
+      for (var k = mob.length - 1; k >= 0; k -= 1) {
+        var q = mob[k];
+        var dd = Math.hypot(hero.x - q.x, hero.y - q.y) || 1;
+        q.x += ((hero.x - q.x) / dd) * q.speed * dt;
+        q.y += ((hero.y - q.y) / dd) * q.speed * dt;
+        if (dd < 8 && hurt <= 0) {
+          hurt = 0.6;
+          hero.hp -= 12;
+          fx.shake(6);
+          fx.flash("danger", 0.8);
+          if (hero.hp <= 0) {
+            game.lives -= 1;
+            hero.hp = 100;
+            mob.length = 0;
+            if (game.lives <= 0) { game.over = true; return; }
+            // The crowd was just emptied out from under this loop, so the
+            // remaining indices point at nothing. Leaving rather than
+            // continuing: the alternative reads the hole and throws.
+            break;
+          }
+        }
+      }
+
+      if (xp >= need) {
+        // Levelling picks its own upgrade. A menu here would be the better
+        // game and the wrong cabinet: this one is about not stopping.
+        xp -= need;
+        level += 1;
+        need = Math.floor(need * 1.35);
+        game.score += 25;
+        var roll = level % 3;
+        if (roll === 0) aura.count += 1;
+        else if (roll === 1) aura.rate = Math.max(0.16, aura.rate * 0.86);
+        else aura.damage += 1;
+        fx.flash("verify", 1);
+        fx.pop(hero.x, hero.y - 14, "LEVEL " + level, "verify");
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = ink.grid;
+      for (var g = 0; g < W; g += 24) ctx.fillRect(g, 14, 1, H - 14);
+      for (var r = 14; r < H; r += 24) ctx.fillRect(0, r, W, 1);
+      fx.begin(ctx);
+
+      mob.forEach(function (e) { WALKER.drawAt(ctx, ink, e.x, e.y, e.elite ? 3 : 2); });
+      shots.forEach(function (s) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y) - 1, 3, 3);
+      });
+      bits.draw(ctx, ink);
+
+      ctx.fillStyle = hurt > 0 ? ink.bright : ink.verify;
+      ctx.fillRect(Math.round(hero.x) - 4, Math.round(hero.y) - 5, 8, 10);
+
+      drawBar(ctx, ink, 4, 4, 80, 5, hero.hp / 100, hero.hp > 35 ? "verify" : "danger");
+      drawBar(ctx, ink, W - 84, 4, 80, 5, xp / need, "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LV " + level, W / 2 - 14, 10);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LV " + level + " · " + mob.length + " INBOUND"; };
+    return game;
+  }
+
+  /* ---- 33. BULLET LEDGER -------------------------------------------------
+
+     Curtain-fire dodging. The patterns are denials radiating out of a policy
+     core, your hitbox is one pixel at the centre of a much larger sprite (the
+     genre's oldest kindness), and grazing a denial without being hit by it is
+     worth more than avoiding it entirely. */
+  function cabinetBulletLedger(random) {
+    var game = { id: "bullet-ledger", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(70);
+    var ship, shots, core, phase, phaseTimer, fireTimer, graze, hurt, wave;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      ship = { x: W / 2, y: H - 34 };
+      shots = [];
+      core = { x: W / 2, y: 48, hp: 60, max: 60, angle: 0 };
+      phase = 0;
+      phaseTimer = 6;
+      fireTimer = 0;
+      graze = 0;
+      hurt = 0;
+      wave = 1;
+      fx.reset();
+      bits.clear();
+    };
+
+    function emit(count, speed, spin) {
+      for (var i = 0; i < count; i += 1) {
+        var a = core.angle + (i / count) * Math.PI * 2 + spin;
+        shots.push({ x: core.x, y: core.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed });
+      }
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      core.angle += dt * 0.9;
+
+      // Focus: holding fire halves your speed for threading a gap, which is
+      // the other half of the genre's grammar.
+      var focus = input.fire;
+      var speed = (focus ? 42 : 92) * dt;
+      if (input.left) ship.x -= speed;
+      if (input.right) ship.x += speed;
+      if (input.up) ship.y -= speed;
+      if (input.down) ship.y += speed;
+      ship.x = clamp(ship.x, 5, W - 5);
+      ship.y = clamp(ship.y, 18, H - 5);
+
+      phaseTimer -= dt;
+      if (phaseTimer <= 0) {
+        phase = (phase + 1) % 3;
+        phaseTimer = 6;
+      }
+
+      fireTimer -= dt;
+      if (fireTimer <= 0) {
+        var tier = Math.min(3, 1 + Math.floor(wave / 2));
+        if (phase === 0) { emit(8 + tier * 2, 48, 0); fireTimer = 0.5; }
+        else if (phase === 1) { emit(3, 62, Math.sin(core.angle * 2)); fireTimer = 0.16; }
+        else {
+          var d = Math.atan2(ship.y - core.y, ship.x - core.x);
+          for (var i = -1; i <= 1; i += 1) {
+            shots.push({ x: core.x, y: core.y, vx: Math.cos(d + i * 0.22) * 76, vy: Math.sin(d + i * 0.22) * 76 });
+          }
+          fireTimer = 0.42;
+        }
+      }
+
+      for (var s = shots.length - 1; s >= 0; s -= 1) {
+        var b = shots[s];
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.x < -10 || b.x > W + 10 || b.y < -10 || b.y > H + 10) { shots.splice(s, 1); continue; }
+        var dx = Math.abs(b.x - ship.x), dy = Math.abs(b.y - ship.y);
+        if (dx < 2 && dy < 2) {
+          shots.splice(s, 1);
+          game.lives -= 1;
+          hurt = 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          bits.burst(ship.x, ship.y, 16, { colour: "danger", speed: 80, life: 0.6 });
+          if (game.lives <= 0) { game.over = true; return; }
+        } else if (dx < 9 && dy < 9 && !b.grazed) {
+          b.grazed = true;
+          graze += 1;
+          game.score += 2;
+          if (graze % 10 === 0) fx.pop(ship.x, ship.y - 12, "GRAZE ×" + graze, "brass");
+        }
+      }
+
+      // The core takes damage from proximity: you have no gun, so the only
+      // way to end a wave is to be brave about where you stand.
+      if (Math.abs(ship.x - core.x) < 26 && Math.abs(ship.y - core.y) < 26) {
+        core.hp -= 14 * dt;
+        game.score += Math.round(20 * dt);
+        if (core.hp <= 0) {
+          wave += 1;
+          core.hp = core.max = 60 + wave * 22;
+          core.x = 40 + random() * (W - 80);
+          shots.length = 0;
+          game.score += 120;
+          fx.flash("verify", 1);
+          bits.burst(core.x, core.y, 24, { colour: "verify", speed: 110, life: 0.8 });
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 24);
+      fx.begin(ctx);
+
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(core.x - 10, core.y - 10, 20, 20);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(core.x - 5, core.y - 5, 10, 10);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(core.x - 2, core.y - 2, 4, 4);
+
+      shots.forEach(function (b) {
+        ctx.fillStyle = b.grazed ? ink.brass : ink.danger;
+        ctx.fillRect(Math.round(b.x) - 2, Math.round(b.y) - 2, 4, 4);
+      });
+      bits.draw(ctx, ink);
+
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 12) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(Math.round(ship.x) - 4, Math.round(ship.y) - 5, 8, 10);
+      // The one-pixel hitbox, drawn, because a genre that hides it teaches
+      // the wrong lesson in the ten seconds this cabinet gets.
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(ship.x), Math.round(ship.y), 1, 1);
+
+      drawBar(ctx, ink, 60, 6, W - 120, 5, core.hp / core.max, "danger");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("W" + wave, 4, 12);
+      ctx.fillText("GRAZE " + graze, W - 60, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · GRAZE " + graze; };
+    return game;
+  }
+
+  /* ---- 34. CHOKEPOINT ----------------------------------------------------
+
+     Tower defence. Calls walk a fixed path toward the tool; you spend budget
+     placing denials beside it. The genre's real subject is that you cannot
+     cover everything, so you pick where the path bends. */
+  function cabinetChokepoint(random) {
+    var CELL = 16;
+    var COLS = 20;
+    var ROWS = 12;
+    var OY = 30;
+    // A fixed serpentine route: a generated one makes the first ten seconds
+    // of every run a reading exercise instead of a placement decision.
+    var PATH = [];
+    (function () {
+      var y = 2;
+      for (var leg = 0; leg < 3; leg += 1) {
+        var left = leg % 2 === 0;
+        for (var x = 0; x < COLS; x += 1) PATH.push({ x: left ? x : COLS - 1 - x, y: y });
+        y += 4;
+        if (y < ROWS) {
+          var cx = left ? COLS - 1 : 0;
+          PATH.push({ x: cx, y: y - 3 });
+          PATH.push({ x: cx, y: y - 2 });
+          PATH.push({ x: cx, y: y - 1 });
+        }
+      }
+    })();
+
+    var game = { id: "chokepoint", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var towers, calls, cursor, budget, wave, spawnLeft, spawnTimer, held, message, messageAge;
+
+    function onPath(cx, cy) {
+      return PATH.some(function (p) { return p.x === cx && p.y === cy; });
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      towers = [];
+      calls = [];
+      cursor = { x: 3, y: 4 };
+      budget = 60;
+      wave = 1;
+      spawnLeft = 6;
+      spawnTimer = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.left) cursor.x = Math.max(0, cursor.x - 1);
+        else if (input.right) cursor.x = Math.min(COLS - 1, cursor.x + 1);
+        else if (input.up) cursor.y = Math.max(0, cursor.y - 1);
+        else if (input.down) cursor.y = Math.min(ROWS - 1, cursor.y + 1);
+        else if (input.fire) {
+          var taken = towers.some(function (t) { return t.x === cursor.x && t.y === cursor.y; });
+          if (onPath(cursor.x, cursor.y)) {
+            message = "THE PATH IS NOT YOURS TO BUILD ON";
+            messageAge = 0;
+          } else if (taken) {
+            message = "ALREADY DENIED HERE";
+            messageAge = 0;
+          } else if (budget < 25) {
+            message = "BUDGET SHORT";
+            messageAge = 0;
+          } else {
+            budget -= 25;
+            towers.push({ x: cursor.x, y: cursor.y, cool: 0 });
+            fx.flash("verify", 0.6);
+          }
+        }
+      }
+
+      spawnTimer -= dt;
+      if (spawnLeft > 0 && spawnTimer <= 0) {
+        spawnTimer = Math.max(0.35, 1.2 - wave * 0.06);
+        spawnLeft -= 1;
+        calls.push({ t: 0, hp: 2 + wave, max: 2 + wave, speed: 1.4 + wave * 0.12 });
+      }
+
+      for (var i = calls.length - 1; i >= 0; i -= 1) {
+        var c = calls[i];
+        c.t += c.speed * dt;
+        if (c.t >= PATH.length - 1) {
+          calls.splice(i, 1);
+          game.lives -= 1;
+          fx.shake(9);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      }
+
+      towers.forEach(function (t) {
+        t.cool -= dt;
+        if (t.cool > 0) return;
+        for (var i = 0; i < calls.length; i += 1) {
+          var node = PATH[Math.min(PATH.length - 1, Math.floor(calls[i].t))];
+          if (Math.abs(node.x - t.x) > 2 || Math.abs(node.y - t.y) > 2) continue;
+          t.cool = 0.55;
+          calls[i].hp -= 1;
+          bits.burst(node.x * CELL + 8, OY + node.y * CELL + 8, 3, { colour: "bright", speed: 40, life: 0.3 });
+          if (calls[i].hp <= 0) {
+            calls.splice(i, 1);
+            budget += 14;
+            game.score += 20;
+          }
+          break;
+        }
+      });
+
+      if (!spawnLeft && !calls.length) {
+        wave += 1;
+        spawnLeft = 5 + wave * 2;
+        budget += 40;
+        game.score += 60;
+        message = "WAVE " + wave;
+        messageAge = 0;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+
+      PATH.forEach(function (p) {
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(p.x * CELL, OY + p.y * CELL, CELL, CELL);
+      });
+      towers.forEach(function (t) {
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(t.x * CELL + 3, OY + t.y * CELL + 3, CELL - 6, CELL - 6);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(t.x * CELL + 6, OY + t.y * CELL + 6, CELL - 12, CELL - 12);
+      });
+      calls.forEach(function (c) {
+        var node = PATH[Math.min(PATH.length - 1, Math.floor(c.t))];
+        var x = node.x * CELL + 8, y = OY + node.y * CELL + 8;
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(x - 5, y - 5, 10, 10);
+        drawBar(ctx, ink, x - 6, y - 9, 12, 2, c.hp / c.max, "brass");
+      });
+
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(cursor.x * CELL, OY + cursor.y * CELL, CELL, 2);
+      ctx.fillRect(cursor.x * CELL, OY + cursor.y * CELL + CELL - 2, CELL, 2);
+      ctx.fillRect(cursor.x * CELL, OY + cursor.y * CELL, 2, CELL);
+      ctx.fillRect(cursor.x * CELL + CELL - 2, OY + cursor.y * CELL, 2, CELL);
+
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("BUDGET " + budget, 4, 12);
+      ctx.fillText("WAVE " + wave, W - 60, 12);
+      ctx.fillText("DENIAL COSTS 25", 4, 24);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 6, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · " + budget + " BUDGET"; };
+    return game;
+  }
+
+  /* ---- 35. DECK OF SCOPES ------------------------------------------------
+
+     The deck-builder, compressed to the one turn it is actually about: you
+     hold five scopes, each costs energy, and the thing across the table is
+     going to hit you for a number it has already told you. Everything else in
+     the genre is that decision with more nouns. */
+  function cabinetDeckOfScopes(random) {
+    var CARDS = [
+      { name: "DENY", cost: 1, dmg: 6, block: 0, note: "small, honest" },
+      { name: "REVOKE", cost: 2, dmg: 11, block: 0, note: "takes a grant back" },
+      { name: "AUDIT", cost: 1, dmg: 3, block: 5, note: "look, and cover" },
+      { name: "QUARANTINE", cost: 2, dmg: 0, block: 12, note: "nothing gets through" },
+      { name: "ESCALATE", cost: 3, dmg: 20, block: -4, note: "loud, and it costs" }
+    ];
+
+    var game = { id: "deck-of-scopes", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var hand, pick, energy, block, hp, foe, tier, phase, timer, held, log;
+
+    function newFoe() {
+      foe = {
+        hp: 26 + tier * 12,
+        max: 26 + tier * 12,
+        hit: 6 + tier * 3,
+        wind: 2
+      };
+    }
+
+    function draw5() {
+      hand = [];
+      for (var i = 0; i < 5; i += 1) hand.push(CARDS[Math.floor(random() * CARDS.length)]);
+      energy = 3;
+      pick = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      hp = 40;
+      block = 0;
+      tier = 1;
+      phase = "you";
+      timer = 0;
+      held = false;
+      log = "THE DECK IS THE POLICY.";
+      newFoe();
+      draw5();
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+
+      if (phase === "foe") {
+        timer -= dt;
+        if (timer > 0) return;
+        var incoming = Math.max(0, foe.hit - block);
+        hp -= incoming;
+        block = 0;
+        fx.shake(incoming ? 7 : 2);
+        log = incoming ? "TOOK " + incoming : "BLOCKED IT ALL";
+        if (hp <= 0) {
+          game.lives -= 1;
+          hp = 40;
+          if (game.lives <= 0) { game.over = true; return; }
+          log = "RUN ENDED. RESHUFFLE.";
+        }
+        phase = "you";
+        draw5();
+        return;
+      }
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.left) pick = (pick + hand.length - 1) % hand.length;
+      else if (input.right) pick = (pick + 1) % hand.length;
+      else if (input.down || input.up) {
+        // End turn: the deliberate skip the genre needs, on the axis the hand
+        // does not use.
+        phase = "foe";
+        timer = 0.7;
+      } else if (input.fire) {
+        var card = hand[pick];
+        if (!card) return;
+        if (card.cost > energy) {
+          log = "NOT ENOUGH ENERGY";
+          return;
+        }
+        energy -= card.cost;
+        block = Math.max(0, block + card.block);
+        if (card.dmg) {
+          foe.hp -= card.dmg;
+          fx.pop(W / 2, 60, "-" + card.dmg, "danger");
+        }
+        log = card.name + " PLAYED";
+        hand.splice(pick, 1);
+        if (pick >= hand.length) pick = Math.max(0, hand.length - 1);
+        game.score += card.dmg;
+
+        if (foe.hp <= 0) {
+          tier += 1;
+          game.score += 80;
+          hp = Math.min(40, hp + 8);
+          newFoe();
+          draw5();
+          fx.flash("verify", 1);
+          log = "CLEARED. NEXT TIER.";
+          return;
+        }
+        if (!hand.length || energy <= 0) {
+          phase = "foe";
+          timer = 0.7;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(W / 2 - 30, 26, 60, 40);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(W / 2 - 18, 38, 10, 6);
+      ctx.fillRect(W / 2 + 8, 38, 10, 6);
+      drawBar(ctx, ink, W / 2 - 40, 72, 80, 5, foe.hp / foe.max, "danger");
+      centreText(ctx, ink, "TIER " + tier + " · HITS FOR " + foe.hit, 86, "dim");
+
+      drawPanel(ctx, ink, 6, 96, W - 12, 20);
+      centreText(ctx, ink, log, 108, "ink");
+
+      hand.forEach(function (card, i) {
+        var x = 8 + i * 61;
+        var y = 130;
+        ctx.fillStyle = i === pick ? ink.brass : ink.wall[2];
+        ctx.fillRect(x, y, 56, 62);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 2, y + 2, 52, 58);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.fillStyle = i === pick ? ink.bright : ink.ink;
+        ctx.fillText(card.name.slice(0, 9), x + 5, y + 14);
+        ctx.fillStyle = ink.dim;
+        ctx.fillText(card.cost + " NRG", x + 5, y + 28);
+        if (card.dmg) ctx.fillText(card.dmg + " DMG", x + 5, y + 40);
+        if (card.block) ctx.fillText(card.block + " BLK", x + 5, y + 52);
+      });
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.verify;
+      ctx.fillText("HP " + Math.max(0, hp) + "/40", 6, 208);
+      ctx.fillStyle = ink.brass;
+      ctx.fillText("ENERGY " + energy, 90, 208);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("BLOCK " + block, 176, 208);
+      centreText(ctx, ink, "← → pick · SPACE play · ↑↓ end turn", 226, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "TIER " + tier + " · HP " + Math.max(0, hp); };
+    return game;
+  }
+
+  /* ---- 36. BACKSTOP ------------------------------------------------------
+
+     Wave defence around a core you cannot move. Everything the genre does
+     with turrets and repair drones, compressed into one gun that overheats:
+     the interesting decision is when to stop shooting. */
+  function cabinetBackstop(random) {
+    var game = { id: "backstop", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(70);
+    var angle, heat, locked, shots, foes, wave, spawnLeft, spawnTimer, core, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      angle = -Math.PI / 2;
+      heat = 0;
+      locked = false;
+      shots = [];
+      foes = [];
+      wave = 1;
+      spawnLeft = 6;
+      spawnTimer = 0.5;
+      core = { hp: 100 };
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (input.left) angle -= 2.4 * dt;
+      if (input.right) angle += 2.4 * dt;
+
+      // Heat: firing adds, not firing sheds, and a lockout costs you the
+      // seconds a wave needs to reach the core.
+      if (input.fire && !locked) {
+        heat += 0.85 * dt;
+        if (!held) {
+          held = true;
+          shots.push({ x: W / 2, y: H / 2, vx: Math.cos(angle) * 190, vy: Math.sin(angle) * 190, life: 1.4 });
+          bits.burst(W / 2 + Math.cos(angle) * 14, H / 2 + Math.sin(angle) * 14, 2, { colour: "bright", speed: 30, life: 0.2 });
+        }
+      } else {
+        held = false;
+        heat -= 0.5 * dt;
+      }
+      heat = clamp(heat, 0, 1);
+      if (heat >= 1) locked = true;
+      if (locked && heat <= 0.25) locked = false;
+
+      spawnTimer -= dt;
+      if (spawnLeft > 0 && spawnTimer <= 0) {
+        spawnTimer = Math.max(0.3, 1.3 - wave * 0.07);
+        spawnLeft -= 1;
+        var a = random() * Math.PI * 2;
+        foes.push({ x: W / 2 + Math.cos(a) * 190, y: H / 2 + Math.sin(a) * 190, speed: 20 + wave * 2.4, hp: 1 + Math.floor(wave / 4) });
+      }
+
+      for (var s = shots.length - 1; s >= 0; s -= 1) {
+        var sh = shots[s];
+        sh.x += sh.vx * dt;
+        sh.y += sh.vy * dt;
+        sh.life -= dt;
+        if (sh.life <= 0) { shots.splice(s, 1); continue; }
+        for (var f = foes.length - 1; f >= 0; f -= 1) {
+          if (Math.abs(foes[f].x - sh.x) > 7 || Math.abs(foes[f].y - sh.y) > 7) continue;
+          foes[f].hp -= 1;
+          shots.splice(s, 1);
+          if (foes[f].hp <= 0) {
+            bits.burst(foes[f].x, foes[f].y, 8, { colour: "danger", speed: 70, life: 0.45 });
+            foes.splice(f, 1);
+            game.score += 15;
+          }
+          break;
+        }
+      }
+
+      for (var i = foes.length - 1; i >= 0; i -= 1) {
+        var e = foes[i];
+        var d = Math.hypot(W / 2 - e.x, H / 2 - e.y) || 1;
+        e.x += ((W / 2 - e.x) / d) * e.speed * dt;
+        e.y += ((H / 2 - e.y) / d) * e.speed * dt;
+        if (d < 14) {
+          foes.splice(i, 1);
+          core.hp -= 12;
+          fx.shake(8);
+          fx.flash("danger", 0.9);
+          if (core.hp <= 0) {
+            game.lives -= 1;
+            core.hp = 100;
+            foes.length = 0;
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        }
+      }
+
+      if (!spawnLeft && !foes.length) {
+        wave += 1;
+        spawnLeft = 5 + wave * 2;
+        core.hp = Math.min(100, core.hp + 15);
+        game.score += 70;
+        fx.flash("verify", 0.8);
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 20);
+      fx.begin(ctx);
+
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(W / 2 - 12, H / 2 - 12, 24, 24);
+      ctx.fillStyle = core.hp > 40 ? ink.verify : ink.danger;
+      ctx.fillRect(W / 2 - 8, H / 2 - 8, 16, 16);
+      ctx.fillStyle = locked ? ink.danger : ink.bright;
+      ctx.fillRect(
+        Math.round(W / 2 + Math.cos(angle) * 12) - 2,
+        Math.round(H / 2 + Math.sin(angle) * 12) - 2, 5, 5
+      );
+
+      foes.forEach(function (e) {
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(Math.round(e.x) - 5, Math.round(e.y) - 5, 10, 10);
+      });
+      shots.forEach(function (s) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y) - 1, 3, 3);
+      });
+      bits.draw(ctx, ink);
+
+      drawBar(ctx, ink, 4, 4, 90, 5, core.hp / 100, core.hp > 40 ? "verify" : "danger");
+      drawBar(ctx, ink, W - 94, 4, 90, 5, heat, locked ? "danger" : "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = locked ? ink.danger : ink.dim;
+      ctx.fillText(locked ? "OVERHEATED" : "HEAT", W - 94, 18);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WAVE " + wave, 4, 18);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · CORE " + Math.max(0, core.hp); };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -6205,6 +7908,105 @@
       controls: "arrows move · SPACE bind the scope",
       pad: "dpad+fire",
       make: cabinetCatalog
+    },
+    {
+      id: "rate-gate",
+      name: "RATE GATE",
+      genre: "ONE-TOUCH",
+      tagline: "One button. Endless rate limits, each with a gap in it.",
+      controls: "SPACE flap",
+      pad: "tap",
+      make: cabinetRateGate
+    },
+    {
+      id: "merge-ledger",
+      name: "MERGE LEDGER",
+      genre: "MERGE",
+      tagline: "Equal entries combine. The board fills either way.",
+      controls: "arrows slide",
+      pad: "dpad",
+      make: cabinetMergeLedger
+    },
+    {
+      id: "tap-forge",
+      name: "TAP FORGE",
+      genre: "IDLE",
+      tagline: "Mint by hand until something mints for you.",
+      controls: "↑ ↓ choose · SPACE mint or buy",
+      pad: "ud+fire",
+      make: cabinetTapForge
+    },
+    {
+      id: "drop-stack",
+      name: "DROP STACK",
+      genre: "STACKER",
+      tagline: "Whatever hangs over the edge shears off.",
+      controls: "SPACE drop",
+      pad: "tap",
+      make: cabinetDropStack
+    },
+    {
+      id: "slice-queue",
+      name: "SLICE QUEUE",
+      genre: "SLICE",
+      tagline: "Cut the signed ones. Let the unsigned ones fall.",
+      controls: "arrows move the blade · SPACE swing",
+      pad: "dpad+fire",
+      make: cabinetSliceQueue
+    },
+    {
+      id: "lane-hop",
+      name: "LANE HOP",
+      genre: "CROSSING",
+      tagline: "Every lane is a service with its own traffic.",
+      controls: "arrows hop",
+      pad: "dpad",
+      make: cabinetLaneHop
+    },
+    {
+      id: "swarm",
+      name: "SWARM",
+      genre: "SURVIVOR",
+      tagline: "You never press fire. The aura is always running.",
+      controls: "arrows move",
+      pad: "dpad",
+      make: cabinetSwarm
+    },
+    {
+      id: "bullet-ledger",
+      name: "BULLET LEDGER",
+      genre: "BULLET HELL",
+      tagline: "Your hitbox is one pixel. Grazing pays.",
+      controls: "arrows move · SPACE focus",
+      pad: "dpad+fire",
+      make: cabinetBulletLedger
+    },
+    {
+      id: "chokepoint",
+      name: "CHOKEPOINT",
+      genre: "TOWER DEF",
+      tagline: "You cannot cover everything. Pick where the path bends.",
+      controls: "arrows move · SPACE place a denial",
+      pad: "dpad+fire",
+      make: cabinetChokepoint
+    },
+    {
+      id: "deck-of-scopes",
+      name: "DECK OF SCOPES",
+      genre: "DECKBUILD",
+      tagline: "Five scopes, three energy, and it already told you what it hits for.",
+      controls: "← → pick · SPACE play · ↑ ↓ end turn",
+      pad: "dpad+fire",
+      make: cabinetDeckOfScopes
+    },
+    {
+      id: "backstop",
+      name: "BACKSTOP",
+      genre: "DEFENCE",
+      tagline: "One gun, and it overheats. Knowing when to stop is the game.",
+      controls: "← → aim · SPACE fire",
+      pad: "lr+fire",
+      make: cabinetBackstop
     }
   ];
 
