@@ -11526,6 +11526,683 @@
     return game;
   }
 
+  /* ---- 67. PIPE PERMIT ---------------------------------------------------
+
+     Rotate segments to carry flow from the source to the sink before the flow
+     arrives. The pressure does not wait for you to finish thinking, which is
+     the only difference between this and a wiring diagram. */
+  function cabinetPipePermit(random) {
+    var COLS = 8;
+    var ROWS = 6;
+    var CELL = 30;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 46;
+    // Bit per side: 1 up, 2 right, 4 down, 8 left.
+    var SHAPES = [3, 6, 12, 9, 5, 10, 7, 11, 13, 14];
+
+    var game = { id: "pipe-permit", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var grid, cursor, flow, level, held, filled, message, messageAge;
+
+    function rotate(mask) {
+      return ((mask << 1) | (mask >> 3)) & 15;
+    }
+
+    function build() {
+      grid = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) {
+        grid.push({ mask: SHAPES[Math.floor(random() * SHAPES.length)], wet: false });
+      }
+      grid[0].mask = 6;
+      grid[0].wet = true;
+      grid[COLS * ROWS - 1].mask = 9;
+      flow = Math.max(9, 22 - level * 1.4);
+      filled = 1;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      cursor = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    function spread() {
+      // One breadth step per tick from every wet cell into any neighbour whose
+      // opening faces back. Cheap, and it makes the flow visibly crawl.
+      var added = 0;
+      var snapshot = grid.map(function (c) { return c.wet; });
+      for (var i = 0; i < grid.length; i += 1) {
+        if (!snapshot[i]) continue;
+        var x = i % COLS, y = Math.floor(i / COLS);
+        var dirs = [
+          { bit: 1, back: 4, nx: x, ny: y - 1 },
+          { bit: 2, back: 8, nx: x + 1, ny: y },
+          { bit: 4, back: 1, nx: x, ny: y + 1 },
+          { bit: 8, back: 2, nx: x - 1, ny: y }
+        ];
+        for (var d = 0; d < dirs.length; d += 1) {
+          var dir = dirs[d];
+          if (!(grid[i].mask & dir.bit)) continue;
+          if (dir.nx < 0 || dir.ny < 0 || dir.nx >= COLS || dir.ny >= ROWS) continue;
+          var n = grid[dir.ny * COLS + dir.nx];
+          if (n.wet || !(n.mask & dir.back)) continue;
+          n.wet = true;
+          added += 1;
+        }
+      }
+      return added;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      flow -= dt;
+
+      if (flow <= 0) {
+        flow = 1.1;
+        var added = spread();
+        filled += added;
+        game.score += added * 3;
+        if (grid[COLS * ROWS - 1].wet) {
+          level += 1;
+          game.score += 140;
+          message = "SINK REACHED — LEVEL " + level;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          build();
+          return;
+        }
+        if (!added) {
+          game.lives -= 1;
+          message = "FLOW STALLED";
+          messageAge = 0;
+          fx.shake(10);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          build();
+          return;
+        }
+      }
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+      if (input.fire) {
+        // A wet segment has already committed; rotating it would rewrite
+        // history, which this product has opinions about.
+        if (grid[cursor].wet) { fx.shake(3); return; }
+        grid[cursor].mask = rotate(grid[cursor].mask);
+      } else if (input.left) cursor = (cursor + grid.length - 1) % grid.length;
+      else if (input.right) cursor = (cursor + 1) % grid.length;
+      else if (input.up) cursor = (cursor + grid.length - COLS) % grid.length;
+      else if (input.down) cursor = (cursor + COLS) % grid.length;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      grid.forEach(function (cell, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(x + 1, y + 1, CELL - 3, CELL - 3);
+        var mid = CELL / 2;
+        ctx.fillStyle = cell.wet ? ink.verify : ink.wall[1];
+        ctx.fillRect(x + mid - 3, y + mid - 3, 6, 6);
+        if (cell.mask & 1) ctx.fillRect(x + mid - 3, y + 1, 6, mid - 1);
+        if (cell.mask & 2) ctx.fillRect(x + mid, y + mid - 3, mid - 2, 6);
+        if (cell.mask & 4) ctx.fillRect(x + mid - 3, y + mid, 6, mid - 2);
+        if (cell.mask & 8) ctx.fillRect(x + 1, y + mid - 3, mid - 1, 6);
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x, y, CELL - 1, 2);
+          ctx.fillRect(x, y + CELL - 3, CELL - 1, 2);
+        }
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = flow < 4 ? ink.danger : ink.dim;
+      ctx.fillText("FLOW IN " + flow.toFixed(1) + "s", 6, 18);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, W - 66, 18);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 8, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + filled + " WET"; };
+    return game;
+  }
+
+  /* ---- 68. CIRCUIT ROUTE -------------------------------------------------
+
+     Draw a trace from each source to its matching sink without crossing
+     another trace. Every pair you connect makes the remaining space worse,
+     which is the entire discipline of physical layout. */
+  function cabinetCircuitRoute(random) {
+    var SIZE = 7;
+    var CELL = 28;
+    var OX = (W - SIZE * CELL) / 2;
+    var OY = 40;
+
+    var game = { id: "circuit-route", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var pads, occupied, cursor, drawing, trace, level, held, done, message, messageAge;
+
+    function build() {
+      pads = [];
+      occupied = {};
+      var pairs = Math.min(4, 2 + Math.floor(level / 2));
+      for (var p = 0; p < pairs; p += 1) {
+        var a = { x: Math.floor(random() * SIZE), y: Math.floor(random() * SIZE) };
+        var b = { x: Math.floor(random() * SIZE), y: Math.floor(random() * SIZE) };
+        if ((a.x === b.x && a.y === b.y) || occupied[a.y * SIZE + a.x] || occupied[b.y * SIZE + b.x]) { p -= 1; continue; }
+        occupied[a.y * SIZE + a.x] = "pad" + p;
+        occupied[b.y * SIZE + b.x] = "pad" + p;
+        pads.push({ id: p, a: a, b: b, wired: false });
+      }
+      done = 0;
+      drawing = null;
+      trace = [];
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      cursor = { x: 0, y: 0 };
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    function padAt(x, y) {
+      for (var i = 0; i < pads.length; i += 1) {
+        if (pads[i].a.x === x && pads[i].a.y === y) return { pair: pads[i], end: "a" };
+        if (pads[i].b.x === x && pads[i].b.y === y) return { pair: pads[i], end: "b" };
+      }
+      return null;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var here = padAt(cursor.x, cursor.y);
+        if (!drawing) {
+          if (here && !here.pair.wired) {
+            drawing = here;
+            trace = [{ x: cursor.x, y: cursor.y }];
+          } else fx.shake(3);
+        } else {
+          if (here && here.pair === drawing.pair && here.end !== drawing.end) {
+            drawing.pair.wired = true;
+            trace.forEach(function (t) { occupied[t.y * SIZE + t.x] = "wire"; });
+            done += 1;
+            game.score += 60;
+            fx.flash("verify", 0.8);
+            drawing = null;
+            trace = [];
+            if (done >= pads.length) {
+              level += 1;
+              game.score += 150;
+              message = "BOARD ROUTED — LEVEL " + level;
+              messageAge = 0;
+              build();
+            }
+          } else {
+            drawing = null;
+            trace = [];
+            fx.shake(4);
+          }
+        }
+        return;
+      }
+
+      var nx = cursor.x + (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      var ny = cursor.y + (input.down ? 1 : 0) - (input.up ? 1 : 0);
+      if (nx < 0 || ny < 0 || nx >= SIZE || ny >= SIZE) return;
+      if (drawing) {
+        var key = ny * SIZE + nx;
+        var blocked = occupied[key] && occupied[key] !== "pad" + drawing.pair.id;
+        if (blocked) {
+          // Running into another net drops the trace: no partial routes, the
+          // way a shorted board is not a partly working board.
+          drawing = null;
+          trace = [];
+          fx.shake(6);
+          game.lives -= 1;
+          if (game.lives <= 0) { game.over = true; return; }
+        } else {
+          trace.push({ x: nx, y: ny });
+        }
+      }
+      cursor.x = nx;
+      cursor.y = ny;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var i = 0; i < SIZE * SIZE; i += 1) {
+        var x = OX + (i % SIZE) * CELL;
+        var y = OY + Math.floor(i / SIZE) * CELL;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+        if (occupied[i] === "wire") {
+          ctx.fillStyle = ink.verify;
+          ctx.fillRect(x + 9, y + 9, CELL - 19, CELL - 19);
+        }
+      }
+      var colours = ["danger", "brass", "bright", "verify"];
+      pads.forEach(function (p) {
+        [p.a, p.b].forEach(function (end) {
+          ctx.fillStyle = ink[colours[p.id % colours.length]];
+          ctx.fillRect(OX + end.x * CELL + 5, OY + end.y * CELL + 5, CELL - 11, CELL - 11);
+          if (p.wired) {
+            ctx.fillStyle = ink.bg;
+            ctx.fillRect(OX + end.x * CELL + 10, OY + end.y * CELL + 10, CELL - 21, CELL - 21);
+          }
+        });
+      });
+      trace.forEach(function (t) {
+        ctx.fillStyle = ink.ink;
+        ctx.fillRect(OX + t.x * CELL + 10, OY + t.y * CELL + 10, CELL - 21, CELL - 21);
+      });
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(OX + cursor.x * CELL, OY + cursor.y * CELL, CELL - 2, 2);
+      ctx.fillRect(OX + cursor.x * CELL, OY + cursor.y * CELL + CELL - 4, CELL - 2, 2);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUTED " + done + "/" + pads.length, 6, 18);
+      ctx.fillText("LEVEL " + level, W - 66, 18);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 8, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + done + "/" + pads.length; };
+    return game;
+  }
+
+  /* ---- 69. FACTORY LINE --------------------------------------------------
+
+     A belt of parts and three stamps. Each part wants one stamp; hitting it
+     with the wrong one scraps it. Speed rises, and the belt never stops,
+     because a belt that stops is not a factory. */
+  function cabinetFactoryLine(random) {
+    var STAMPS = ["SIGN", "METER", "AUDIT"];
+
+    var game = { id: "factory-line", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var parts, pick, speed, spawnTimer, shipped, scrapped, held, shift;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      parts = [];
+      pick = 0;
+      speed = 40;
+      spawnTimer = 0.9;
+      shipped = 0;
+      scrapped = 0;
+      shift = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      speed = 40 + shift * 6;
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.fire) {
+          // The stamp lands on whatever is under the press right now.
+          var target = null;
+          parts.forEach(function (p) { if (Math.abs(p.x - W / 2) < 18 && !p.done) target = p; });
+          if (!target) {
+            fx.shake(3);
+          } else if (target.want === pick) {
+            target.done = true;
+            shipped += 1;
+            game.score += 25;
+            bits.burst(target.x, 118, 6, { colour: "verify", speed: 50, life: 0.35 });
+            if (shipped % 10 === 0) shift += 1;
+          } else {
+            target.done = true;
+            target.scrap = true;
+            scrapped += 1;
+            game.lives -= 1;
+            fx.shake(9);
+            fx.flash("danger", 1);
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        } else if (input.left) pick = (pick + STAMPS.length - 1) % STAMPS.length;
+        else if (input.right) pick = (pick + 1) % STAMPS.length;
+      }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.5, 1.5 - shift * 0.05);
+        parts.push({ x: -14, want: Math.floor(random() * STAMPS.length), done: false, scrap: false });
+      }
+
+      for (var i = parts.length - 1; i >= 0; i -= 1) {
+        parts[i].x += speed * dt;
+        if (parts[i].x < W + 16) continue;
+        var p = parts.splice(i, 1)[0];
+        if (!p.done) {
+          game.lives -= 1;
+          fx.flash("danger", 0.8);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 110, W, 26);
+      ctx.fillStyle = ink.grid;
+      for (var t = 0; t < W; t += 12) ctx.fillRect(t, 134, 6, 2);
+
+      ctx.fillStyle = ink.wall[1];
+      ctx.fillRect(W / 2 - 22, 60, 44, 40);
+      ctx.fillStyle = ink[["verify", "brass", "danger"][pick]];
+      ctx.fillRect(W / 2 - 16, 84, 32, 14);
+      ctx.font = '7px "IBM Plex Mono", monospace';
+      ctx.textAlign = "center";
+      ctx.fillStyle = ink.bg;
+      ctx.fillText(STAMPS[pick], W / 2, 92);
+      ctx.textAlign = "left";
+
+      parts.forEach(function (p) {
+        ctx.fillStyle = p.scrap ? ink.danger : p.done ? ink.verify : ink[["verify", "brass", "danger"][p.want]];
+        ctx.fillRect(Math.round(p.x) - 10, 112, 20, 20);
+        if (!p.done) {
+          ctx.fillStyle = ink.bg;
+          ctx.font = '7px "IBM Plex Mono", monospace';
+          ctx.textAlign = "center";
+          ctx.fillText(STAMPS[p.want].charAt(0), Math.round(p.x), 124);
+          ctx.textAlign = "left";
+        }
+      });
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("SHIPPED " + shipped, 4, 14);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("SCRAP " + scrapped, W - 76, 14);
+      centreText(ctx, ink, "← → change stamp · SPACE press", H - 10, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "SHIFT " + shift + " · SHIPPED " + shipped; };
+    return game;
+  }
+
+  /* ---- 70. BRIDGE BUILD --------------------------------------------------
+
+     Span the gap with a beam you extend by holding. Too short and the load
+     falls in; too long and it topples past the far side. One button, and the
+     genre's whole appeal is that you can see exactly how wrong you were. */
+  function cabinetBridgeBuild(random) {
+    var game = { id: "bridge-build", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var state, beam, walker, here, next, crossed, held, perfect;
+
+    function layout() {
+      here = { x: 40, w: 40 + random() * 26 };
+      next = { x: here.x + here.w + 30 + random() * 80, w: 30 + random() * 40 };
+      beam = 0;
+      state = "build";
+      walker = here.x + here.w - 10;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      crossed = 0;
+      perfect = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+      layout();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (state === "build") {
+        if (input.fire) { beam += 74 * dt; held = true; }
+        else if (held) { held = false; state = "drop"; }
+        return;
+      }
+      if (state === "drop") {
+        state = "walk";
+        return;
+      }
+      if (state === "walk") {
+        walker += 66 * dt;
+        var tip = here.x + here.w + beam;
+        var reachesNext = tip >= next.x && tip <= next.x + next.w;
+        if (walker > tip && !reachesNext) {
+          game.lives -= 1;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(walker, H - 70, 16, { colour: "danger", speed: 70, life: 0.7, gravity: 200 });
+          if (game.lives <= 0) { game.over = true; return; }
+          perfect = 0;
+          layout();
+          return;
+        }
+        if (walker >= next.x + 12) {
+          crossed += 1;
+          var middle = Math.abs(tip - (next.x + next.w / 2));
+          if (middle < 6) {
+            perfect += 1;
+            game.score += 60 + perfect * 20;
+            fx.pop(tip, H - 90, "PERFECT ×" + perfect, "verify");
+          } else {
+            perfect = 0;
+            game.score += 30;
+          }
+          fx.flash("verify", 0.7);
+          layout();
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, crossed * 40, H * 0.5);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(here.x, H - 60, here.w, 60);
+      ctx.fillRect(next.x, H - 60, next.w, 60);
+
+      var tip = here.x + here.w;
+      ctx.fillStyle = ink.brass;
+      if (state === "build") ctx.fillRect(tip - 3, H - 60 - beam, 5, beam);
+      else ctx.fillRect(tip, H - 63, beam, 4);
+
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(walker) - 4, H - 74, 8, 12);
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("CROSSED " + crossed, 4, 14);
+      if (perfect > 0) centreText(ctx, ink, "PERFECT STREAK ×" + perfect, 28, "verify");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "CROSSED " + crossed + " · PERFECT " + perfect; };
+    return game;
+  }
+
+  /* ---- 71. SORT KEYS -----------------------------------------------------
+
+     Pour keys between tubes until each tube holds one kind. A key only pours
+     onto its own kind or into empty space, so every move is either progress
+     or a wasted tube — which is why the genre is a planning puzzle wearing a
+     liquid animation. */
+  function cabinetSortKeys(random) {
+    var TUBES = 6;
+    var DEPTH = 4;
+
+    var game = { id: "sort-keys", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var tubes, cursor, picked, level, moves, held, message, messageAge;
+
+    function deal() {
+      var kinds = Math.min(4, 2 + Math.floor(level / 2));
+      var pool = [];
+      for (var k = 1; k <= kinds; k += 1) for (var d = 0; d < DEPTH; d += 1) pool.push(k);
+      for (var s = pool.length - 1; s > 0; s -= 1) {
+        var j = Math.floor(random() * (s + 1));
+        var t = pool[s]; pool[s] = pool[j]; pool[j] = t;
+      }
+      tubes = [];
+      for (var i = 0; i < TUBES; i += 1) tubes.push([]);
+      pool.forEach(function (v, i) { tubes[i % kinds].push(v); });
+      moves = 0;
+      picked = -1;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      cursor = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    function solved() {
+      return tubes.every(function (t) {
+        return !t.length || (t.length === DEPTH && t.every(function (v) { return v === t[0]; }));
+      });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.left) cursor = (cursor + TUBES - 1) % TUBES;
+      else if (input.right) cursor = (cursor + 1) % TUBES;
+      else if (input.fire) {
+        if (picked < 0) {
+          if (!tubes[cursor].length) { fx.shake(3); return; }
+          picked = cursor;
+        } else if (picked === cursor) {
+          picked = -1;
+        } else {
+          var from = tubes[picked], to = tubes[cursor];
+          var v = from[from.length - 1];
+          if (to.length >= DEPTH || (to.length && to[to.length - 1] !== v)) {
+            fx.shake(4);
+            picked = -1;
+            return;
+          }
+          while (from.length && from[from.length - 1] === v && to.length < DEPTH) {
+            to.push(from.pop());
+          }
+          moves += 1;
+          picked = -1;
+          game.score += 5;
+          if (solved()) {
+            level += 1;
+            game.score += 160;
+            message = "SORTED — LEVEL " + level;
+            messageAge = 0;
+            fx.flash("verify", 1);
+            deal();
+          } else if (moves > 24 + level * 4) {
+            game.lives -= 1;
+            message = "OUT OF MOVES";
+            messageAge = 0;
+            fx.shake(9);
+            if (game.lives <= 0) { game.over = true; return; }
+            deal();
+          }
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "ONE KIND PER TUBE", 22, "dim");
+      var colours = ["grid", "verify", "brass", "danger", "bright"];
+      tubes.forEach(function (tube, i) {
+        var x = 20 + i * 48;
+        var baseY = H - 40;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(x, baseY - DEPTH * 22, 34, DEPTH * 22 + 4);
+        tube.forEach(function (v, d) {
+          ctx.fillStyle = ink[colours[v]] || ink.grid;
+          ctx.fillRect(x + 3, baseY - (d + 1) * 22 + 2, 28, 20);
+        });
+        if (i === picked) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x, baseY - DEPTH * 22 - 8, 34, 4);
+        }
+        if (i === cursor) {
+          ctx.fillStyle = ink.ink;
+          ctx.fillRect(x + 13, baseY + 8, 8, 6);
+        }
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("MOVES " + moves, 6, 16);
+      ctx.fillText("LEVEL " + level, W - 66, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · MOVES " + moves; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -12120,6 +12797,51 @@
       controls: "← → steer · SPACE drop",
       pad: "lr+fire",
       make: cabinetDepthCharge
+    },
+    {
+      id: "pipe-permit",
+      name: "PIPE PERMIT",
+      genre: "PIPES",
+      tagline: "The pressure does not wait for you to finish thinking.",
+      controls: "arrows move · SPACE rotate",
+      pad: "dpad+fire",
+      make: cabinetPipePermit
+    },
+    {
+      id: "circuit-route",
+      name: "CIRCUIT ROUTE",
+      genre: "ROUTING",
+      tagline: "Every pair you connect makes the rest of the board worse.",
+      controls: "arrows draw · SPACE start or finish",
+      pad: "dpad+fire",
+      make: cabinetCircuitRoute
+    },
+    {
+      id: "factory-line",
+      name: "FACTORY LINE",
+      genre: "FACTORY",
+      tagline: "Three stamps, one belt, and it never stops.",
+      controls: "← → stamp · SPACE press",
+      pad: "lr+fire",
+      make: cabinetFactoryLine
+    },
+    {
+      id: "bridge-build",
+      name: "BRIDGE BUILD",
+      genre: "SPAN",
+      tagline: "You can see exactly how wrong you were.",
+      controls: "SPACE hold to extend",
+      pad: "tap",
+      make: cabinetBridgeBuild
+    },
+    {
+      id: "sort-keys",
+      name: "SORT KEYS",
+      genre: "SORT",
+      tagline: "Every pour is progress or a wasted tube.",
+      controls: "← → pick · SPACE lift or pour",
+      pad: "lr+fire",
+      make: cabinetSortKeys
     }
   ];
 
