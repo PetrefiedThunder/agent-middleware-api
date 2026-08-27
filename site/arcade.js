@@ -9695,6 +9695,593 @@
     return game;
   }
 
+  /* ---- 52. TUNNEL --------------------------------------------------------
+
+     A perspective tunnel with gaps in it. Rings rush the camera, each with one
+     safe sector, and you rotate to meet it — the endless runner rebuilt out of
+     the one 3D effect a 320x240 canvas can afford. */
+  function cabinetTunnel(random) {
+    var SECTORS = 8;
+
+    var game = { id: "tunnel", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var angle, rings, speed, distance, spawnZ, hurt;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      angle = 0;
+      rings = [];
+      speed = 34;
+      distance = 0;
+      spawnZ = 0;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 5; i += 1) rings.push({ z: 20 + i * 22, gap: Math.floor(random() * SECTORS), passed: false });
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+
+      var turn = 3.4 * dt;
+      if (input.left) angle -= turn;
+      if (input.right) angle += turn;
+      angle = (angle + Math.PI * 2) % (Math.PI * 2);
+
+      speed = Math.min(110, 34 + distance * 0.02);
+      distance += speed * dt;
+
+      for (var i = rings.length - 1; i >= 0; i -= 1) {
+        var r = rings[i];
+        r.z -= speed * dt * 0.6;
+        if (r.z <= 2 && !r.passed) {
+          r.passed = true;
+          var sector = Math.floor(((angle / (Math.PI * 2)) * SECTORS + 0.5)) % SECTORS;
+          if (sector !== r.gap) {
+            game.lives -= 1;
+            hurt = 0.8;
+            fx.shake(12);
+            fx.flash("danger", 1);
+            bits.burst(W / 2, H / 2, 20, { colour: "danger", speed: 110, life: 0.6 });
+            if (game.lives <= 0) { game.over = true; return; }
+          } else {
+            game.score += 15;
+            fx.pop(W / 2, H / 2 - 30, "+15", "verify");
+          }
+        }
+        if (r.z < -4) {
+          rings.splice(i, 1);
+          rings.push({ z: 108, gap: Math.floor(random() * SECTORS), passed: false });
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      var cx = W / 2, cy = H / 2;
+
+      // Rings are drawn back to front as rings of blocks, one block per
+      // sector, with the gap simply not drawn.
+      rings.slice().sort(function (a, b) { return b.z - a.z; }).forEach(function (r) {
+        if (r.z <= 0.5) return;
+        var radius = 900 / r.z;
+        if (radius > 300) return;
+        for (var s = 0; s < SECTORS; s += 1) {
+          if (s === r.gap) continue;
+          var a = (s / SECTORS) * Math.PI * 2;
+          var size = Math.max(2, Math.round(60 / r.z));
+          ctx.fillStyle = r.z < 20 ? ink.danger : r.z < 45 ? ink.wall[1] : ink.wall[2];
+          ctx.fillRect(
+            Math.round(cx + Math.cos(a) * radius) - size / 2,
+            Math.round(cy + Math.sin(a) * radius) - size / 2,
+            size, size
+          );
+        }
+      });
+
+      bits.draw(ctx, ink);
+      // The ship sits on the ring the player is steering, at a fixed radius.
+      var sr = 46;
+      ctx.fillStyle = hurt > 0 ? ink.bright : ink.verify;
+      ctx.fillRect(Math.round(cx + Math.cos(angle) * sr) - 4, Math.round(cy + Math.sin(angle) * sr) - 4, 9, 9);
+      ctx.fillStyle = ink.grid;
+      ctx.fillRect(cx - 1, cy - 1, 3, 3);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.floor(distance) + "m", 4, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(distance) + "m · " + Math.round(speed) + " m/s"; };
+    return game;
+  }
+
+  /* ---- 53. UPTIME --------------------------------------------------------
+
+     Climb by bouncing. Every platform is a release that holds your weight
+     exactly once, the camera only goes up, and falling past the bottom of the
+     window is the outage. */
+  function cabinetUptime(random) {
+    var game = { id: "uptime", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var hopper, plats, camera, height, best;
+
+    function seed() {
+      plats = [];
+      for (var i = 0; i < 12; i += 1) {
+        plats.push({
+          x: random() * (W - 40),
+          y: H - 20 - i * 22,
+          w: 40,
+          kind: i === 0 ? "solid" : random() < 0.16 ? "brittle" : random() < 0.12 ? "mover" : "solid",
+          dir: random() < 0.5 ? -1 : 1,
+          used: false
+        });
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      hopper = { x: W / 2, y: H - 40, vx: 0, vy: 0 };
+      camera = 0;
+      height = 0;
+      best = 0;
+      fx.reset();
+      bits.clear();
+      seed();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (input.left) hopper.vx -= 250 * dt;
+      if (input.right) hopper.vx += 250 * dt;
+      hopper.vx *= 0.9;
+      hopper.vx = clamp(hopper.vx, -130, 130);
+      hopper.x += hopper.vx * dt;
+      if (hopper.x < -6) hopper.x = W + 6;
+      if (hopper.x > W + 6) hopper.x = -6;
+
+      hopper.vy += 460 * dt;
+      hopper.y += hopper.vy * dt;
+
+      plats.forEach(function (p) {
+        if (p.kind === "mover") {
+          p.x += p.dir * 40 * dt;
+          if (p.x < 0 || p.x > W - p.w) p.dir *= -1;
+        }
+        if (hopper.vy < 0 || p.used) return;
+        var py = p.y + camera;
+        if (hopper.y < py - 4 || hopper.y > py + 8) return;
+        if (hopper.x < p.x - 4 || hopper.x > p.x + p.w + 4) return;
+        hopper.vy = -230;
+        bits.burst(hopper.x, py, 4, { colour: "verify", speed: 40, life: 0.3 });
+        fx.shake(1);
+        if (p.kind === "brittle") p.used = true;
+      });
+
+      // The camera only rises, which is the genre's contract with the player.
+      var lift = H * 0.42 - hopper.y;
+      if (lift > 0) {
+        camera += lift;
+        hopper.y += lift;
+        height += lift;
+        game.score = Math.floor(height / 10);
+        if (height > best) best = height;
+      }
+
+      // Recycle platforms that fell off the bottom to the top of the stack.
+      plats.forEach(function (p) {
+        if (p.y + camera < H + 20) return;
+        p.y -= 12 * 22;
+        p.x = random() * (W - 40);
+        p.used = false;
+        p.kind = random() < 0.18 ? "brittle" : random() < 0.14 ? "mover" : "solid";
+      });
+
+      if (hopper.y > H + 12) {
+        game.lives -= 1;
+        fx.shake(10);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        hopper.y = H * 0.4;
+        hopper.vy = -200;
+        hopper.x = W / 2;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, camera * 0.4, 30);
+      fx.begin(ctx);
+      plats.forEach(function (p) {
+        var y = p.y + camera;
+        if (y < -8 || y > H) return;
+        ctx.fillStyle = p.used ? ink.grid : p.kind === "brittle" ? ink.danger : p.kind === "mover" ? ink.brass : ink.verify;
+        ctx.fillRect(Math.round(p.x), Math.round(y), p.w, 5);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(hopper.x) - 5, Math.round(hopper.y) - 8, 10, 10);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.floor(height / 10) + "m UP", 4, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(height / 10) + "m · BEST " + Math.floor(best / 10); };
+    return game;
+  }
+
+  /* ---- 54. GROWTH --------------------------------------------------------
+
+     The arena snake. You grow by absorbing orphaned records, you die by
+     crossing your own trail, and the rival lines are doing the same thing to
+     the same field — so the late game is about space rather than speed. */
+  function cabinetGrowth(random) {
+    var game = { id: "growth", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var body, dir, pending, food, rivals, speed, tick, length;
+
+    function spawnFood(n) {
+      for (var i = 0; i < n; i += 1) food.push({ x: 10 + random() * (W - 20), y: 20 + random() * (H - 30) });
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      body = [{ x: W / 2, y: H / 2 }];
+      dir = { x: 1, y: 0 };
+      pending = 0;
+      length = 8;
+      food = [];
+      spawnFood(22);
+      rivals = [];
+      for (var r = 0; r < 3; r += 1) {
+        rivals.push({
+          trail: [{ x: random() * W, y: random() * H }],
+          dir: { x: random() < 0.5 ? 1 : -1, y: 0 },
+          turn: 0,
+          len: 12
+        });
+      }
+      speed = 52;
+      tick = 0;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (input.left && dir.x === 0) dir = { x: -1, y: 0 };
+      else if (input.right && dir.x === 0) dir = { x: 1, y: 0 };
+      else if (input.up && dir.y === 0) dir = { x: 0, y: -1 };
+      else if (input.down && dir.y === 0) dir = { x: 0, y: 1 };
+
+      tick += dt;
+      var step = 1 / 30;
+      while (tick >= step) {
+        tick -= step;
+        var head = body[0];
+        var nx = head.x + dir.x * speed * step;
+        var ny = head.y + dir.y * speed * step;
+        if (nx < 2 || nx > W - 2 || ny < 14 || ny > H - 2) { die(); return; }
+        body.unshift({ x: nx, y: ny });
+        while (body.length > length) body.pop();
+
+        // Self-collision skips the neck, which is always within a body width
+        // of the head and would otherwise kill on the first turn.
+        for (var i = 8; i < body.length; i += 1) {
+          if (Math.abs(body[i].x - nx) < 3 && Math.abs(body[i].y - ny) < 3) { die(); return; }
+        }
+        for (var r = 0; r < rivals.length; r += 1) {
+          for (var k = 0; k < rivals[r].trail.length; k += 1) {
+            var t = rivals[r].trail[k];
+            if (Math.abs(t.x - nx) < 3 && Math.abs(t.y - ny) < 3) { die(); return; }
+          }
+        }
+
+        for (var f = food.length - 1; f >= 0; f -= 1) {
+          if (Math.abs(food[f].x - nx) > 5 || Math.abs(food[f].y - ny) > 5) continue;
+          food.splice(f, 1);
+          length += 4;
+          game.score += 10;
+          bits.burst(nx, ny, 5, { colour: "verify", speed: 50, life: 0.35 });
+          spawnFood(1);
+        }
+      }
+
+      rivals.forEach(function (rv) {
+        rv.turn -= dt;
+        if (rv.turn <= 0) {
+          rv.turn = 0.5 + random();
+          rv.dir = random() < 0.5 ? { x: rv.dir.y, y: rv.dir.x } : { x: -rv.dir.y, y: -rv.dir.x };
+        }
+        var h = rv.trail[0];
+        var nx = clamp(h.x + rv.dir.x * 44 * dt, 4, W - 4);
+        var ny = clamp(h.y + rv.dir.y * 44 * dt, 16, H - 4);
+        rv.trail.unshift({ x: nx, y: ny });
+        while (rv.trail.length > rv.len) rv.trail.pop();
+      });
+    };
+
+    function die() {
+      game.lives -= 1;
+      fx.shake(11);
+      fx.flash("danger", 1);
+      bits.burst(body[0].x, body[0].y, 18, { colour: "danger", speed: 90, life: 0.6 });
+      if (game.lives <= 0) { game.over = true; return; }
+      body = [{ x: W / 2, y: H / 2 }];
+      dir = { x: 1, y: 0 };
+      length = 8;
+    }
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.grid;
+      ctx.fillRect(0, 13, W, 1);
+      food.forEach(function (f) {
+        ctx.fillStyle = ink.brass;
+        ctx.fillRect(Math.round(f.x) - 2, Math.round(f.y) - 2, 4, 4);
+      });
+      rivals.forEach(function (rv) {
+        rv.trail.forEach(function (t, i) {
+          ctx.fillStyle = i === 0 ? ink.danger : ink.wall[1];
+          ctx.fillRect(Math.round(t.x) - 3, Math.round(t.y) - 3, 6, 6);
+        });
+      });
+      body.forEach(function (b, i) {
+        ctx.fillStyle = i === 0 ? ink.bright : ink.verify;
+        ctx.fillRect(Math.round(b.x) - 3, Math.round(b.y) - 3, 6, 6);
+      });
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LENGTH " + length, 4, 10);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LENGTH " + length; };
+    return game;
+  }
+
+  /* ---- 55. ABSORB --------------------------------------------------------
+
+     Eat what is smaller, run from what is bigger, and get slower the bigger
+     you get. Consolidation as a physics problem. */
+  function cabinetAbsorb(random) {
+    var game = { id: "absorb", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var me, blobs, era;
+
+    function spawnBlob(sizeHint) {
+      var edge = random();
+      blobs.push({
+        x: edge < 0.5 ? (random() < 0.5 ? -12 : W + 12) : random() * W,
+        y: edge < 0.5 ? random() * H : (random() < 0.5 ? -12 : H + 12),
+        r: Math.max(3, sizeHint * (0.4 + random() * 1.5)),
+        vx: (random() - 0.5) * 40,
+        vy: (random() - 0.5) * 40
+      });
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      me = { x: W / 2, y: H / 2, r: 7 };
+      blobs = [];
+      era = 1;
+      for (var i = 0; i < 14; i += 1) spawnBlob(7);
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      // Bigger is slower: without that, absorbing is strictly good and the
+      // cabinet has no second act.
+      var speed = (120 - Math.min(80, me.r * 3)) * dt;
+      if (input.left) me.x -= speed;
+      if (input.right) me.x += speed;
+      if (input.up) me.y -= speed;
+      if (input.down) me.y += speed;
+      me.x = clamp(me.x, me.r, W - me.r);
+      me.y = clamp(me.y, me.r + 10, H - me.r);
+
+      for (var i = blobs.length - 1; i >= 0; i -= 1) {
+        var b = blobs[i];
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        if (b.x < -30 || b.x > W + 30 || b.y < -30 || b.y > H + 30) {
+          blobs.splice(i, 1);
+          spawnBlob(me.r);
+          continue;
+        }
+        var d = Math.hypot(b.x - me.x, b.y - me.y);
+        if (d > b.r + me.r - 2) continue;
+        if (b.r < me.r - 0.6) {
+          me.r = Math.sqrt(me.r * me.r + b.r * b.r * 0.6);
+          game.score += Math.round(b.r * 3);
+          bits.burst(b.x, b.y, 6, { colour: "verify", speed: 50, life: 0.4 });
+          blobs.splice(i, 1);
+          spawnBlob(me.r);
+          fx.shake(1);
+        } else {
+          game.lives -= 1;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(me.x, me.y, 20, { colour: "danger", speed: 90, life: 0.6 });
+          if (game.lives <= 0) { game.over = true; return; }
+          me.r = 7;
+          me.x = W / 2;
+          me.y = H / 2;
+          return;
+        }
+      }
+      era = 1 + Math.floor(me.r / 8);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = ink.grid;
+      for (var g = 0; g < W; g += 20) ctx.fillRect(g, 12, 1, H - 12);
+      fx.begin(ctx);
+      blobs.forEach(function (b) {
+        ctx.fillStyle = b.r < me.r ? ink.brass : ink.danger;
+        var s = Math.round(b.r * 2);
+        ctx.fillRect(Math.round(b.x - b.r), Math.round(b.y - b.r), s, s);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(b.x - b.r) + 2, Math.round(b.y - b.r) + 2, s - 4, s - 4);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      var ms = Math.round(me.r * 2);
+      ctx.fillRect(Math.round(me.x - me.r), Math.round(me.y - me.r), ms, ms);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(Math.round(me.x - me.r) + 3, Math.round(me.y - me.r) + 3, ms - 6, ms - 6);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("MASS " + Math.round(me.r * 10), 4, 10);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "MASS " + Math.round(me.r * 10) + " · TIER " + era; };
+    return game;
+  }
+
+  /* ---- 56. CAVERN --------------------------------------------------------
+
+     Hold to climb, release to fall, and the corridor narrows. One button, no
+     forgiveness, and the walls are generated from the distance travelled so
+     the run is the same run every time. */
+  function cabinetCavern(random) {
+    var game = { id: "cavern", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var flyer, scroll, speed, pillars, hurt;
+
+    function roof(x) {
+      return 18 + Math.sin(x * 0.021) * 16 + Math.sin(x * 0.007 + 2) * 12;
+    }
+    function floorAt(x) {
+      var squeeze = Math.min(70, 26 + x * 0.006);
+      return H - 18 - Math.sin(x * 0.017 + 1.2) * 14 - Math.sin(x * 0.005) * 10 - (70 - squeeze);
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      flyer = { y: H / 2, vy: 0 };
+      scroll = 0;
+      speed = 62;
+      pillars = [];
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+
+      speed = Math.min(140, 62 + scroll * 0.012);
+      scroll += speed * dt;
+      flyer.vy += (input.fire || input.up ? -300 : 260) * dt;
+      flyer.vy = clamp(flyer.vy, -140, 190);
+      flyer.y += flyer.vy * dt;
+
+      if (Math.floor(scroll / 140) > pillars.length - 1) {
+        pillars.push({ x: scroll + W, gap: 40 + random() * 30, top: 30 + random() * 90 });
+      }
+
+      var hitTop = flyer.y < roof(scroll + 60) + 4;
+      var hitFloor = flyer.y > floorAt(scroll + 60) - 4;
+      var hitPillar = pillars.some(function (p) {
+        var sx = p.x - scroll;
+        if (sx > 66 || sx < 54) return false;
+        return flyer.y < p.top || flyer.y > p.top + p.gap;
+      });
+
+      if (hitTop || hitFloor || hitPillar) {
+        game.lives -= 1;
+        hurt = 0.8;
+        fx.shake(12);
+        fx.flash("danger", 1);
+        bits.burst(60, flyer.y, 16, { colour: "danger", speed: 90, life: 0.5 });
+        if (game.lives <= 0) { game.over = true; return; }
+        scroll = Math.max(0, scroll - 260);
+        flyer.y = (roof(scroll + 60) + floorAt(scroll + 60)) / 2;
+        flyer.vy = 0;
+        return;
+      }
+      game.score = Math.floor(scroll / 10);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var x = 0; x < W; x += 2) {
+        var wx = x + scroll;
+        var r = roof(wx), f = floorAt(wx);
+        ctx.fillStyle = ink.wall[2];
+        ctx.fillRect(x, 0, 2, r);
+        ctx.fillRect(x, f, 2, H - f);
+        ctx.fillStyle = ink.wall[1];
+        ctx.fillRect(x, r - 2, 2, 2);
+        ctx.fillRect(x, f, 2, 2);
+      }
+      pillars.forEach(function (p) {
+        var sx = p.x - scroll;
+        if (sx < -14 || sx > W) return;
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(sx, 0, 10, p.top);
+        ctx.fillRect(sx, p.top + p.gap, 10, H - p.top - p.gap);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = hurt > 0 ? ink.bright : ink.verify;
+      ctx.fillRect(56, Math.round(flyer.y) - 4, 12, 8);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.floor(scroll / 10) + "m", 4, 10);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(scroll / 10) + "m"; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -10154,6 +10741,51 @@
       controls: "arrows move · SPACE plant or reap",
       pad: "dpad+fire",
       make: cabinetHarvestWindow
+    },
+    {
+      id: "tunnel",
+      name: "TUNNEL",
+      genre: "TUNNEL",
+      tagline: "Rings rush the camera. One sector is open.",
+      controls: "← → rotate",
+      pad: "lr",
+      make: cabinetTunnel
+    },
+    {
+      id: "uptime",
+      name: "UPTIME",
+      genre: "CLIMBER",
+      tagline: "Every release holds your weight exactly once.",
+      controls: "← → drift",
+      pad: "lr",
+      make: cabinetUptime
+    },
+    {
+      id: "growth",
+      name: "GROWTH",
+      genre: "ARENA",
+      tagline: "You die by crossing your own trail. So do they.",
+      controls: "arrows turn",
+      pad: "dpad",
+      make: cabinetGrowth
+    },
+    {
+      id: "absorb",
+      name: "ABSORB",
+      genre: "ARENA",
+      tagline: "Eat what is smaller. Get slower doing it.",
+      controls: "arrows move",
+      pad: "dpad",
+      make: cabinetAbsorb
+    },
+    {
+      id: "cavern",
+      name: "CAVERN",
+      genre: "ONE-TOUCH",
+      tagline: "Hold to climb, release to fall, and it narrows.",
+      controls: "SPACE hold to climb",
+      pad: "tap",
+      make: cabinetCavern
     }
   ];
 
