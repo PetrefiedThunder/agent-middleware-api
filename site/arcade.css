@@ -833,6 +833,176 @@
   touch-action: none;
 }
 
+/* ---- touch controls ------------------------------------------------------
+   Mobile-first, not mobile-tolerant: on a phone this is the control surface
+   and the keyboard is the fallback, so the targets are thumb-sized (56px, well
+   over the 44px floor), the pad sits under the screen rather than over it, and
+   nothing here overlaps the picture the player is steering by.
+
+   `touch-action: none` on the pad and `user-select: none` on the keys are both
+   load-bearing: without the first, a held direction scrolls the page behind
+   the overlay; without the second, a firm press raises the text-selection
+   callout over the button. */
+
+.arcade-pad {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 640px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.arcade-pad[hidden] {
+  display: none;
+}
+
+.arcade-pad-left,
+.arcade-pad-right {
+  display: flex;
+  align-items: center;
+}
+
+.arcade-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 3.5rem);
+  grid-template-rows: repeat(2, 3.5rem);
+  gap: 0.25rem;
+}
+
+/* The four keys sit in a plus, so the thumb finds them without looking. A
+   horizontal-only cabinet collapses to the middle row rather than leaving two
+   dead squares where up and down used to be. */
+.arcade-pad-up { grid-area: 1 / 2; }
+.arcade-pad-left-key { grid-area: 2 / 1; }
+.arcade-pad-down { grid-area: 2 / 2; }
+.arcade-pad-right-key { grid-area: 2 / 3; }
+
+.arcade-dpad[data-axis="x"] {
+  grid-template-rows: 3.5rem;
+}
+
+.arcade-dpad[data-axis="x"] .arcade-pad-left-key { grid-area: 1 / 1; }
+.arcade-dpad[data-axis="x"] .arcade-pad-right-key { grid-area: 1 / 3; }
+
+.arcade-dpad[data-axis="y"] {
+  grid-template-columns: 3.5rem;
+  grid-template-rows: repeat(2, 3.5rem);
+}
+
+.arcade-dpad[data-axis="y"] .arcade-pad-up { grid-area: 1 / 1; }
+.arcade-dpad[data-axis="y"] .arcade-pad-down { grid-area: 2 / 1; }
+
+.arcade-lanes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.35rem;
+  flex: 1;
+}
+
+.arcade-lanes[hidden] {
+  display: none;
+}
+
+.arcade-padkey {
+  min-width: 3.5rem;
+  min-height: 3.5rem;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 2px solid var(--rule);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-hard-sm);
+  transition: transform 60ms steps(2), background-color 60ms steps(2);
+}
+
+.arcade-padkey[hidden] {
+  display: none;
+}
+
+.arcade-pad-action {
+  min-width: 5rem;
+  min-height: 5rem;
+  border-color: var(--brass);
+  color: var(--brass-bright);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+}
+
+/* Pressed state is a colour swap *and* a travel, because a finger covers the
+   button it is pressing and the only visible confirmation is at the edges. */
+.arcade-padkey.is-down,
+.arcade-padkey:active {
+  background: var(--brass);
+  color: var(--shadow-ink);
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
+.arcade-padtoggle {
+  background: none;
+  border: 2px solid var(--rule);
+  color: var(--text-dim);
+  font-family: var(--font-display);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  min-height: 44px;
+  padding: 0 0.7rem;
+  cursor: pointer;
+}
+
+.arcade-padtoggle[aria-pressed="true"] {
+  border-color: var(--brass);
+  color: var(--brass-bright);
+}
+
+/* Portrait phones: the screen keeps the width, the pad keeps its targets, and
+   the whole stage still fits above the fold. `dvh` rather than `vh` so the
+   mobile browser chrome collapsing does not crop the pad off the bottom. */
+@media (max-width: 640px) {
+  .arcade-canvas {
+    max-height: 46dvh;
+    width: auto;
+    max-width: 100%;
+  }
+
+  .arcade-pad {
+    gap: 0.4rem;
+  }
+
+  .arcade-dpad {
+    grid-template-columns: repeat(3, 3.25rem);
+    grid-template-rows: repeat(2, 3.25rem);
+  }
+
+  .arcade-pad-action {
+    min-width: 4.5rem;
+    min-height: 4.5rem;
+  }
+}
+
+/* The travel is decoration and is pinned for anyone who asked for less of it,
+   the same way every other pressable in this file is. */
+@media (prefers-reduced-motion: reduce) {
+  .arcade-padkey.is-down,
+  .arcade-padkey:active {
+    transform: none;
+  }
+}
+
+html[data-a11y-motion="reduce"] .arcade-padkey.is-down,
+html[data-a11y-motion="reduce"] .arcade-padkey:active {
+  transform: none;
+}
+
 .arcade-stagefoot {
   display: flex;
   flex-wrap: wrap;

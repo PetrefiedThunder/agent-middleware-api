@@ -206,6 +206,359 @@
   }
 
   /* ======================================================================
+     CABINET TOOLKIT
+
+     Twenty-five cabinets could each hand-roll their own fillRect calls. A
+     hundred cannot: the roster is now large enough that the difference
+     between "a game" and "coloured boxes moving" has to come from shared
+     machinery rather than from how much patience the author had that day.
+
+     Four things live here, and every cabinet below is built out of them:
+
+       sprites     compact string art, run-length compiled once
+       particles   one pooled emitter, no allocation in the frame loop
+       fx          shake, flash, hitstop, floating numbers — the "juice"
+       backdrops   starfields, parallax bands, horizons, vignettes
+
+     All of it is palette-aware: a sprite names ink keys ("verify", "danger")
+     rather than hex, so every cabinet follows the high-contrast switch and
+     nobody has to remember to.
+     ====================================================================== */
+
+  /* ---- sprites -----------------------------------------------------------
+
+     Authored as rows of single characters. `.` is transparent; every other
+     character indexes the palette passed alongside. Compiled once into
+     horizontal runs, because a 16x16 sprite drawn cell-by-cell is 256 fill
+     calls and drawn as runs is usually fewer than 40 — and at twenty sprites
+     a frame that is the difference between a smooth cabinet and a slideshow.
+
+     Palette entries name ink keys where they can ("verify"), and fall back to
+     being used literally, so a sprite can still hard-code a colour the ink
+     does not carry. */
+  function makeSprite(rows, palette) {
+    var runs = [];
+    var height = rows.length;
+    var width = 0;
+    for (var y = 0; y < height; y += 1) {
+      var row = rows[y];
+      if (row.length > width) width = row.length;
+      var x = 0;
+      while (x < row.length) {
+        var ch = row.charAt(x);
+        if (ch === "." || ch === " ") { x += 1; continue; }
+        var run = 1;
+        while (x + run < row.length && row.charAt(x + run) === ch) run += 1;
+        runs.push({ x: x, y: y, w: run, key: palette[parseInt(ch, 36)] });
+        x += run;
+      }
+    }
+    return {
+      w: width,
+      h: height,
+      runs: runs,
+      /* Drawn from a top-left origin in logical pixels. `scale` is a whole
+         number by contract — a fractional one lands sprite cells on half
+         pixels and the canvas antialiases the edges back into mush. */
+      draw: function (ctx, ink, x, y, scale, flip) {
+        var s = Math.max(1, Math.round(scale || 1));
+        var ox = Math.round(x);
+        var oy = Math.round(y);
+        for (var i = 0; i < runs.length; i += 1) {
+          var r = runs[i];
+          ctx.fillStyle = ink[r.key] || r.key;
+          var rx = flip ? width - r.x - r.w : r.x;
+          ctx.fillRect(ox + rx * s, oy + r.y * s, r.w * s, s);
+        }
+      },
+      /* Centre-origin draw, which is what almost every caller actually
+         wants and what everyone kept re-deriving by hand. */
+      drawAt: function (ctx, ink, cx, cy, scale, flip) {
+        var s = Math.max(1, Math.round(scale || 1));
+        this.draw(ctx, ink, cx - (width * s) / 2, cy - (height * s) / 2, s, flip);
+      }
+    };
+  }
+
+  /* A tinted silhouette of a sprite: every run painted one colour. Used for
+     shadows, hit flashes, and the "this thing is invulnerable" blink, none of
+     which are worth authoring a second sprite for. */
+  function drawSilhouette(sprite, ctx, colour, cx, cy, scale) {
+    var s = Math.max(1, Math.round(scale || 1));
+    ctx.fillStyle = colour;
+    var ox = Math.round(cx - (sprite.w * s) / 2);
+    var oy = Math.round(cy - (sprite.h * s) / 2);
+    for (var i = 0; i < sprite.runs.length; i += 1) {
+      var r = sprite.runs[i];
+      ctx.fillRect(ox + r.x * s, oy + r.y * s, r.w * s, s);
+    }
+  }
+
+  /* ---- particles ---------------------------------------------------------
+
+     One fixed pool per cabinet, reused forever. A particle system that
+     allocates per emit is the single easiest way to make a 60fps canvas
+     stutter every few seconds when the collector runs, and this arcade runs
+     a fixed-timestep loop that shows every one of those pauses. */
+  function makeParticles(limit) {
+    var cap = limit || 96;
+    var pool = [];
+    for (var i = 0; i < cap; i += 1) {
+      pool.push({ live: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, colour: "ink", size: 1, gravity: 0 });
+    }
+    var cursor = 0;
+
+    function take() {
+      // Round-robin rather than "find a dead one": at the cap, the oldest
+      // particle is the right one to steal, and the search is the expensive
+      // part of every naive pool.
+      var p = pool[cursor];
+      cursor = (cursor + 1) % cap;
+      return p;
+    }
+
+    return {
+      pool: pool,
+      burst: function (x, y, count, opts) {
+        var o = opts || {};
+        for (var i = 0; i < count; i += 1) {
+          var p = take();
+          var a = o.angle == null ? Math.random() * Math.PI * 2 : o.angle + (Math.random() - 0.5) * (o.spread || 0.8);
+          var speed = (o.speed || 40) * (0.4 + Math.random() * 0.9);
+          p.live = true;
+          p.x = x;
+          p.y = y;
+          p.vx = Math.cos(a) * speed;
+          p.vy = Math.sin(a) * speed;
+          p.max = p.life = (o.life || 0.5) * (0.6 + Math.random() * 0.8);
+          p.colour = o.colour || "bright";
+          p.size = o.size || 2;
+          p.gravity = o.gravity || 0;
+        }
+      },
+      update: function (dt) {
+        for (var i = 0; i < cap; i += 1) {
+          var p = pool[i];
+          if (!p.live) continue;
+          p.life -= dt;
+          if (p.life <= 0) { p.live = false; continue; }
+          p.vy += p.gravity * dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+        }
+      },
+      draw: function (ctx, ink) {
+        for (var i = 0; i < cap; i += 1) {
+          var p = pool[i];
+          if (!p.live) continue;
+          // Shrinking rather than fading: this palette has no alpha to spend
+          // and a particle that ends as a single pixel reads as a spark.
+          var k = p.life / p.max;
+          var size = Math.max(1, Math.round(p.size * (k > 0.5 ? 1 : k * 2)));
+          ctx.fillStyle = ink[p.colour] || p.colour;
+          ctx.fillRect(Math.round(p.x) - (size >> 1), Math.round(p.y) - (size >> 1), size, size);
+        }
+      },
+      clear: function () {
+        for (var i = 0; i < cap; i += 1) pool[i].live = false;
+      }
+    };
+  }
+
+  /* ---- juice -------------------------------------------------------------
+
+     Screen shake, colour flashes, hitstop and floating numbers. These are the
+     four effects that separate a cabinet that responds from one that merely
+     updates, and all four are two lines each once they live somewhere shared.
+
+     Every one of them is suppressed under reduced motion: shake in particular
+     is exactly the kind of involuntary movement that preference exists to
+     stop, and a cabinet is still perfectly playable without it. */
+  function makeFx() {
+    var shakeAmount = 0;
+    var flashAmount = 0;
+    var flashColour = "bright";
+    var stop = 0;
+    var pops = [];
+    var still = prefersStaticMotion();
+
+    return {
+      /* True while hitstop is holding the simulation. A cabinet checks this
+         at the top of update and returns early — which is what makes a hit
+         feel like it landed rather than like it was tallied. */
+      frozen: function () { return stop > 0; },
+      shake: function (amount) { if (!still) shakeAmount = Math.max(shakeAmount, amount); },
+      flash: function (colour, amount) {
+        flashColour = colour || "bright";
+        flashAmount = Math.max(flashAmount, amount == null ? 1 : amount);
+      },
+      freeze: function (seconds) { if (!still) stop = Math.max(stop, seconds); },
+      pop: function (x, y, text, colour) {
+        pops.push({ x: x, y: y, text: String(text), colour: colour || "bright", life: 0.8 });
+        if (pops.length > 12) pops.shift();
+      },
+      update: function (dt) {
+        if (stop > 0) stop -= dt;
+        shakeAmount = Math.max(0, shakeAmount - dt * 26);
+        flashAmount = Math.max(0, flashAmount - dt * 4);
+        for (var i = pops.length - 1; i >= 0; i -= 1) {
+          pops[i].life -= dt;
+          pops[i].y -= 22 * dt;
+          if (pops[i].life <= 0) pops.splice(i, 1);
+        }
+      },
+      /* Wraps the cabinet's own drawing. save/restore rather than an
+         un-translate, so a cabinet that leaves a transform on the context
+         cannot leak it into the next frame. */
+      begin: function (ctx) {
+        ctx.save();
+        if (shakeAmount > 0.2) {
+          ctx.translate(
+            Math.round((Math.random() - 0.5) * shakeAmount),
+            Math.round((Math.random() - 0.5) * shakeAmount)
+          );
+        }
+      },
+      end: function (ctx, ink) {
+        ctx.restore();
+        for (var i = 0; i < pops.length; i += 1) {
+          var p = pops[i];
+          ctx.font = '8px "IBM Plex Mono", monospace';
+          ctx.textAlign = "center";
+          ctx.fillStyle = ink[p.colour] || p.colour;
+          ctx.fillText(p.text, Math.round(p.x), Math.round(p.y));
+          ctx.textAlign = "left";
+        }
+        if (flashAmount > 0.02) {
+          // A band top and bottom rather than a full-screen wash: a filled
+          // rectangle over the whole field at this palette hides the game,
+          // and the bands read as the same event.
+          var h = Math.max(1, Math.round(flashAmount * 5));
+          ctx.fillStyle = ink[flashColour] || flashColour;
+          ctx.fillRect(0, 0, W, h);
+          ctx.fillRect(0, H - h, W, h);
+        }
+      },
+      reset: function () {
+        shakeAmount = 0;
+        flashAmount = 0;
+        stop = 0;
+        pops.length = 0;
+        still = prefersStaticMotion();
+      }
+    };
+  }
+
+  /* ---- backdrops ---------------------------------------------------------
+
+     Four reusable grounds. A cabinet drawn on flat `bg` reads as a prototype
+     no matter how good its sprites are, and these cost one call each. */
+
+  function drawStarfield(ctx, ink, scroll, density) {
+    // Deterministic from the cell index rather than from a stored array: the
+    // field is infinite, costs nothing to seek, and is identical every run.
+    var count = density || 40;
+    for (var i = 0; i < count; i += 1) {
+      var seed = i * 2654435761 % 2147483647;
+      var x = (seed % W + W - (scroll * (0.3 + (i % 3) * 0.35)) % W) % W;
+      var y = (seed >> 8) % H;
+      ctx.fillStyle = i % 5 === 0 ? ink.ink : i % 3 === 0 ? ink.dim : ink.grid;
+      ctx.fillRect(Math.floor(x), y, i % 7 === 0 ? 2 : 1, 1);
+    }
+  }
+
+  function drawParallaxBands(ctx, ink, scroll, horizon) {
+    var base = horizon == null ? H * 0.55 : horizon;
+    ctx.fillStyle = ink.grid;
+    for (var b = -1; b < 12; b += 1) {
+      var height = 18 + (b % 4) * 13;
+      var x = b * 46 - (scroll * 0.25) % 46;
+      ctx.fillRect(x, base - height, 30, height);
+    }
+    ctx.fillStyle = ink.wall[3];
+    for (var f = -1; f < 9; f += 1) {
+      var fh = 10 + (f % 3) * 8;
+      var fx = f * 62 - (scroll * 0.6) % 62;
+      ctx.fillRect(fx, base - fh, 40, fh);
+    }
+  }
+
+  function drawHorizonGrid(ctx, ink, scroll) {
+    var horizon = H * 0.42;
+    ctx.fillStyle = ink.bg;
+    ctx.fillRect(0, 0, W, horizon);
+    ctx.fillStyle = ink.wall[3];
+    ctx.fillRect(0, horizon, W, H - horizon);
+    ctx.fillStyle = ink.grid;
+    // Perspective rows: spacing grows with the square of the distance below
+    // the horizon, which is the cheap trick that sells depth at this budget.
+    for (var i = 1; i < 12; i += 1) {
+      var t = (i + (scroll % 1)) / 12;
+      var y = horizon + (H - horizon) * t * t;
+      ctx.fillRect(0, Math.floor(y), W, 1);
+    }
+    for (var c = -6; c <= 6; c += 1) {
+      var topX = W / 2 + c * 6;
+      var bottomX = W / 2 + c * 54;
+      for (var s = 0; s < 20; s += 1) {
+        var k = s / 20;
+        var py = horizon + (H - horizon) * k * k;
+        var px = topX + (bottomX - topX) * k * k;
+        ctx.fillRect(Math.floor(px), Math.floor(py), 1, 2);
+      }
+    }
+  }
+
+  /* A chunky vignette: 8px blocks darkened toward the edges. Sells "screen"
+     rather than "web page" and costs one pass of about 120 fills. */
+  function drawVignette(ctx, ink, strength) {
+    var k = strength == null ? 1 : strength;
+    ctx.fillStyle = ink.bg;
+    for (var y = 0; y < H; y += 8) {
+      for (var x = 0; x < W; x += 8) {
+        var dx = (x + 4 - W / 2) / (W / 2);
+        var dy = (y + 4 - H / 2) / (H / 2);
+        var d = dx * dx + dy * dy;
+        if (d * k < 0.95) continue;
+        ctx.fillRect(x, y, 8, 8);
+      }
+    }
+  }
+
+  /* ---- small shared helpers ---------------------------------------------- */
+
+  function centreText(ctx, ink, text, y, colour, size) {
+    ctx.font = (size || 8) + 'px "IBM Plex Mono", monospace';
+    ctx.textAlign = "center";
+    ctx.fillStyle = ink[colour] || colour || ink.ink;
+    ctx.fillText(text, W / 2, y);
+    ctx.textAlign = "left";
+  }
+
+  function drawBar(ctx, ink, x, y, w, h, fraction, colour) {
+    ctx.fillStyle = ink.grid;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = ink[colour] || colour || ink.verify;
+    ctx.fillRect(x, y, Math.max(0, Math.round(w * clamp(fraction, 0, 1))), h);
+  }
+
+  function drawPanel(ctx, ink, x, y, w, h) {
+    ctx.fillStyle = ink.bg;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = ink.grid;
+    ctx.fillRect(x, y, w, 1);
+    ctx.fillRect(x, y + h - 1, w, 1);
+    ctx.fillRect(x, y, 1, h);
+    ctx.fillRect(x + w - 1, y, 1, h);
+  }
+
+  /* Rising difficulty that never divides by zero and never runs away: used by
+     most of the roster so "level 40" is hard rather than impossible. */
+  function ramp(level, base, step, ceiling) {
+    return Math.min(ceiling, base + (level - 1) * step);
+  }
+
+  /* ======================================================================
      CABINETS
 
      Each cabinet is a factory returning an object with reset/update/draw and
@@ -5634,6 +5987,7 @@
       genre: "FPS",
       tagline: "Walk the permit boundary. Nothing unscoped reaches the tool.",
       controls: "← → turn · ↑ ↓ walk · SPACE fire",
+      pad: "dpad+fire",
       make: cabinetBlastRadius
     },
     {
@@ -5642,6 +5996,7 @@
       genre: "FPS",
       tagline: "Four corridors. One post. Do not let a call through.",
       controls: "← → turn · ↑ ↓ step · SPACE fire",
+      pad: "dpad+fire",
       make: cabinetHoldTheLine
     },
     {
@@ -5650,6 +6005,7 @@
       genre: "SHOOTER",
       tagline: "Deny the permissions before they reach production.",
       controls: "← → move · SPACE deny",
+      pad: "lr+fire",
       make: cabinetScopeCreep
     },
     {
@@ -5658,6 +6014,7 @@
       genre: "SHOOTER",
       tagline: "Shoot a duplicate and now there are two of them.",
       controls: "← → turn · ↑ thrust · SPACE fire",
+      pad: "dpad+fire",
       make: cabinetRetryStorm
     },
     {
@@ -5666,6 +6023,7 @@
       genre: "ARCADE",
       tagline: "Drain the burst. The bucket refills. Forever.",
       controls: "← → limiter · SPACE serve",
+      pad: "lr+fire",
       make: cabinetTokenBucket
     },
     {
@@ -5674,6 +6032,7 @@
       genre: "ARCADE",
       tagline: "Cross the settlement lanes. Get charged exactly once.",
       controls: "arrows step",
+      pad: "dpad",
       make: cabinetDoubleSpend
     },
     {
@@ -5682,6 +6041,7 @@
       genre: "PUZZLE",
       tagline: "Work arrives faster than it drains. Stack it anyway.",
       controls: "← → shift · SPACE rotate · ↓ drop",
+      pad: "dpad+fire",
       make: cabinetBackpressure
     },
     {
@@ -5690,6 +6050,7 @@
       genre: "PUZZLE",
       tagline: "The ledger grows. It may never cross itself.",
       controls: "arrows steer the write head",
+      pad: "dpad",
       make: cabinetAppendOnly
     },
     {
@@ -5698,6 +6059,7 @@
       genre: "REFLEX",
       tagline: "Each one is good once, and not for long.",
       controls: "arrows move · SPACE burn",
+      pad: "dpad+fire",
       make: cabinetNonceBurn
     },
     {
@@ -5706,6 +6068,7 @@
       genre: "MAZE",
       tagline: "Collect the new key before the revocations reach you.",
       controls: "arrows move",
+      pad: "dpad",
       make: cabinetKeyRotation
     },
     {
@@ -5714,6 +6077,7 @@
       genre: "RUNNER",
       tagline: "p50 is fine. p50 is not what your users get.",
       controls: "↑ jump · ↓ duck",
+      pad: "ud",
       make: cabinetTailLatency
     },
     {
@@ -5722,6 +6086,7 @@
       genre: "DUEL",
       tagline: "Rally against an agent that does not blink.",
       controls: "↑ ↓ move · first to 7",
+      pad: "ud",
       make: cabinetRaceCondition
     },
     {
@@ -5730,6 +6095,7 @@
       genre: "FPS",
       tagline: "The fuse is a TTL. Hold the key down and it never fires.",
       controls: "← → turn · ↑ ↓ walk · SPACE fire / hold to countersign",
+      pad: "dpad+fire",
       make: cabinetCountersign
     },
     {
@@ -5738,6 +6104,7 @@
       genre: "PLATFORM",
       tagline: "Run right. The gaps are the cases nobody wrote.",
       controls: "← → run · SPACE jump",
+      pad: "lr+fire",
       make: cabinetHappyPath
     },
     {
@@ -5746,6 +6113,7 @@
       genre: "ADVENTURE",
       tagline: "Nine rooms, two permits, one vault. Take only what opens it.",
       controls: "arrows move · SPACE revoke",
+      pad: "dpad+fire",
       make: cabinetLeastPrivilege
     },
     {
@@ -5754,6 +6122,7 @@
       genre: "RPG",
       tagline: "Turn-based. The committee has more hit points than you.",
       controls: "↑ ↓ choose · SPACE commit",
+      pad: "ud+fire",
       make: cabinetEscalation
     },
     {
@@ -5762,6 +6131,7 @@
       genre: "FIGHTING",
       tagline: "Two parties, one dispute, best of three.",
       controls: "← → step · ↑ jump · ↓ block · SPACE strike",
+      pad: "dpad+fire",
       make: cabinetArbitration
     },
     {
@@ -5770,6 +6140,7 @@
       genre: "RACING",
       tagline: "Off the road you are not crashed, only throttled.",
       controls: "← → steer · ↑ throttle · ↓ brake",
+      pad: "dpad",
       make: cabinetThroughput
     },
     {
@@ -5778,6 +6149,7 @@
       genre: "STEALTH",
       tagline: "One observation is nothing. Enough of them is the leak.",
       controls: "arrows move · SPACE hold to crouch",
+      pad: "dpad+fire",
       make: cabinetSideChannel
     },
     {
@@ -5786,6 +6158,7 @@
       genre: "HORROR",
       tagline: "Three shards, one torch, and not enough rounds.",
       controls: "arrows move · SPACE fire",
+      pad: "dpad+fire",
       make: cabinetColdStorage
     },
     {
@@ -5794,6 +6167,7 @@
       genre: "SANDBOX",
       tagline: "Dig all day. Be behind a wall when the scan runs.",
       controls: "arrows move · SPACE mine or place",
+      pad: "dpad+fire",
       make: cabinetBlockStore
     },
     {
@@ -5802,6 +6176,7 @@
       genre: "ROYALE",
       tagline: "The quorum shrinks. Outside it you are only partitioned.",
       controls: "arrows move · SPACE fire",
+      pad: "dpad+fire",
       make: cabinetLastQuorum
     },
     {
@@ -5810,6 +6185,7 @@
       genre: "RHYTHM",
       tagline: "Four lanes of health checks. Answer them on the beat.",
       controls: "← ↑ ↓ → hit the lanes",
+      pad: "lanes",
       make: cabinetHeartbeat
     },
     {
@@ -5818,6 +6194,7 @@
       genre: "BRAWLER",
       tagline: "No cleverness, just volume. Do not get surrounded.",
       controls: "arrows move · SPACE strike",
+      pad: "dpad+fire",
       make: cabinetBruteForce
     },
     {
@@ -5826,6 +6203,7 @@
       genre: "COLLECT",
       tagline: "Every tool in the estate that nobody wrote down.",
       controls: "arrows move · SPACE bind the scope",
+      pad: "dpad+fire",
       make: cabinetCatalog
     }
   ];
@@ -6063,12 +6441,20 @@
     nodes.canvas.setAttribute("aria-label", "Arcade cabinet screen");
     nodes.stage.appendChild(nodes.canvas);
 
+    nodes.stage.appendChild(buildPad());
+
     var stageFoot = el("div", "arcade-stagefoot");
     nodes.hint = el("span", "arcade-hint", "");
+    nodes.padToggle = el("button", "arcade-padtoggle", "TOUCH ON");
+    nodes.padToggle.type = "button";
+    nodes.padToggle.addEventListener("click", function () {
+      setPadEnabled(!padEnabled);
+    });
     var back = el("button", "arcade-back", "← CABINETS");
     back.type = "button";
     back.addEventListener("click", showSelect);
     stageFoot.appendChild(nodes.hint);
+    stageFoot.appendChild(nodes.padToggle);
     stageFoot.appendChild(back);
     nodes.stage.appendChild(stageFoot);
     frame.appendChild(nodes.stage);
@@ -6180,6 +6566,231 @@
     }
   }
 
+  /* ======================================================================
+     TOUCH CONTROLS
+
+     The arcade shipped keyboard-first with a pointer bolted on: drag to move,
+     tap to fire, and a swipe latch for direction. That is playable on a phone
+     in about the way a piano is playable through a letterbox — the finger
+     covers the thing it is steering, and a swipe latch cannot express "hold
+     left while firing", which most of this roster now needs.
+
+     So the phone gets real buttons under the screen. They are not a fallback:
+     on a coarse pointer they are the primary control surface, the canvas keeps
+     its full size above them, and every cabinet declares which layout it wants.
+
+     Rules this obeys:
+     - A button is held, not tapped: pointerdown sets the input slot, pointerup
+       clears it, and the pointer is captured so a finger that slides off the
+       button still releases it. A stuck direction is the worst bug this layer
+       can have.
+     - The same buttons are real <button>s, so a keyboard or switch user can
+       reach them. A click (no pointer hold) pulses the slot for a few
+       simulation steps, the way a tap on the canvas already does.
+     - Nothing here is required. Every cabinet is still fully playable on the
+       arrows and space, and the pad can be turned off.
+     ====================================================================== */
+
+  /* Layouts, keyed by what a cabinet actually reads. Naming them by input
+     rather than by genre is deliberate: two cabinets that read the same keys
+     must get the same pad, or the muscle memory resets between them. */
+  var PAD_LAYOUTS = {
+    "dpad+fire": { dpad: true, action: "FIRE" },
+    "dpad": { dpad: true },
+    "lr+fire": { lr: true, action: "FIRE" },
+    "lr": { lr: true },
+    "ud+fire": { ud: true, action: "FIRE" },
+    "ud": { ud: true },
+    "lanes": { lanes: true },
+    "tap": { action: "TAP" }
+  };
+
+  var padNodes = null;
+  var padEnabled = null; // null = not yet decided; decided on first open
+  var padPulse = {};     // slot -> simulation steps remaining for a click pulse
+
+  function coarsePointer() {
+    return (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches
+    );
+  }
+
+  /* A press can arrive from a finger (held) or from a click (pulsed). They are
+     tracked separately for the same reason the fire key is: releasing one must
+     not cancel the other. */
+  function padSet(slot, down) {
+    if (down) {
+      input[slot] = true;
+      return;
+    }
+    if (padPulse[slot] > 0) return; // a pulse is still running; let it finish
+    input[slot] = false;
+    if (slot === "fire" && (keyFire || pointerHeld)) input.fire = true;
+  }
+
+  function padTap(slot) {
+    padPulse[slot] = FIRE_PULSE_STEPS;
+    input[slot] = true;
+  }
+
+  /* Called once per simulation step from the same place the tap pulse is
+     aged, so a click lasts a fixed number of *steps* rather than a fixed
+     number of milliseconds the loop may have slept through. */
+  function advancePad() {
+    for (var slot in padPulse) {
+      if (!padPulse[slot]) continue;
+      padPulse[slot] -= 1;
+      if (padPulse[slot] <= 0) {
+        padPulse[slot] = 0;
+        if (slot === "fire" && (keyFire || pointerHeld)) continue;
+        input[slot] = false;
+      }
+    }
+  }
+
+  function padButton(slot, label, className) {
+    var button = el("button", "arcade-padkey " + className, label);
+    button.type = "button";
+    button.setAttribute("data-slot", slot);
+    button.setAttribute("aria-label", label + " control");
+
+    button.addEventListener("pointerdown", function (event) {
+      event.preventDefault();
+      if (button.setPointerCapture) {
+        try { button.setPointerCapture(event.pointerId); } catch (err) { /* not fatal */ }
+      }
+      button.classList.add("is-down");
+      padSet(slot, true);
+      // A short tick of haptic feedback where the platform offers it, and
+      // never under reduced motion — a vibration is motion.
+      if (!prefersStaticMotion() && navigator.vibrate) {
+        try { navigator.vibrate(8); } catch (err) { /* refused, fine */ }
+      }
+      if (screen === "play" && nodes.canvas.focus) nodes.canvas.focus({ preventScroll: true });
+    });
+
+    function release(event) {
+      if (event) event.preventDefault();
+      button.classList.remove("is-down");
+      padSet(slot, false);
+    }
+    button.addEventListener("pointerup", release);
+    button.addEventListener("pointercancel", release);
+    button.addEventListener("pointerleave", release);
+
+    // Keyboard and assistive activation: no pointer sequence arrives, so the
+    // slot is pulsed instead of held.
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      padTap(slot);
+    });
+    return button;
+  }
+
+  function buildPad() {
+    var wrap = el("div", "arcade-pad");
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute("aria-label", "Touch controls");
+
+    var left = el("div", "arcade-pad-left");
+    var dpad = el("div", "arcade-dpad");
+    var up = padButton("up", "▲", "arcade-pad-up");
+    var down = padButton("down", "▼", "arcade-pad-down");
+    var leftKey = padButton("left", "◀", "arcade-pad-left-key");
+    var rightKey = padButton("right", "▶", "arcade-pad-right-key");
+    dpad.appendChild(up);
+    dpad.appendChild(leftKey);
+    dpad.appendChild(rightKey);
+    dpad.appendChild(down);
+    left.appendChild(dpad);
+
+    var lanes = el("div", "arcade-lanes");
+    var laneKeys = [
+      padButton("left", "◀", "arcade-lane"),
+      padButton("up", "▲", "arcade-lane"),
+      padButton("down", "▼", "arcade-lane"),
+      padButton("right", "▶", "arcade-lane")
+    ];
+    laneKeys.forEach(function (key) { lanes.appendChild(key); });
+
+    var right = el("div", "arcade-pad-right");
+    var action = padButton("fire", "FIRE", "arcade-pad-action");
+    right.appendChild(action);
+
+    wrap.appendChild(left);
+    wrap.appendChild(lanes);
+    wrap.appendChild(right);
+
+    padNodes = {
+      wrap: wrap,
+      dpad: dpad,
+      lanes: lanes,
+      action: action,
+      up: up,
+      down: down,
+      leftKey: leftKey,
+      rightKey: rightKey,
+      right: right
+    };
+    return wrap;
+  }
+
+  /* Applies a cabinet's declared layout. Unused buttons are removed from the
+     accessibility tree as well as hidden, so a screen-reader user is not
+     offered a control the running cabinet ignores. */
+  function applyPad(scheme) {
+    if (!padNodes) return;
+    var layout = PAD_LAYOUTS[scheme] || PAD_LAYOUTS["dpad+fire"];
+
+    function show(node, on) {
+      node.hidden = !on;
+      if (on) node.removeAttribute("aria-hidden");
+      else node.setAttribute("aria-hidden", "true");
+    }
+
+    show(padNodes.dpad, !!(layout.dpad || layout.lr || layout.ud));
+    show(padNodes.lanes, !!layout.lanes);
+    show(padNodes.right, !!layout.action);
+    show(padNodes.up, !!(layout.dpad || layout.ud));
+    show(padNodes.down, !!(layout.dpad || layout.ud));
+    show(padNodes.leftKey, !!(layout.dpad || layout.lr));
+    show(padNodes.rightKey, !!(layout.dpad || layout.lr));
+    padNodes.dpad.setAttribute("data-axis", layout.dpad ? "both" : layout.lr ? "x" : "y");
+    if (layout.action) padNodes.action.textContent = layout.action;
+    padNodes.wrap.hidden = !padEnabled;
+  }
+
+  function setPadEnabled(on) {
+    padEnabled = !!on;
+    if (padNodes) padNodes.wrap.hidden = !padEnabled;
+    if (nodes.padToggle) {
+      nodes.padToggle.setAttribute("aria-pressed", padEnabled ? "true" : "false");
+      nodes.padToggle.textContent = padEnabled ? "TOUCH ON" : "TOUCH OFF";
+    }
+    // Releasing everything on toggle-off: a slot held by a button that just
+    // vanished would otherwise stay held forever.
+    if (!padEnabled) {
+      clearDirections();
+      if (!keyFire && !pointerHeld) input.fire = false;
+    }
+    try {
+      window.localStorage.setItem(PAD_KEY, padEnabled ? "1" : "0");
+    } catch (err) { /* private window; the default still applies next time */ }
+  }
+
+  var PAD_KEY = "amw-arcade-pad";
+
+  function initialPadState() {
+    try {
+      var stored = window.localStorage.getItem(PAD_KEY);
+      if (stored === "1") return true;
+      if (stored === "0") return false;
+    } catch (err) { /* fall through to the device default */ }
+    // Mobile-first: a touch device gets the pad without being asked.
+    return coarsePointer();
+  }
+
   /* ---- focus containment -------------------------------------------------
 
      The page's skip link sits at body level, outside the regions this makes
@@ -6237,6 +6848,7 @@
   function openArcade() {
     if (isOpen) return;
     if (!overlay) buildOverlay();
+    if (padEnabled === null) setPadEnabled(initialPadState());
     lastFocus = doc.activeElement;
     isOpen = true;
     overlay.hidden = false;
@@ -6526,6 +7138,7 @@
     nodes.hint.textContent =
       cabinet.controls + touchHint(cabinet) + " · P pause · ESC exit";
     nodes.canvas.setAttribute("aria-label", cabinet.name + " — " + cabinet.tagline);
+    applyPad(cabinet.pad);
     resizeCanvas();
     updateHud();
     clearDirections();
@@ -6646,6 +7259,7 @@
         var steps = 0;
         while (accumulator >= STEP && steps < MAX_CATCHUP) {
           advanceInput();
+          advancePad();
           game.update(STEP, input);
           accumulator -= STEP;
           steps += 1;
@@ -6855,6 +7469,7 @@
       var n = count || 1;
       for (var i = 0; i < n && game && !game.over; i += 1) {
         advanceInput();
+        advancePad();
         game.update(STEP, input);
       }
       if (game && nodes.ctx) {
