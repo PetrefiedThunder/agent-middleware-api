@@ -138,7 +138,7 @@ in committed defaults.
 | `VALID_API_KEYS` | operator-set secrets | Bootstrap/admin keys only; **never** `change-me` |
 | `MCP_UPSTREAM_URL` | one public HTTPS MCP origin | The pilot supports exactly one real upstream tool server |
 | `MCP_UPSTREAM_BEARER_TOKEN` | customer-specific secret | Never put it in the manifest or committed files |
-| `SENTINEL_API_URL` / `SENTINEL_API_KEY` | customer-specific Sentinel configuration | Send synthetic or redacted arguments only |
+| `SENTINEL_API_URL` / `SENTINEL_API_KEY` | customer-specific Sentinel configuration | URL must be a root HTTPS origin with no credentials, query, or fragment; HTTP is loopback-only for local tests. Send synthetic or redacted arguments only |
 | `RUN_MIGRATIONS_ON_START` | `true` (recommended; set via `railway variables`) | Entrypoint runs `alembic upgrade head` before uvicorn. App boot then **verifies** trust tables exist and **never** calls `create_all` in production-like envs. Flag + empty `DATABASE_URL` fails closed (container exits). If the DB was previously bootstrapped with `create_all` and has no `alembic_version` row, run `alembic stamp head` once before enabling this flag. |
 
 `REDIS_URL` is required for the managed pilot's isolated Redis service. Outside
@@ -170,7 +170,12 @@ fails, so it works as a gate in a shell or in CI:
   service is healthy, reports `production_like=true`, has no unhealthy
   dependency, did **not** fall back to memory state, and has both
   `ENABLE_PROOF_SURFACES=false` and
-  `ENABLE_DOGFOOD_TOOL=false`. Add `--expected-version` and
+  `ENABLE_DOGFOOD_TOOL=false`. An exact-SHA or stamped release must also
+  publish `dependencies.sentinel.status=up`; any present non-`up` Sentinel
+  state fails. An older image that publishes neither Sentinel readiness nor
+  build provenance receives a rollout note only, so this pre-deploy check can
+  inspect it before the new image exists, provided no expected commit SHA is
+  requested. Add `--expected-version` and
   `--expected-commit-sha` after deployment to require exact release identity
   from both `/health` and `/health/dependencies`; the SHA must be the full
   40-character value.
@@ -483,7 +488,7 @@ gates.
 export API_URL="${PUBLIC_URL:-https://api.thisisatest.tech}"
 
 curl -sS "$API_URL/health"
-curl -sS "$API_URL/health/dependencies"   # fell_back_to_memory=false; postgres up
+curl -sS "$API_URL/health/dependencies"   # postgres + Sentinel up; no fallback
 curl -sS "$API_URL/.well-known/agent.json"  # proof_surfaces_enabled=false
 curl -sS "$API_URL/mcp/tools.json"        # no awi_* / marketplace stubs when proof off
 curl -sS "$API_URL/llm.txt"               # Base URL = PUBLIC_URL
@@ -493,6 +498,9 @@ Expect:
 
 - No `trust_mode_permissive` warning in Railway logs for production.
 - `/health/dependencies` → `runtime_degradation.durable_state.fell_back_to_memory=false`.
+- `/health/dependencies` → `dependencies.sentinel.status=up`; this proves the
+  production gate is in real mode and the provider health endpoint is
+  reachable, but does not validate the configured key.
 - `ENABLE_PROOF_SURFACES=false` reflected in health / agent.json.
 - `/health` and `/health/dependencies` report the expected application version
   and exact 40-character deployed `commit_sha`.

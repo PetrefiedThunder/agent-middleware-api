@@ -259,6 +259,8 @@ HEALTHY = {
     "production_like": True,
     "version": "1.3.0",
     "commit_sha": EXPECTED_COMMIT_SHA,
+    "build_provenance": "stamped",
+    "dependencies": {"sentinel": {"status": "up"}},
     "unhealthy": [],
     "enable_proof_surfaces": False,
     "enable_dogfood_tool": False,
@@ -641,6 +643,129 @@ def test_live_passes_on_exact_expected_release_identity(monkeypatch):
         )
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        {"status": "down"},
+        {"status": "not_configured"},
+        {"status": "not_used"},
+        {"status": "future"},
+        {},
+        None,
+        "up",
+    ],
+    ids=[
+        "down",
+        "not_configured",
+        "not_used",
+        "unknown",
+        "missing_status",
+        "null",
+        "non_object",
+    ],
+)
+def test_live_fails_closed_on_present_non_up_sentinel(monkeypatch, sentinel):
+    payload = {**HEALTHY, "dependencies": {"sentinel": sentinel}}
+    _patch_get(monkeypatch, payload)
+
+    assert preflight.check_live("https://api.example.com") is False
+
+
+@pytest.mark.parametrize("dependencies", [None, [], "not-an-object"])
+def test_live_rejects_malformed_dependencies_object(monkeypatch, dependencies):
+    _patch_get(monkeypatch, {**HEALTHY, "dependencies": dependencies})
+
+    assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_allows_legacy_missing_sentinel_without_identity_or_stamp(
+    monkeypatch,
+    capsys,
+):
+    payload = {**HEALTHY, "dependencies": {}}
+    payload.pop("build_provenance")
+    _patch_get(monkeypatch, payload)
+
+    assert preflight.check_live("https://api.example.com") is True
+    output = capsys.readouterr().out
+    assert "NOTE" in output
+    assert "sentinel" in output.lower()
+
+
+def test_live_rejects_missing_sentinel_for_exact_release(monkeypatch, capsys):
+    payload = {**HEALTHY, "dependencies": {}}
+    payload.pop("build_provenance")
+    _patch_get(monkeypatch, payload)
+
+    assert (
+        preflight.check_live(
+            "https://api.example.com",
+            expected_commit_sha=EXPECTED_COMMIT_SHA,
+        )
+        is False
+    )
+    assert "sentinel readiness is absent" in capsys.readouterr().out
+
+
+def test_live_rejects_missing_sentinel_for_stamped_release(monkeypatch):
+    _patch_get(monkeypatch, {**HEALTHY, "dependencies": {}})
+
+    assert preflight.check_live("https://api.example.com") is False
+
+
+def test_live_rejects_missing_sentinel_without_legacy_note(monkeypatch, capsys):
+    payload = {
+        **HEALTHY,
+        "build_provenance": "unstamped",
+        "dependencies": {},
+    }
+    _patch_get(monkeypatch, payload)
+
+    assert preflight.check_live("https://api.example.com") is False
+    output = capsys.readouterr().out
+    assert "sentinel readiness is absent" in output
+    assert "NOTE dependencies.sentinel" not in output
+
+
+def test_live_sentinel_failure_output_never_echoes_payload(monkeypatch, capsys):
+    secret_url = "https://private-sentinel.example"
+    secret_key = "sentinel-key-that-must-not-leak"
+    payload = {
+        **HEALTHY,
+        "dependencies": {
+            "sentinel": {
+                "status": "down",
+                "reason": secret_url,
+                "error": secret_key,
+            }
+        },
+    }
+    _patch_get(monkeypatch, payload)
+
+    assert preflight.check_live("https://api.example.com") is False
+    output = capsys.readouterr().out
+    assert secret_url not in output
+    assert secret_key not in output
+
+
+def test_manifest_live_gate_requires_sentinel_field(tmp_path, monkeypatch, capsys):
+    manifest = _write_manifest(tmp_path, _manifest_document())
+    payload = {
+        **HEALTHY,
+        "commit_sha": TREE_COMMIT_SHA,
+        "dependencies": {},
+    }
+    payload.pop("build_provenance")
+    _patch_manifest_get(
+        monkeypatch,
+        dependencies_payload=payload,
+        liveness_payload=payload,
+    )
+
+    assert preflight.main(["--live", "--strict", "--manifest", str(manifest)]) == 1
+    assert "sentinel readiness is absent" in capsys.readouterr().out
 
 
 def test_live_uses_public_key_document_when_health_omits_signing_key_id(monkeypatch):
@@ -1097,6 +1222,23 @@ def test_live_notes_absent_provenance_without_failing(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "NOTE" in output
     assert "build_provenance absent" in output
+
+
+def test_live_rejects_absent_provenance_for_exact_release(monkeypatch, capsys):
+    payload = {key: value for key, value in HEALTHY.items()}
+    payload.pop("build_provenance", None)
+    _patch_get(monkeypatch, payload)
+
+    assert (
+        preflight.check_live(
+            "https://api.example.com",
+            expected_commit_sha=EXPECTED_COMMIT_SHA,
+        )
+        is False
+    )
+    output = capsys.readouterr().out
+    assert "build_provenance is absent" in output
+    assert "NOTE build_provenance" not in output
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,18 @@ The next release consolidates the accumulated trust-plane and public-product
 work as `v1.3.0`. Create that tag only from the exact commit that passes the
 full release gate; do not backfill a final `v1.2.0` tag.
 
+### 🩺 Production health proves Sentinel readiness
+
+- **Production-like dependency health now includes a sanitized Sentinel gate.**
+  Simulated or incomplete human approval and an unreachable Sentinel report
+  `down` without exposing configuration or transport errors. A successful
+  entry means the unauthenticated provider health endpoint was reachable and
+  the local URL/key pair is present; it does not claim the key was accepted.
+- **Exact-SHA and stamped Railway releases fail preflight unless Sentinel is
+  `up`.** A legacy image may omit the field only when it also lacks build
+  provenance and no expected commit is requested, allowing the pre-mutation
+  inspection step without weakening the new release gate.
+
 ### 🧹 One supported production configuration path
 
 - **Retired `.env.production` and `docker-compose.prod.yml`.** The tracked

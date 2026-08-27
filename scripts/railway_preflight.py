@@ -449,6 +449,34 @@ def check_live(
     if body.get("enable_proof_surfaces"):
         failures.append("enable_proof_surfaces=true — must be false in production")
 
+    dependencies = body.get("dependencies")
+    if not isinstance(dependencies, dict):
+        failures.append(
+            "dependencies is not an object — cannot verify Sentinel readiness"
+        )
+    elif "sentinel" not in dependencies:
+        requires_sentinel = (
+            expected_commit_sha is not None or "build_provenance" in body
+        )
+        if requires_sentinel:
+            failures.append(
+                "sentinel readiness is absent — exact/stamped releases must "
+                "publish dependencies.sentinel with status 'up'"
+            )
+        else:
+            print(
+                "[preflight] NOTE dependencies.sentinel absent from "
+                "/health/dependencies — deployed image predates the Sentinel "
+                "release gate; current-release posture only"
+            )
+    else:
+        sentinel = dependencies["sentinel"]
+        if not isinstance(sentinel, dict) or sentinel.get("status") != "up":
+            failures.append(
+                "sentinel readiness is not 'up' — production human approval "
+                "must be real, completely configured, and reachable"
+            )
+
     # Build provenance: did this image come through the documented release
     # path? Only `railway up --build-arg COMMIT_SHA=...` bakes the stamp, so
     # anything other than "stamped" means the running image was built by
@@ -457,16 +485,23 @@ def check_live(
     #
     # Key presence, not truthiness, for the same reason as the dogfood check
     # below: a genuinely absent key means the deployed image predates this
-    # field, which is reported and not silently passed but is deliberately not
-    # a hard failure — that would fail every deploy of an older image. A
+    # field. That earns a note only during legacy discovery, when no exact SHA
+    # is requested; an exact-release check must prove stamped provenance. A
     # *published* null is a different thing entirely. The field exists and does
     # not say "stamped", so it must fail closed like any other non-stamped
     # value. Once a stamped release is out, the key is always present.
     if "build_provenance" not in body:
-        print(
-            "[preflight] NOTE build_provenance absent from /health/dependencies "
-            "— deployed image predates this field; provenance not verified"
-        )
+        if expected_commit_sha is not None:
+            failures.append(
+                "build_provenance is absent — exact releases must report "
+                "'stamped' provenance from the documented railway up path"
+            )
+        else:
+            print(
+                "[preflight] NOTE build_provenance absent from "
+                "/health/dependencies — deployed image predates this field; "
+                "provenance not verified"
+            )
     else:
         provenance = body["build_provenance"]
         if provenance != "stamped":
@@ -590,7 +625,6 @@ def check_live(
             )
 
         health_signing_key_id = body.get("signing_key_id")
-        dependencies = body.get("dependencies")
         if health_signing_key_id is None and isinstance(dependencies, dict):
             signing_key = dependencies.get("signing_key")
             if isinstance(signing_key, dict):
