@@ -13605,6 +13605,734 @@
     return game;
   }
 
+  /* ---- 83. DRIFT QUEUE ---------------------------------------------------
+
+     Top-down drift racing on a scrolling road. Hold a turn and the tail steps
+     out; the scoring rewards holding a slide through a corner rather than
+     driving it cleanly, because that is the genre's whole personality. */
+  function cabinetDriftQueue(random) {
+    var game = { id: "drift-queue", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var car, road, scroll, speed, driftMeter, combo, hurt;
+
+    function roadCentre(y) {
+      return W / 2 + Math.sin(y * 0.009) * 62 + Math.sin(y * 0.021 + 2) * 26;
+    }
+    function roadWidth(y) {
+      return 78 - Math.min(28, y * 0.0022);
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      car = { x: W / 2, angle: 0, slip: 0 };
+      scroll = 0;
+      speed = 90;
+      driftMeter = 0;
+      combo = 0;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+      void road;
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      speed = Math.min(210, 90 + scroll * 0.006);
+      scroll += speed * dt;
+
+      var steer = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      var handbrake = input.fire || input.down;
+      car.slip += (steer * (handbrake ? 3.4 : 1.6) - car.slip * (handbrake ? 1.4 : 4)) * dt;
+      car.slip = clamp(car.slip, -1.6, 1.6);
+      car.x += car.slip * 66 * dt;
+
+      var centre = roadCentre(scroll);
+      var half = roadWidth(scroll) / 2;
+      var off = Math.abs(car.x - centre);
+
+      if (Math.abs(car.slip) > 0.7 && off < half) {
+        driftMeter += dt;
+        combo = 1 + Math.floor(driftMeter * 2);
+        game.score += Math.round(24 * dt * combo);
+        if (random() < dt * 20) {
+          bits.burst(car.x - car.slip * 8, H - 46, 1, { colour: "dim", speed: 30, life: 0.5 });
+        }
+      } else {
+        if (driftMeter > 1.2) fx.pop(car.x, H - 70, "DRIFT ×" + combo, "verify");
+        driftMeter = 0;
+        combo = 0;
+      }
+
+      if (off > half) {
+        if (hurt <= 0) {
+          hurt = 1;
+          game.lives -= 1;
+          driftMeter = 0;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(car.x, H - 46, 16, { colour: "danger", speed: 80, life: 0.5 });
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+        car.x += (centre - car.x) * 3 * dt;
+        car.slip *= 0.5;
+      }
+      car.x = clamp(car.x, 6, W - 6);
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var y = 0; y < H; y += 4) {
+        var wy = scroll + (H - y) * 1.4;
+        var c = roadCentre(wy);
+        var hw = roadWidth(wy) / 2;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(c - hw, y, hw * 2, 4);
+        ctx.fillStyle = ink.wall[1];
+        ctx.fillRect(c - hw - 3, y, 3, 4);
+        ctx.fillRect(c + hw, y, 3, 4);
+        if (Math.floor(wy / 26) % 2 === 0) {
+          ctx.fillStyle = ink.grid;
+          ctx.fillRect(c - 1, y, 2, 4);
+        }
+      }
+      bits.draw(ctx, ink);
+      var lean = Math.round(car.slip * 4);
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 12) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(Math.round(car.x) - 7 + lean, H - 54, 14, 20);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(Math.round(car.x) - 4 + lean, H - 50, 8, 6);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.round(speed) + " km/h", 4, 12);
+      if (combo) centreText(ctx, ink, "DRIFT ×" + combo, 24, "verify");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(scroll / 20) + "m · DRIFT ×" + combo; };
+    return game;
+  }
+
+  /* ---- 84. MINE CART -----------------------------------------------------
+
+     A cart on rails that only ever goes forward. You pick the branch and you
+     jump the gaps; the track is generated far enough ahead to be readable and
+     no further, which is the honest version of a roadmap. */
+  function cabinetMineCart(random) {
+    var game = { id: "mine-cart", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var cart, rails, scroll, speed, held, hurt, ore;
+
+    function railY(lane) { return H - 50 - lane * 42; }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      cart = { lane: 0, y: railY(0), vy: 0, air: false };
+      rails = [];
+      scroll = 0;
+      speed = 96;
+      ore = 0;
+      held = false;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 14; i += 1) addSegment(120 + i * 70);
+    };
+
+    function addSegment(x) {
+      rails.push({
+        x: x,
+        lanes: [true, random() < 0.6, random() < 0.35],
+        gap: random() < 0.2,
+        ore: random() < 0.4 ? Math.floor(random() * 3) : -1,
+        rock: random() < 0.25 ? Math.floor(random() * 3) : -1
+      });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      speed = Math.min(220, 96 + scroll * 0.008);
+      scroll += speed * dt;
+      game.score = Math.floor(scroll / 12) + ore * 15;
+
+      var pressed = input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.up) cart.lane = Math.min(2, cart.lane + 1);
+        else if (input.down) cart.lane = Math.max(0, cart.lane - 1);
+        else if (input.fire && !cart.air) { cart.vy = -170; cart.air = true; }
+      }
+
+      var target = railY(cart.lane);
+      if (cart.air) {
+        cart.vy += 460 * dt;
+        cart.y += cart.vy * dt;
+        if (cart.y >= target) { cart.y = target; cart.air = false; cart.vy = 0; }
+      } else {
+        cart.y += (target - cart.y) * Math.min(1, dt * 12);
+      }
+
+      for (var i = rails.length - 1; i >= 0; i -= 1) {
+        var seg = rails[i];
+        seg.x -= speed * dt;
+        if (seg.x < -80) {
+          rails.splice(i, 1);
+          addSegment(rails.reduce(function (a, s) { return Math.max(a, s.x); }, W) + 70);
+          continue;
+        }
+        if (seg.x > 66 || seg.x < 34) continue;
+        if (seg.ore === cart.lane && !cart.air) {
+          seg.ore = -1;
+          ore += 1;
+          bits.burst(50, cart.y, 5, { colour: "brass", speed: 50, life: 0.4 });
+        }
+        var onMissingRail = !seg.lanes[cart.lane] && !cart.air;
+        var intoRock = seg.rock === cart.lane && !cart.air;
+        if ((onMissingRail || intoRock || (seg.gap && !cart.air)) && hurt <= 0) {
+          hurt = 1;
+          game.lives -= 1;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(50, cart.y, 16, { colour: "danger", speed: 80, life: 0.5 });
+          if (game.lives <= 0) { game.over = true; return; }
+          cart.lane = 0;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 24, W, 24);
+      rails.forEach(function (seg) {
+        for (var lane = 0; lane < 3; lane += 1) {
+          if (!seg.lanes[lane] || seg.gap) continue;
+          ctx.fillStyle = ink.wall[1];
+          ctx.fillRect(Math.round(seg.x), railY(lane) + 10, 64, 4);
+          ctx.fillStyle = ink.wall[2];
+          for (var t = 0; t < 4; t += 1) ctx.fillRect(Math.round(seg.x) + t * 16, railY(lane) + 14, 5, 5);
+        }
+        if (seg.ore >= 0) {
+          ctx.fillStyle = ink.brass;
+          ctx.fillRect(Math.round(seg.x) + 26, railY(seg.ore) - 6, 10, 10);
+        }
+        if (seg.rock >= 0) {
+          ctx.fillStyle = ink.danger;
+          ctx.fillRect(Math.round(seg.x) + 22, railY(seg.rock) - 4, 18, 14);
+        }
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 12) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(40, Math.round(cart.y) - 12, 22, 16);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(44, Math.round(cart.y) - 8, 14, 8);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ORE " + ore, 4, 12);
+      ctx.fillText(Math.floor(scroll / 12) + "m", W - 56, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(scroll / 12) + "m · ORE " + ore; };
+    return game;
+  }
+
+  /* ---- 85. THRUST BUDGET -------------------------------------------------
+
+     A jetpack corridor. Fuel burns while you hold and refills on the ground,
+     so the run is a series of decisions about how much altitude a gap is
+     actually worth. */
+  function cabinetThrustBudget(random) {
+    var game = { id: "thrust-budget", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var flyer, hazards, scroll, speed, fuel, hurt, coins, collected;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      flyer = { y: H - 40, vy: 0 };
+      hazards = [];
+      coins = [];
+      scroll = 0;
+      speed = 88;
+      fuel = 100;
+      collected = 0;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 8; i += 1) seedAt(200 + i * 90);
+    };
+
+    function seedAt(x) {
+      hazards.push({ x: x, y: 30 + random() * (H - 90), h: 20 + random() * 40, moving: random() < 0.3, dir: 1 });
+      if (random() < 0.7) coins.push({ x: x + 40, y: 30 + random() * (H - 80), got: false });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      speed = Math.min(190, 88 + scroll * 0.007);
+      scroll += speed * dt;
+      game.score = Math.floor(scroll / 14) + collected * 20;
+
+      var thrusting = (input.fire || input.up) && fuel > 0;
+      if (thrusting) {
+        flyer.vy -= 320 * dt;
+        fuel -= 26 * dt;
+        bits.burst(46, flyer.y + 10, 2, { colour: "brass", speed: 40, angle: Math.PI / 2, spread: 0.5, life: 0.25 });
+      }
+      flyer.vy += 240 * dt;
+      flyer.y += flyer.vy * dt;
+      if (flyer.y > H - 26) {
+        flyer.y = H - 26;
+        flyer.vy = 0;
+        fuel = Math.min(100, fuel + 42 * dt);
+      }
+      if (flyer.y < 10) { flyer.y = 10; flyer.vy = 0; }
+
+      hazards.forEach(function (hz) {
+        hz.x -= speed * dt;
+        if (hz.moving) {
+          hz.y += hz.dir * 40 * dt;
+          if (hz.y < 20 || hz.y > H - 60) hz.dir *= -1;
+        }
+        if (hz.x > 62 || hz.x < 30) return;
+        if (flyer.y > hz.y && flyer.y < hz.y + hz.h && hurt <= 0) {
+          hurt = 1;
+          game.lives -= 1;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(46, flyer.y, 16, { colour: "danger", speed: 80, life: 0.5 });
+          if (game.lives <= 0) { game.over = true; }
+        }
+      });
+      hazards = hazards.filter(function (hz) { return hz.x > -30; });
+
+      coins.forEach(function (c) {
+        c.x -= speed * dt;
+        if (c.got || Math.abs(c.x - 46) > 10 || Math.abs(c.y - flyer.y) > 10) return;
+        c.got = true;
+        collected += 1;
+        bits.burst(c.x, c.y, 5, { colour: "brass", speed: 50, life: 0.35 });
+      });
+      coins = coins.filter(function (c) { return c.x > -20 && !c.got; });
+
+      while (hazards.length < 8) {
+        seedAt(hazards.reduce(function (a, h) { return Math.max(a, h.x); }, W) + 80 + random() * 40);
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, scroll * 0.4, 22);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(0, H - 18, W, 18);
+      ctx.fillRect(0, 0, W, 8);
+      hazards.forEach(function (hz) {
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(Math.round(hz.x), Math.round(hz.y), 12, hz.h);
+      });
+      coins.forEach(function (c) {
+        ctx.fillStyle = ink.brass;
+        ctx.fillRect(Math.round(c.x) - 4, Math.round(c.y) - 4, 8, 8);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 12) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(40, Math.round(flyer.y) - 8, 12, 18);
+      drawBar(ctx, ink, 4, 4, 70, 5, fuel / 100, fuel > 25 ? "brass" : "danger");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("FUEL", 4, 18);
+      ctx.fillText(Math.floor(scroll / 14) + "m", W - 56, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(scroll / 14) + "m · FUEL " + Math.round(fuel); };
+    return game;
+  }
+
+  /* ---- 86. WALL JUMP -----------------------------------------------------
+
+     A vertical shaft with two walls and one verb. You stick where you land
+     and push off; the shaft rises on its own, so hesitating is the loss
+     condition rather than a pause. */
+  function cabinetWallJump(random) {
+    var game = { id: "wall-jump", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var climber, spikes, camera, rise, held, height;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      climber = { x: 40, y: H - 60, vx: 0, vy: 0, side: -1, stuck: true };
+      spikes = [];
+      camera = 0;
+      rise = 8;
+      height = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 8; i += 1) spikes.push({ y: -i * 90 - 60, side: random() < 0.5 ? -1 : 1, h: 30 });
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      rise = Math.min(46, 8 + height * 0.012);
+      camera += rise * dt;
+
+      if (input.fire || input.up) {
+        if (!held && climber.stuck) {
+          held = true;
+          climber.stuck = false;
+          climber.vx = -climber.side * 140;
+          climber.vy = -180;
+          bits.burst(climber.x, climber.y, 5, { colour: "verify", speed: 40, life: 0.3 });
+        }
+      } else held = false;
+
+      if (!climber.stuck) {
+        climber.vy += 420 * dt;
+        climber.x += climber.vx * dt;
+        climber.y += climber.vy * dt;
+        if (climber.x <= 30) { climber.x = 30; climber.side = -1; climber.stuck = true; climber.vx = climber.vy = 0; }
+        if (climber.x >= W - 30) { climber.x = W - 30; climber.side = 1; climber.stuck = true; climber.vx = climber.vy = 0; }
+      } else {
+        climber.y += 22 * dt;
+      }
+
+      var screenY = climber.y + camera;
+      height = Math.max(height, -climber.y + H);
+      game.score = Math.floor(height / 8);
+
+      var died = screenY > H + 10;
+      spikes.forEach(function (s) {
+        var sy = s.y + camera;
+        if (sy < -40 || sy > H + 40) return;
+        var onSide = (s.side < 0 && climber.x < 44) || (s.side > 0 && climber.x > W - 44);
+        if (onSide && screenY > sy && screenY < sy + s.h) died = true;
+      });
+
+      if (died) {
+        game.lives -= 1;
+        fx.shake(12);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        climber.y = -camera + H - 60;
+        climber.x = 40;
+        climber.side = -1;
+        climber.stuck = true;
+        climber.vx = climber.vy = 0;
+      }
+
+      spikes.forEach(function (s) {
+        if (s.y + camera <= H + 60) return;
+        s.y -= 8 * 90;
+        s.side = random() < 0.5 ? -1 : 1;
+      });
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(0, 0, 26, H);
+      ctx.fillRect(W - 26, 0, 26, H);
+      spikes.forEach(function (s) {
+        var sy = s.y + camera;
+        if (sy < -40 || sy > H) return;
+        ctx.fillStyle = ink.danger;
+        if (s.side < 0) ctx.fillRect(26, sy, 12, s.h);
+        else ctx.fillRect(W - 38, sy, 12, s.h);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = climber.stuck ? ink.verify : ink.bright;
+      ctx.fillRect(Math.round(climber.x) - 6, Math.round(climber.y + camera) - 8, 12, 16);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.floor(height / 8) + "m", 32, 14);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(height / 8) + "m UP"; };
+    return game;
+  }
+
+  /* ---- 87. COLD SLOPE ----------------------------------------------------
+
+     Downhill through gates. Miss a gate and the run is disqualified at the
+     bottom rather than stopped in the middle, so the pressure is cumulative
+     and you always find out too late. */
+  function cabinetColdSlope(random) {
+    var game = { id: "cold-slope", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var skier, gates, scroll, speed, missedGates, run, trees;
+
+    function seed() {
+      gates = [];
+      trees = [];
+      for (var i = 0; i < 12; i += 1) {
+        gates.push({ y: -i * 120 - 100, x: 50 + random() * (W - 100), w: 46, passed: false, missed: false });
+      }
+      for (var t = 0; t < 24; t += 1) {
+        trees.push({ x: random() * W, y: -random() * 1400 });
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      skier = { x: W / 2, vx: 0 };
+      scroll = 0;
+      speed = 110;
+      missedGates = 0;
+      run = 1;
+      fx.reset();
+      bits.clear();
+      seed();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      speed = Math.min(260, 110 + scroll * 0.01);
+      scroll += speed * dt;
+
+      var steer = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+      skier.vx += steer * 260 * dt;
+      skier.vx *= 0.92;
+      skier.x = clamp(skier.x + skier.vx * dt, 8, W - 8);
+
+      gates.forEach(function (g) {
+        var gy = g.y + scroll;
+        if (g.passed || gy < H - 60) return;
+        g.passed = true;
+        var through = Math.abs(skier.x - g.x) < g.w / 2;
+        if (through) {
+          game.score += 25;
+          bits.burst(g.x, H - 60, 5, { colour: "verify", speed: 40, life: 0.3 });
+        } else {
+          g.missed = true;
+          missedGates += 1;
+          fx.shake(6);
+          fx.flash("danger", 0.6);
+        }
+      });
+
+      trees.forEach(function (t) {
+        var ty = t.y + scroll;
+        if (ty < H - 40 || ty > H - 20) return;
+        if (Math.abs(t.x - skier.x) > 8) return;
+        t.y -= 3000;
+        game.lives -= 1;
+        fx.shake(12);
+        fx.flash("danger", 1);
+        bits.burst(skier.x, H - 30, 16, { colour: "danger", speed: 80, life: 0.5 });
+        if (game.lives <= 0) game.over = true;
+      });
+
+      if (gates.every(function (g) { return g.passed; })) {
+        if (missedGates > 2) {
+          game.lives -= 1;
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        } else {
+          game.score += 180 - missedGates * 40;
+        }
+        run += 1;
+        missedGates = 0;
+        scroll = 0;
+        seed();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      trees.forEach(function (t) {
+        var ty = t.y + scroll;
+        if (ty < -20 || ty > H) return;
+        ctx.fillStyle = ink.wall[1];
+        ctx.fillRect(Math.round(t.x) - 5, Math.round(ty) - 12, 10, 14);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(t.x) - 2, Math.round(ty) + 1, 4, 5);
+      });
+      gates.forEach(function (g) {
+        var gy = g.y + scroll;
+        if (gy < -10 || gy > H) return;
+        ctx.fillStyle = g.missed ? ink.danger : g.passed ? ink.grid : ink.brass;
+        ctx.fillRect(g.x - g.w / 2, gy, 4, 16);
+        ctx.fillRect(g.x + g.w / 2 - 4, gy, 4, 16);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(skier.x) - 4, H - 40, 8, 14);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = missedGates > 1 ? ink.danger : ink.dim;
+      ctx.fillText("MISSED " + missedGates + "/3", 4, 12);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("RUN " + run, W - 56, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "RUN " + run + " · MISSED " + missedGates; };
+    return game;
+  }
+
+  /* ---- 88. HANDOFF -------------------------------------------------------
+
+     Parkour as a rhythm of leaps between moving platforms. Each platform is a
+     service you are briefly standing on; they move, and the one you are on is
+     always about to stop being available. */
+  function cabinetHandoff(random) {
+    var game = { id: "handoff", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var runner, plats, camera, held, chain;
+
+    function makePlat(x) {
+      return {
+        x: x,
+        y: 90 + random() * (H - 130),
+        w: 44 + random() * 34,
+        drift: (random() - 0.5) * 40,
+        life: 2.4 + random() * 2
+      };
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      runner = { x: 60, y: 140, vx: 0, vy: 0, on: null };
+      plats = [];
+      for (var i = 0; i < 6; i += 1) plats.push(makePlat(40 + i * 80));
+      runner.on = plats[0];
+      camera = 0;
+      chain = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      plats.forEach(function (p) {
+        p.y += p.drift * dt;
+        if (p.y < 60 || p.y > H - 30) p.drift *= -1;
+        if (p.life > 0) p.life -= dt;
+      });
+
+      if (input.fire || input.up) {
+        if (!held && runner.on) {
+          held = true;
+          runner.vx = 132;
+          runner.vy = -180;
+          runner.on = null;
+          chain += 1;
+          game.score += 10 * Math.min(6, chain);
+          bits.burst(runner.x, runner.y, 5, { colour: "verify", speed: 40, life: 0.3 });
+        }
+      } else held = false;
+
+      if (!runner.on) {
+        runner.vy += 400 * dt;
+        runner.x += runner.vx * dt;
+        runner.y += runner.vy * dt;
+        plats.forEach(function (p) {
+          if (runner.vy < 0 || p.life <= 0) return;
+          if (runner.x < p.x - 4 || runner.x > p.x + p.w + 4) return;
+          if (runner.y < p.y - 6 || runner.y > p.y + 10) return;
+          runner.on = p;
+          runner.y = p.y - 6;
+          runner.vx = runner.vy = 0;
+          fx.shake(1);
+        });
+      } else {
+        runner.x = runner.on.x + runner.on.w / 2;
+        runner.y = runner.on.y - 6;
+        if (runner.on.life <= 0) runner.on = null;
+      }
+
+      camera = Math.max(camera, runner.x - 90);
+      // Recycle platforms behind the camera into fresh ones ahead.
+      plats.forEach(function (p, i) {
+        if (p.x + p.w > camera - 30) return;
+        plats[i] = makePlat(plats.reduce(function (a, k) { return Math.max(a, k.x); }, camera) + 70 + random() * 50);
+      });
+
+      if (runner.y > H + 12 || runner.x < camera - 20) {
+        game.lives -= 1;
+        chain = 0;
+        fx.shake(12);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        var safe = plats.reduce(function (a, p) { return p.x > camera + 10 && (!a || p.x < a.x) ? p : a; }, null) || plats[0];
+        runner.on = safe;
+        runner.x = safe.x + safe.w / 2;
+        runner.y = safe.y - 6;
+        runner.vx = runner.vy = 0;
+        safe.life = Math.max(safe.life, 2);
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, camera, H * 0.6);
+      fx.begin(ctx);
+      plats.forEach(function (p) {
+        var x = p.x - camera;
+        if (x < -90 || x > W) return;
+        ctx.fillStyle = p.life > 1 ? ink.verify : p.life > 0 ? ink.brass : ink.grid;
+        ctx.fillRect(Math.round(x), Math.round(p.y), Math.round(p.w), 6);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(runner.x - camera) - 4, Math.round(runner.y) - 12, 9, 13);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("CHAIN " + chain, 4, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "CHAIN " + chain; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -14343,6 +15071,60 @@
       controls: "← → choose · SPACE add",
       pad: "lr+fire",
       make: cabinetServiceMenu
+    },
+    {
+      id: "drift-queue",
+      name: "DRIFT QUEUE",
+      genre: "RACING",
+      tagline: "Holding the slide pays more than driving it clean.",
+      controls: "← → steer · SPACE handbrake",
+      pad: "lr+fire",
+      make: cabinetDriftQueue
+    },
+    {
+      id: "mine-cart",
+      name: "MINE CART",
+      genre: "RAILS",
+      tagline: "Pick the branch, jump the gap, only ever forward.",
+      controls: "↑ ↓ switch rail · SPACE jump",
+      pad: "ud+fire",
+      make: cabinetMineCart
+    },
+    {
+      id: "thrust-budget",
+      name: "THRUST BUDGET",
+      genre: "JETPACK",
+      tagline: "Fuel burns while you hold and refills on the ground.",
+      controls: "SPACE hold to fly",
+      pad: "tap",
+      make: cabinetThrustBudget
+    },
+    {
+      id: "wall-jump",
+      name: "WALL JUMP",
+      genre: "SHAFT",
+      tagline: "You stick where you land. Hesitating is the loss.",
+      controls: "SPACE push off",
+      pad: "tap",
+      make: cabinetWallJump
+    },
+    {
+      id: "cold-slope",
+      name: "COLD SLOPE",
+      genre: "DOWNHILL",
+      tagline: "Miss a gate and you find out at the bottom.",
+      controls: "← → carve",
+      pad: "lr",
+      make: cabinetColdSlope
+    },
+    {
+      id: "handoff",
+      name: "HANDOFF",
+      genre: "PARKOUR",
+      tagline: "The service you are standing on is about to go away.",
+      controls: "SPACE leap",
+      pad: "tap",
+      make: cabinetHandoff
     }
   ];
 
