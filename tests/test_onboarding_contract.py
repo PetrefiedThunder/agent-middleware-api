@@ -8,6 +8,7 @@ gates. These are cheap to re-break in a docs edit, so they are pinned.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -246,10 +247,14 @@ def test_repo_does_not_ship_stale_production_config_paths() -> None:
     retired = (".env.production", "docker-compose.prod.yml")
     for name in retired:
         assert not (REPO_ROOT / name).exists(), f"retired artifact returned: {name}"
-
-    ignored = set((REPO_ROOT / ".gitignore").read_text().splitlines())
-    assert "/.env.production" in ignored
-    assert "/docker-compose.prod.yml" in ignored
+        ignore_check = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--quiet", name],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert ignore_check.returncode == 0, f"retired artifact is not ignored: {name}"
 
     deploy_sop = (REPO_ROOT / "docs" / "deploy-railway.md").read_text()
     assert "does not ship `.env.production` or" in deploy_sop
