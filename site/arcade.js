@@ -10282,6 +10282,571 @@
     return game;
   }
 
+  /* ---- 57. TAP ORDER -----------------------------------------------------
+
+     Four columns of arriving calls, one lit at a time, and you answer the one
+     at the line. Speed rises until you miss. The purest reaction cabinet
+     there is and the one that best suits a thumb. */
+  function cabinetTapOrder(random) {
+    var LANES = 4;
+    var LANE_W = 74;
+    var OX = (W - LANES * LANE_W) / 2;
+    var KEYS = ["left", "up", "down", "right"];
+
+    var game = { id: "tap-order", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var rows, speed, held, streak, missed;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      rows = [];
+      for (var i = 0; i < 5; i += 1) rows.push({ y: -i * 52, lane: Math.floor(random() * LANES), hit: false });
+      speed = 74;
+      streak = 0;
+      missed = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      speed = Math.min(240, 74 + game.score * 0.4);
+
+      rows.forEach(function (r) { r.y += speed * dt; });
+
+      for (var i = rows.length - 1; i >= 0; i -= 1) {
+        if (rows[i].y <= H + 20) continue;
+        if (!rows[i].hit) {
+          missed += 1;
+          game.lives -= 1;
+          streak = 0;
+          fx.shake(9);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+        rows.splice(i, 1);
+      }
+      while (rows.length < 5) {
+        var top = rows.reduce(function (a, r) { return Math.min(a, r.y); }, H);
+        rows.push({ y: top - 52, lane: Math.floor(random() * LANES), hit: false });
+      }
+
+      var pressed = -1;
+      for (var k = 0; k < LANES; k += 1) if (input[KEYS[k]]) pressed = k;
+      if (pressed < 0) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      // The lowest unhit row is the only one that can be answered: answering
+      // out of order is the mistake this cabinet exists to punish.
+      var target = null;
+      rows.forEach(function (r) { if (!r.hit && (!target || r.y > target.y)) target = r; });
+      if (!target) return;
+      if (target.lane === pressed && target.y > H * 0.45) {
+        target.hit = true;
+        streak += 1;
+        game.score += 5 + Math.min(20, streak);
+        bits.burst(OX + target.lane * LANE_W + LANE_W / 2, target.y, 6, { colour: "verify", speed: 60, life: 0.35 });
+        if (streak % 10 === 0) fx.pop(W / 2, H / 2, "STREAK " + streak, "bright");
+      } else {
+        streak = 0;
+        game.lives -= 1;
+        fx.shake(8);
+        fx.flash("danger", 0.9);
+        if (game.lives <= 0) { game.over = true; return; }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var l = 0; l < LANES; l += 1) {
+        ctx.fillStyle = l % 2 ? ink.bg : ink.grid;
+        ctx.fillRect(OX + l * LANE_W, 0, LANE_W - 2, H);
+      }
+      rows.forEach(function (r) {
+        if (r.hit) return;
+        ctx.fillStyle = r.y > H * 0.45 ? ink.verify : ink.wall[1];
+        ctx.fillRect(OX + r.lane * LANE_W + 3, Math.round(r.y) - 22, LANE_W - 8, 44);
+      });
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(0, Math.round(H * 0.45), W, 2);
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("STREAK " + streak, 4, 12);
+      centreText(ctx, ink, "← ↑ ↓ →", H - 8, "dim");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "STREAK " + streak + " · MISSED " + missed; };
+    return game;
+  }
+
+  /* ---- 58. AIM DRILL -----------------------------------------------------
+
+     Targets appear, shrink, and expire. Hit rate is the score and the clock
+     only extends on accuracy, so spraying is strictly worse than waiting. */
+  function cabinetAimDrill(random) {
+    var game = { id: "aim-drill", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var cursor, targets, clock, hits, shotsFired, held, tier;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      cursor = { x: W / 2, y: H / 2 };
+      targets = [];
+      clock = 25;
+      hits = 0;
+      shotsFired = 0;
+      tier = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 3; i += 1) add();
+    };
+
+    function add() {
+      targets.push({
+        x: 16 + random() * (W - 32),
+        y: 26 + random() * (H - 46),
+        life: 2.4,
+        max: 2.4
+      });
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      clock -= dt;
+
+      if (input.pointerX != null) {
+        cursor.x = input.pointerX;
+        cursor.y = input.pointerY;
+      } else {
+        var speed = 150 * dt;
+        if (input.left) cursor.x -= speed;
+        if (input.right) cursor.x += speed;
+        if (input.up) cursor.y -= speed;
+        if (input.down) cursor.y += speed;
+      }
+      cursor.x = clamp(cursor.x, 0, W);
+      cursor.y = clamp(cursor.y, 0, H);
+
+      for (var i = targets.length - 1; i >= 0; i -= 1) {
+        targets[i].life -= dt * (0.8 + tier * 0.12);
+        if (targets[i].life > 0) continue;
+        targets.splice(i, 1);
+        add();
+        game.lives -= 1;
+        fx.flash("danger", 0.8);
+        if (game.lives <= 0) { game.over = true; return; }
+      }
+
+      if (input.fire && !held) {
+        held = true;
+        shotsFired += 1;
+        var got = false;
+        for (var t = targets.length - 1; t >= 0; t -= 1) {
+          var r = 6 + (targets[t].life / targets[t].max) * 8;
+          if (Math.hypot(targets[t].x - cursor.x, targets[t].y - cursor.y) > r) continue;
+          bits.burst(targets[t].x, targets[t].y, 8, { colour: "verify", speed: 70, life: 0.4 });
+          targets.splice(t, 1);
+          add();
+          hits += 1;
+          got = true;
+          game.score += 20;
+          clock = Math.min(30, clock + 1.1);
+          if (hits % 10 === 0) tier += 1;
+          break;
+        }
+        if (!got) {
+          clock -= 1.4;
+          fx.shake(4);
+        }
+      } else if (!input.fire) held = false;
+
+      if (clock <= 0) {
+        game.lives -= 1;
+        clock = 20;
+        if (game.lives <= 0) game.over = true;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = ink.grid;
+      for (var g = 0; g < W; g += 32) ctx.fillRect(g, 16, 1, H - 16);
+      fx.begin(ctx);
+      targets.forEach(function (t) {
+        var r = Math.round(6 + (t.life / t.max) * 8);
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(t.x - r, t.y - r, r * 2, r * 2);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(t.x - r + 3, t.y - r + 3, r * 2 - 6, r * 2 - 6);
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(t.x - 2, t.y - 2, 4, 4);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(cursor.x) - 7, Math.round(cursor.y), 5, 1);
+      ctx.fillRect(Math.round(cursor.x) + 3, Math.round(cursor.y), 5, 1);
+      ctx.fillRect(Math.round(cursor.x), Math.round(cursor.y) - 7, 1, 5);
+      ctx.fillRect(Math.round(cursor.x), Math.round(cursor.y) + 3, 1, 5);
+      var acc = shotsFired ? Math.round((hits / shotsFired) * 100) : 100;
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ACC " + acc + "%", 4, 12);
+      drawBar(ctx, ink, W - 84, 6, 80, 5, clock / 30, clock < 8 ? "danger" : "brass");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () {
+      var acc = shotsFired ? Math.round((hits / shotsFired) * 100) : 100;
+      return "HITS " + hits + " · ACC " + acc + "%";
+    };
+    return game;
+  }
+
+  /* ---- 59. COLD PATH -----------------------------------------------------
+
+     Wait for green, then answer as fast as you can. Answering early is worse
+     than answering slowly, which is the one thing a reaction test and a
+     deployment gate agree on. */
+  function cabinetColdPath(random) {
+    var game = { id: "cold-path", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var state, timer, reaction, best, round, held, history;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      state = "wait";
+      timer = 1 + random() * 2.4;
+      reaction = 0;
+      best = 0;
+      round = 1;
+      held = false;
+      history = [];
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+
+      if (state === "wait") {
+        timer -= dt;
+        if (input.fire && !held) {
+          held = true;
+          state = "early";
+          timer = 1.2;
+          game.lives -= 1;
+          fx.shake(9);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        } else if (timer <= 0) {
+          state = "go";
+          reaction = 0;
+        }
+      } else if (state === "go") {
+        reaction += dt;
+        if (input.fire && !held) {
+          held = true;
+          var ms = Math.round(reaction * 1000);
+          history.unshift(ms);
+          if (history.length > 5) history.pop();
+          if (!best || ms < best) best = ms;
+          game.score += Math.max(5, 600 - ms);
+          state = "result";
+          timer = 1.1;
+          fx.flash("verify", 0.8);
+        } else if (reaction > 1.6) {
+          state = "slow";
+          timer = 1.1;
+          game.lives -= 1;
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      } else {
+        timer -= dt;
+        if (timer <= 0) {
+          state = "wait";
+          timer = 1 + random() * 2.4;
+          round += 1;
+        }
+      }
+      if (!input.fire) held = false;
+    };
+
+    game.draw = function (ctx, ink) {
+      var colour = state === "go" ? ink.verify : state === "early" || state === "slow" ? ink.danger : ink.wall[3];
+      ctx.fillStyle = colour;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(20, 40, W - 40, H - 90);
+      var label = state === "wait" ? "COLD…" : state === "go" ? "GO" :
+                  state === "early" ? "EARLY — THAT IS A DENIAL" :
+                  state === "slow" ? "TOO SLOW" : Math.round(reaction * 1000) + " ms";
+      centreText(ctx, ink, label, H / 2 - 6, state === "go" ? "verify" : "ink", state === "go" ? 16 : 8);
+      centreText(ctx, ink, "ROUND " + round, H / 2 + 18, "dim");
+      history.forEach(function (ms, i) {
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.fillStyle = ink.dim;
+        ctx.fillText(ms + "ms", 26, H - 40 + i * 8);
+      });
+      if (best) {
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.fillStyle = ink.brass;
+        ctx.fillText("BEST " + best + "ms", W - 96, H - 16);
+      }
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return best ? "BEST " + best + "ms" : "ROUND " + round; };
+    return game;
+  }
+
+  /* ---- 60. POP THE QUEUE -------------------------------------------------
+
+     Jobs surface out of a grid of slots and go back down whether or not you
+     got to them. The classic mole cabinet, and the most honest visualisation
+     of a backlog anyone has built. */
+  function cabinetPopTheQueue(random) {
+    var COLS = 4;
+    var ROWS = 3;
+    var CELL = 62;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 46;
+
+    var game = { id: "pop-the-queue", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var slots, cursor, spawnTimer, level, popped, missed, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      slots = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) slots.push({ up: 0, bad: false });
+      cursor = 5;
+      spawnTimer = 0.7;
+      level = 1;
+      popped = 0;
+      missed = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.fire) {
+          var s = slots[cursor];
+          if (s.up > 0) {
+            if (s.bad) {
+              game.lives -= 1;
+              fx.shake(10);
+              fx.flash("danger", 1);
+              if (game.lives <= 0) { game.over = true; return; }
+            } else {
+              popped += 1;
+              game.score += 15;
+              bits.burst(OX + (cursor % COLS) * CELL + CELL / 2, OY + Math.floor(cursor / COLS) * CELL + CELL / 2, 6,
+                { colour: "verify", speed: 60, life: 0.35 });
+              if (popped % 12 === 0) level += 1;
+            }
+            s.up = 0;
+          } else {
+            fx.shake(2);
+          }
+        } else if (input.left) cursor = (cursor + slots.length - 1) % slots.length;
+        else if (input.right) cursor = (cursor + 1) % slots.length;
+        else if (input.up) cursor = (cursor + slots.length - COLS) % slots.length;
+        else if (input.down) cursor = (cursor + COLS) % slots.length;
+      }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.24, 0.9 - level * 0.05);
+        var free = [];
+        slots.forEach(function (s, i) { if (!s.up) free.push(i); });
+        if (free.length) {
+          var pickIndex = free[Math.floor(random() * free.length)];
+          slots[pickIndex].up = Math.max(0.5, 1.5 - level * 0.06);
+          slots[pickIndex].bad = random() < Math.min(0.3, 0.08 + level * 0.02);
+        }
+      }
+
+      slots.forEach(function (s) {
+        if (!s.up) return;
+        s.up -= dt;
+        if (s.up > 0) return;
+        s.up = 0;
+        if (!s.bad) {
+          missed += 1;
+          if (missed % 4 === 0) {
+            game.lives -= 1;
+            fx.flash("danger", 0.7);
+            if (game.lives <= 0) game.over = true;
+          }
+        }
+      });
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "POP THE QUEUE — NOT THE POISONED ONES", 24, "dim", 7);
+      slots.forEach(function (s, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(x + 6, y + 6, CELL - 14, CELL - 14);
+        if (s.up > 0) {
+          var rise = Math.min(1, s.up * 3);
+          var size = Math.round((CELL - 26) * rise);
+          ctx.fillStyle = s.bad ? ink.danger : ink.brass;
+          ctx.fillRect(x + CELL / 2 - size / 2, y + CELL / 2 - size / 2, size, size);
+          ctx.fillStyle = ink.bg;
+          ctx.fillRect(x + CELL / 2 - size / 4, y + CELL / 2 - size / 4, size / 2, size / 4);
+        }
+        if (i === cursor) {
+          ctx.fillStyle = ink.ink;
+          ctx.fillRect(x + 4, y + 4, CELL - 10, 2);
+          ctx.fillRect(x + 4, y + CELL - 8, CELL - 10, 2);
+          ctx.fillRect(x + 4, y + 4, 2, CELL - 10);
+          ctx.fillRect(x + CELL - 8, y + 4, 2, CELL - 10);
+        }
+      });
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("POPPED " + popped, 4, 14);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("MISSED " + missed, W - 84, 14);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · POPPED " + popped; };
+    return game;
+  }
+
+  /* ---- 61. SPIN PLATES ---------------------------------------------------
+
+     Six services, each slowing down on its own, and one of you. Tending one
+     is the only thing you can do and every second spent tending is a second
+     the other five are decaying. Operations, essentially. */
+  function cabinetSpinPlates(random) {
+    var COUNT = 6;
+
+    var game = { id: "spin-plates", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var plates, cursor, held, uptime, decay, dropped;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      plates = [];
+      for (var i = 0; i < COUNT; i += 1) plates.push({ spin: 0.7 + random() * 0.3, phase: random() * 6 });
+      cursor = 0;
+      held = false;
+      uptime = 0;
+      decay = 0.05;
+      dropped = 0;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      uptime += dt;
+      decay = 0.045 + uptime * 0.0016;
+      game.score = Math.floor(uptime * 8);
+
+      var pressed = input.left || input.right;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.left) cursor = (cursor + COUNT - 1) % COUNT;
+        else cursor = (cursor + 1) % COUNT;
+      }
+
+      plates.forEach(function (p, i) {
+        p.phase += p.spin * dt * 8;
+        if (i === cursor && input.fire) {
+          p.spin = Math.min(1, p.spin + 1.1 * dt);
+        } else {
+          p.spin -= decay * dt;
+        }
+        if (p.spin <= 0) {
+          p.spin = 0.55;
+          dropped += 1;
+          game.lives -= 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) game.over = true;
+        }
+      });
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "KEEP EVERY SERVICE SPINNING", 20, "dim");
+      plates.forEach(function (p, i) {
+        var x = 34 + (i % 3) * 100;
+        var y = 70 + Math.floor(i / 3) * 84;
+        ctx.fillStyle = ink.wall[2];
+        ctx.fillRect(x + 14, y + 10, 4, 44);
+        var wobble = Math.sin(p.phase) * (1 - p.spin) * 8;
+        var colour = p.spin > 0.6 ? ink.verify : p.spin > 0.3 ? ink.brass : ink.danger;
+        ctx.fillStyle = colour;
+        ctx.fillRect(x - 4 + wobble, y, 40, 8);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 4 + wobble, y + 2, 24, 4);
+        drawBar(ctx, ink, x - 2, y + 58, 36, 4, p.spin, colour === ink.danger ? "danger" : "verify");
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x + 12, y + 66, 8, 4);
+        }
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("UPTIME " + uptime.toFixed(1) + "s", 4, 12);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("DROPPED " + dropped, W - 92, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "UPTIME " + uptime.toFixed(0) + "s · DROPPED " + dropped; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -10786,6 +11351,51 @@
       controls: "SPACE hold to climb",
       pad: "tap",
       make: cabinetCavern
+    },
+    {
+      id: "tap-order",
+      name: "TAP ORDER",
+      genre: "REACTION",
+      tagline: "Answer the one at the line. Out of order is a miss.",
+      controls: "← ↑ ↓ → answer",
+      pad: "lanes",
+      make: cabinetTapOrder
+    },
+    {
+      id: "aim-drill",
+      name: "AIM DRILL",
+      genre: "AIM",
+      tagline: "The clock only extends on accuracy. Spraying is worse.",
+      controls: "arrows aim · SPACE fire",
+      pad: "dpad+fire",
+      make: cabinetAimDrill
+    },
+    {
+      id: "cold-path",
+      name: "COLD PATH",
+      genre: "REACTION",
+      tagline: "Early is worse than slow. Wait for green.",
+      controls: "SPACE on green",
+      pad: "tap",
+      make: cabinetColdPath
+    },
+    {
+      id: "pop-the-queue",
+      name: "POP THE QUEUE",
+      genre: "WHACK",
+      tagline: "Jobs surface and sink whether or not you got to them.",
+      controls: "arrows move · SPACE pop",
+      pad: "dpad+fire",
+      make: cabinetPopTheQueue
+    },
+    {
+      id: "spin-plates",
+      name: "SPIN PLATES",
+      genre: "UPKEEP",
+      tagline: "Every second spent tending one is five others decaying.",
+      controls: "← → pick · SPACE hold to tend",
+      pad: "lr+fire",
+      make: cabinetSpinPlates
     }
   ];
 
