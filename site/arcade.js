@@ -8414,6 +8414,1287 @@
     return game;
   }
 
+  /* ---- 42. COLD START ----------------------------------------------------
+
+     Physics hill-climbing. Throttle and brake on a two-wheeled rig over
+     procedural terrain, with fuel that only comes from checkpoints. Named for
+     the thing every serverless deck promises is not a problem. */
+  function cabinetColdStart(random) {
+    var game = { id: "cold-start", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var car, ground, camX, fuel, distance, best, flip, checkpoint;
+
+    function heightAt(x) {
+      // Three summed sines: cheap, continuous, and deterministic in x, so the
+      // hill under the wheels is the same hill on the way back.
+      return H - 62 + Math.sin(x * 0.013) * 26 + Math.sin(x * 0.031 + 1.7) * 12 + Math.sin(x * 0.005) * 20;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      car = { x: 40, y: heightAt(40) - 10, vx: 0, vy: 0, angle: 0, spin: 0, onGround: true };
+      camX = 0;
+      fuel = 100;
+      distance = 0;
+      best = 0;
+      checkpoint = 300;
+      fx.reset();
+      bits.clear();
+    };
+
+    function wreck(reason) {
+      game.lives -= 1;
+      fx.shake(11);
+      fx.flash("danger", 1);
+      bits.burst(car.x - camX, car.y, 18, { colour: "danger", speed: 90, life: 0.7, gravity: 180 });
+      if (game.lives <= 0) { game.over = true; return; }
+      car.x = Math.max(40, car.x - 120);
+      car.y = heightAt(car.x) - 10;
+      car.vx = car.vy = car.spin = 0;
+      car.angle = 0;
+      fuel = Math.max(35, fuel);
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      var throttle = input.right || input.up;
+      var brake = input.left || input.down;
+      if (throttle && fuel > 0) {
+        car.vx += 96 * dt;
+        fuel -= 7 * dt;
+        if (car.onGround) bits.burst(car.x - camX - 8, car.y + 6, 1, { colour: "dim", speed: 30, life: 0.3 });
+      }
+      if (brake) car.vx -= 78 * dt;
+      car.vx *= 0.995;
+      car.vx = clamp(car.vx, -70, 150);
+
+      car.vy += 420 * dt;
+      car.x += car.vx * dt;
+      car.y += car.vy * dt;
+
+      var floor = heightAt(car.x) - 10;
+      if (car.y >= floor) {
+        if (!car.onGround && Math.abs(car.spin) > 2.6) {
+          // Landing mid-rotation is a wreck; landing flat after a full turn
+          // is worth something. The genre in one rule.
+          wreck("bad landing");
+          return;
+        }
+        if (!car.onGround && Math.abs(car.spin) > 0.4) {
+          game.score += 40;
+          fx.pop(car.x - camX, car.y - 20, "FLIP +40", "verify");
+        }
+        car.y = floor;
+        car.vy = 0;
+        car.onGround = true;
+        car.spin = 0;
+        // Slope drags the nose: the angle is the terrain derivative.
+        car.angle = (heightAt(car.x + 6) - heightAt(car.x - 6)) / 12;
+      } else {
+        car.onGround = false;
+        if (throttle) car.spin += 2.4 * dt;
+        if (brake) car.spin -= 2.4 * dt;
+        car.angle += car.spin * dt;
+      }
+
+      if (car.x > distance) {
+        game.score += Math.floor((car.x - distance) * 0.2);
+        distance = car.x;
+        if (distance > best) best = distance;
+      }
+      if (distance > checkpoint) {
+        checkpoint += 300;
+        fuel = Math.min(100, fuel + 45);
+        game.score += 60;
+        fx.flash("verify", 0.8);
+      }
+      if (fuel <= 0 && Math.abs(car.vx) < 4) { wreck("out of fuel"); return; }
+      camX = car.x - 90;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, camX, H * 0.5);
+      fx.begin(ctx);
+
+      ctx.fillStyle = ink.wall[2];
+      for (var x = 0; x < W; x += 2) {
+        var h = heightAt(x + camX);
+        ctx.fillRect(x, h, 2, H - h);
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(x, h, 2, 2);
+        ctx.fillStyle = ink.wall[2];
+      }
+
+      var sx = Math.round(car.x - camX), sy = Math.round(car.y);
+      var lean = Math.round(car.angle * 6);
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(sx - 10, sy - 6 - lean, 20, 8);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(sx - 10, sy + 2 - lean, 6, 6);
+      ctx.fillRect(sx + 4, sy + 2 + lean, 6, 6);
+      bits.draw(ctx, ink);
+
+      drawBar(ctx, ink, 4, 4, 70, 5, fuel / 100, fuel > 30 ? "verify" : "danger");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("FUEL", 4, 18);
+      ctx.fillText(Math.floor(distance / 10) + "m", W - 54, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(distance / 10) + "m · FUEL " + Math.max(0, Math.round(fuel)); };
+    return game;
+  }
+
+  /* ---- 43. SWISH RATE ----------------------------------------------------
+
+     Arcade hoops. A power meter, a moving hoop, and a shot clock. Nothing but
+     release timing, which is the only sports mechanic that survives being
+     reduced to one button. */
+  function cabinetSwishRate(random) {
+    var game = { id: "swish-rate", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var power, rising, ball, hoop, clock, streak, held, made, attempts;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      power = 0;
+      rising = true;
+      ball = null;
+      hoop = { x: W - 60, y: 60, dir: 1, speed: 26 };
+      clock = 30;
+      streak = 0;
+      made = 0;
+      attempts = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      clock -= dt;
+
+      hoop.x += hoop.dir * hoop.speed * dt;
+      if (hoop.x < W / 2 || hoop.x > W - 24) hoop.dir *= -1;
+      hoop.speed = 26 + made * 2.4;
+
+      if (!ball) {
+        if (rising) { power += dt * 1.35; if (power >= 1) { power = 1; rising = false; } }
+        else { power -= dt * 1.35; if (power <= 0) { power = 0; rising = true; } }
+        if (input.fire && !held) {
+          held = true;
+          attempts += 1;
+          ball = { x: 34, y: H - 40, vx: 60 + power * 150, vy: -(90 + power * 150), scored: false };
+        }
+      }
+      if (!input.fire) held = false;
+
+      if (ball) {
+        ball.vy += 300 * dt;
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+        if (!ball.scored && Math.abs(ball.x - hoop.x) < 11 && Math.abs(ball.y - hoop.y) < 6 && ball.vy > 0) {
+          ball.scored = true;
+          made += 1;
+          streak += 1;
+          game.score += 20 * Math.min(5, streak);
+          clock = Math.min(40, clock + 4);
+          fx.flash("verify", 0.9);
+          fx.pop(hoop.x, hoop.y - 14, streak > 1 ? "×" + streak : "SWISH", "verify");
+          bits.burst(hoop.x, hoop.y, 12, { colour: "verify", speed: 70, life: 0.5, gravity: 90 });
+        }
+        if (ball.y > H + 10 || ball.x > W + 10) {
+          if (!ball.scored) { streak = 0; fx.shake(3); }
+          ball = null;
+        }
+      }
+
+      if (clock <= 0) {
+        game.lives -= 1;
+        clock = 30;
+        streak = 0;
+        fx.flash("danger", 1);
+        if (game.lives <= 0) game.over = true;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 20, W, 20);
+
+      ctx.fillStyle = ink.wall[1];
+      ctx.fillRect(hoop.x + 12, hoop.y - 20, 4, 26);
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(hoop.x - 12, hoop.y, 24, 3);
+      ctx.fillStyle = ink.grid;
+      for (var n = 0; n < 5; n += 1) ctx.fillRect(hoop.x - 10 + n * 5, hoop.y + 3, 2, 7);
+
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(28, H - 34, 12, 14);
+      if (ball) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(ball.x) - 3, Math.round(ball.y) - 3, 7, 7);
+      }
+      bits.draw(ctx, ink);
+
+      drawBar(ctx, ink, 8, H - 14, W - 16, 8, power, power > 0.75 ? "danger" : "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = clock < 8 ? ink.danger : ink.dim;
+      ctx.fillText("CLOCK " + Math.ceil(clock), 4, 12);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("MADE " + made + "/" + attempts, W - 88, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "MADE " + made + " · STREAK " + streak; };
+    return game;
+  }
+
+  /* ---- 44. SIEGE BUDGET --------------------------------------------------
+
+     Lob a payload at a stack of legacy. Angle, power, one shot at a time, and
+     a budget that only refills when something falls over — the physics-siege
+     genre, and an honest picture of a migration. */
+  function cabinetSiegeBudget(random) {
+    var game = { id: "siege-budget", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(70);
+    var angle, power, charging, shot, blocks, shots, wave, held;
+
+    function build() {
+      blocks = [];
+      var cols = 2 + Math.min(3, Math.floor(wave / 2));
+      for (var c = 0; c < cols; c += 1) {
+        var height = 2 + Math.floor(random() * 3);
+        for (var r = 0; r < height; r += 1) {
+          blocks.push({
+            x: 200 + c * 26,
+            y: H - 30 - r * 16,
+            vy: 0,
+            hp: 1 + Math.floor(wave / 3),
+            fallen: false
+          });
+        }
+      }
+      shots = 3 + Math.floor(wave / 2);
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      angle = 0.7;
+      power = 0.5;
+      charging = false;
+      shot = null;
+      wave = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (!shot) {
+        if (input.up) angle = Math.min(1.35, angle + dt);
+        if (input.down) angle = Math.max(0.12, angle - dt);
+        if (input.fire) {
+          charging = true;
+          power = Math.min(1, power + dt * 0.8);
+        } else if (charging) {
+          charging = false;
+          shots -= 1;
+          shot = {
+            x: 22, y: H - 34,
+            vx: Math.cos(angle) * (90 + power * 160),
+            vy: -Math.sin(angle) * (90 + power * 160)
+          };
+          power = 0.2;
+        }
+      }
+
+      if (shot) {
+        shot.vy += 260 * dt;
+        shot.x += shot.vx * dt;
+        shot.y += shot.vy * dt;
+        for (var i = blocks.length - 1; i >= 0; i -= 1) {
+          var b = blocks[i];
+          if (b.fallen) continue;
+          if (Math.abs(b.x - shot.x) > 12 || Math.abs(b.y - shot.y) > 10) continue;
+          b.hp -= 1;
+          shot.vx *= 0.45;
+          shot.vy = -Math.abs(shot.vy) * 0.4;
+          fx.shake(6);
+          bits.burst(b.x, b.y, 8, { colour: "brass", speed: 60, life: 0.5, gravity: 200 });
+          if (b.hp <= 0) {
+            b.fallen = true;
+            game.score += 30;
+            shots += 1;
+          }
+          break;
+        }
+        if (shot.y > H || shot.x > W + 20) shot = null;
+      }
+
+      // Unsupported blocks drop, which is what makes a good hit worth more
+      // than a lucky one.
+      blocks.forEach(function (b) {
+        if (b.fallen) return;
+        var supported = b.y > H - 40 || blocks.some(function (o) {
+          return !o.fallen && o !== b && Math.abs(o.x - b.x) < 8 && o.y - b.y > 8 && o.y - b.y < 24;
+        });
+        if (!supported) {
+          b.vy += 300 * dt;
+          b.y += b.vy * dt;
+          if (b.y > H - 30) { b.y = H - 30; b.vy = 0; }
+        }
+      });
+
+      var standing = blocks.filter(function (b) { return !b.fallen; }).length;
+      if (!standing) {
+        wave += 1;
+        game.score += 150;
+        fx.flash("verify", 1);
+        build();
+      } else if (shots <= 0 && !shot) {
+        game.lives -= 1;
+        fx.shake(8);
+        if (game.lives <= 0) { game.over = true; return; }
+        build();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, 0, H * 0.6);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 22, W, 22);
+
+      blocks.forEach(function (b) {
+        if (b.fallen) return;
+        ctx.fillStyle = b.hp > 1 ? ink.wall[1] : ink.brass;
+        ctx.fillRect(b.x - 11, b.y - 7, 22, 15);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(b.x - 8, b.y - 4, 16, 9);
+      });
+
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(14, H - 40, 16, 18);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(
+        Math.round(22 + Math.cos(angle) * 18) - 2,
+        Math.round(H - 34 - Math.sin(angle) * 18) - 2, 5, 5
+      );
+      if (shot) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(shot.x) - 3, Math.round(shot.y) - 3, 6, 6);
+      }
+      bits.draw(ctx, ink);
+
+      drawBar(ctx, ink, 8, 8, 70, 5, power, "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("SHOTS " + shots, 8, 24);
+      ctx.fillText("WAVE " + wave, W - 60, 14);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · SHOTS " + shots; };
+    return game;
+  }
+
+  /* ---- 45. TILT ----------------------------------------------------------
+
+     A pinball table with two flippers and one ball. Bumpers are services that
+     pay out; the drain is what happens to a request nobody catches. */
+  function cabinetTilt(random) {
+    var game = { id: "tilt", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var ball, flipL, flipR, bumpers, multiplier, combo;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      ball = { x: W / 2, y: 40, vx: 26, vy: 60 };
+      flipL = 0;
+      flipR = 0;
+      multiplier = 1;
+      combo = 0;
+      bumpers = [
+        { x: 80, y: 70, r: 12, hit: 0 },
+        { x: 160, y: 50, r: 14, hit: 0 },
+        { x: 240, y: 70, r: 12, hit: 0 },
+        { x: 120, y: 120, r: 10, hit: 0 },
+        { x: 200, y: 120, r: 10, hit: 0 }
+      ];
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      flipL = input.left || input.fire ? Math.min(1, flipL + dt * 9) : Math.max(0, flipL - dt * 7);
+      flipR = input.right || input.fire ? Math.min(1, flipR + dt * 9) : Math.max(0, flipR - dt * 7);
+
+      ball.vy += 190 * dt;
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+
+      if (ball.x < 8) { ball.x = 8; ball.vx = Math.abs(ball.vx) * 0.9; }
+      if (ball.x > W - 8) { ball.x = W - 8; ball.vx = -Math.abs(ball.vx) * 0.9; }
+      if (ball.y < 8) { ball.y = 8; ball.vy = Math.abs(ball.vy) * 0.9; }
+
+      bumpers.forEach(function (b) {
+        b.hit = Math.max(0, b.hit - dt * 4);
+        var dx = ball.x - b.x, dy = ball.y - b.y;
+        var d = Math.hypot(dx, dy);
+        if (d > b.r + 4) return;
+        var nx = dx / (d || 1), ny = dy / (d || 1);
+        ball.x = b.x + nx * (b.r + 5);
+        ball.y = b.y + ny * (b.r + 5);
+        var speed = Math.max(110, Math.hypot(ball.vx, ball.vy) * 1.05);
+        ball.vx = nx * speed;
+        ball.vy = ny * speed;
+        b.hit = 1;
+        combo += 1;
+        multiplier = 1 + Math.floor(combo / 5);
+        game.score += 10 * multiplier;
+        fx.shake(3);
+        bits.burst(b.x, b.y, 5, { colour: "brass", speed: 60, life: 0.35 });
+      });
+
+      // Flippers: two slabs at the bottom corners that kick the ball back up
+      // when raised. Not a rigid-body sim — a kick impulse in the right
+      // direction is indistinguishable at this resolution and cannot wedge.
+      var flipY = H - 24;
+      if (ball.y > flipY - 6 && ball.y < flipY + 10) {
+        if (ball.x < W / 2 && flipL > 0.35) {
+          ball.vy = -Math.abs(ball.vy) - 60;
+          ball.vx = Math.abs(ball.vx) + 30;
+          fx.shake(2);
+          combo = 0;
+        } else if (ball.x >= W / 2 && flipR > 0.35) {
+          ball.vy = -Math.abs(ball.vy) - 60;
+          ball.vx = -Math.abs(ball.vx) - 30;
+          fx.shake(2);
+          combo = 0;
+        }
+      }
+
+      if (ball.y > H + 6) {
+        game.lives -= 1;
+        combo = 0;
+        multiplier = 1;
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        ball = { x: W / 2, y: 40, vx: (random() - 0.5) * 60, vy: 60 };
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 0, 6, H);
+      ctx.fillRect(W - 6, 0, 6, H);
+
+      bumpers.forEach(function (b) {
+        ctx.fillStyle = b.hit > 0 ? ink.bright : ink.wall[1];
+        ctx.fillRect(b.x - b.r, b.y - b.r, b.r * 2, b.r * 2);
+        ctx.fillStyle = b.hit > 0 ? ink.bg : ink.brass;
+        ctx.fillRect(b.x - b.r + 4, b.y - b.r + 4, b.r * 2 - 8, b.r * 2 - 8);
+      });
+
+      var fy = H - 24;
+      ctx.fillStyle = flipL > 0.35 ? ink.verify : ink.wall[2];
+      ctx.fillRect(24, fy - Math.round(flipL * 6), 54, 6);
+      ctx.fillStyle = flipR > 0.35 ? ink.verify : ink.wall[2];
+      ctx.fillRect(W - 78, fy - Math.round(flipR * 6), 54, 6);
+
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(ball.x) - 4, Math.round(ball.y) - 4, 8, 8);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("×" + multiplier, 10, 14);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "MULT ×" + multiplier + " · COMBO " + combo; };
+    return game;
+  }
+
+  /* ---- 46. SOFT LANDING --------------------------------------------------
+
+     Set an agent down on the pad with the fuel you were given. Thrust, drift,
+     and a descent rate that has to be under the limit at the moment of
+     contact — the oldest simulation there is, and still the best argument for
+     reading the gauge instead of the ground. */
+  function cabinetSoftLanding(random) {
+    var game = { id: "soft-landing", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var pod, pad, fuel, level, terrain, message, messageAge;
+
+    function build() {
+      terrain = [];
+      var y = H - 30;
+      for (var x = 0; x <= W; x += 8) {
+        y = clamp(y + (random() - 0.5) * 18, H - 70, H - 14);
+        terrain.push(y);
+      }
+      var padIndex = 3 + Math.floor(random() * (terrain.length - 8));
+      var padY = terrain[padIndex];
+      for (var i = padIndex; i < padIndex + 4; i += 1) terrain[i] = padY;
+      pad = { x: padIndex * 8, w: 32, y: padY };
+      pod = { x: 30 + random() * (W - 60), y: 20, vx: (random() - 0.5) * 20, vy: 6 };
+      fuel = 100;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (fuel > 0) {
+        if (input.up || input.fire) { pod.vy -= 52 * dt; fuel -= 22 * dt; bits.burst(pod.x, pod.y + 7, 2, { colour: "brass", speed: 40, angle: Math.PI / 2, spread: 0.7, life: 0.3 }); }
+        if (input.left) { pod.vx -= 24 * dt; fuel -= 8 * dt; }
+        if (input.right) { pod.vx += 24 * dt; fuel -= 8 * dt; }
+      }
+      pod.vy += 22 * dt;
+      pod.x += pod.vx * dt;
+      pod.y += pod.vy * dt;
+      pod.x = clamp(pod.x, 4, W - 4);
+
+      var groundY = terrain[Math.min(terrain.length - 1, Math.max(0, Math.floor(pod.x / 8)))];
+      if (pod.y >= groundY - 6) {
+        var onPad = pod.x > pad.x && pod.x < pad.x + pad.w;
+        var gentle = pod.vy < 26 && Math.abs(pod.vx) < 14;
+        if (onPad && gentle) {
+          level += 1;
+          game.score += 150 + Math.floor(fuel);
+          message = "TOUCHDOWN — " + Math.floor(fuel) + " FUEL LEFT";
+          messageAge = 0;
+          fx.flash("verify", 1);
+          build();
+        } else {
+          game.lives -= 1;
+          message = onPad ? "TOO FAST" : "MISSED THE PAD";
+          messageAge = 0;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          bits.burst(pod.x, pod.y, 20, { colour: "danger", speed: 90, life: 0.7, gravity: 60 });
+          if (game.lives <= 0) { game.over = true; return; }
+          build();
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 34);
+      fx.begin(ctx);
+
+      ctx.fillStyle = ink.wall[2];
+      terrain.forEach(function (y, i) { ctx.fillRect(i * 8, y, 8, H - y); });
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(pad.x, pad.y - 2, pad.w, 3);
+
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(pod.x) - 5, Math.round(pod.y) - 6, 10, 10);
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(Math.round(pod.x) - 6, Math.round(pod.y) + 4, 3, 4);
+      ctx.fillRect(Math.round(pod.x) + 3, Math.round(pod.y) + 4, 3, 4);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      var safe = pod.vy < 26 && Math.abs(pod.vx) < 14;
+      ctx.fillStyle = safe ? ink.verify : ink.danger;
+      ctx.fillText("VSPD " + pod.vy.toFixed(0), 4, 12);
+      ctx.fillText("HSPD " + Math.abs(pod.vx).toFixed(0), 4, 22);
+      drawBar(ctx, ink, W - 74, 6, 70, 5, fuel / 100, fuel > 25 ? "brass" : "danger");
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "PAD " + level + " · FUEL " + Math.max(0, Math.round(fuel)); };
+    return game;
+  }
+
+  /* ---- 47. TICKET QUEUE --------------------------------------------------
+
+     Service management. Tickets arrive at the counter with a patience bar;
+     you walk to one, pick it up, walk to the matching desk, and drop it. The
+     genre is about routing under load, which is the same problem the product
+     solves with less running. */
+  function cabinetTicketQueue(random) {
+    var DESKS = [
+      { x: 30, label: "AUTH", colour: "verify" },
+      { x: 120, label: "METER", colour: "brass" },
+      { x: 210, label: "AUDIT", colour: "danger" },
+      { x: 285, label: "SIGN", colour: "bright" }
+    ];
+
+    var game = { id: "ticket-queue", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var clerk, tickets, carrying, spawnTimer, shift, served, dropped, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      clerk = { x: W / 2 };
+      tickets = [];
+      carrying = null;
+      spawnTimer = 1;
+      shift = 1;
+      served = 0;
+      dropped = 0;
+      held = false;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+
+      var speed = 96 * dt;
+      if (input.left) clerk.x -= speed;
+      if (input.right) clerk.x += speed;
+      clerk.x = clamp(clerk.x, 8, W - 8);
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0 && tickets.length < 6) {
+        spawnTimer = Math.max(0.7, 2.4 - shift * 0.16);
+        tickets.push({
+          x: 20 + random() * (W - 40),
+          desk: Math.floor(random() * DESKS.length),
+          patience: 1,
+          rate: 0.05 + shift * 0.008
+        });
+      }
+
+      for (var i = tickets.length - 1; i >= 0; i -= 1) {
+        var t = tickets[i];
+        if (t === carrying) continue;
+        t.patience -= t.rate * dt;
+        if (t.patience <= 0) {
+          tickets.splice(i, 1);
+          dropped += 1;
+          game.lives -= 1;
+          fx.shake(8);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      }
+
+      if (input.fire && !held) {
+        held = true;
+        if (carrying) {
+          var desk = DESKS[carrying.desk];
+          if (Math.abs(clerk.x - desk.x) < 20) {
+            tickets.splice(tickets.indexOf(carrying), 1);
+            served += 1;
+            game.score += 25 + Math.round(carrying.patience * 30);
+            fx.pop(desk.x, H - 60, "+" + (25 + Math.round(carrying.patience * 30)), "verify");
+            fx.flash("verify", 0.6);
+            carrying = null;
+            if (served % 8 === 0) shift += 1;
+          } else {
+            carrying.x = clerk.x;
+            carrying = null;
+          }
+        } else {
+          for (var k = 0; k < tickets.length; k += 1) {
+            if (Math.abs(tickets[k].x - clerk.x) > 14) continue;
+            carrying = tickets[k];
+            break;
+          }
+        }
+      } else if (!input.fire) held = false;
+
+      if (carrying) carrying.x = clerk.x;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 40, W, 40);
+
+      DESKS.forEach(function (d) {
+        ctx.fillStyle = ink[d.colour];
+        ctx.fillRect(d.x - 18, H - 56, 36, 16);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.bg;
+        ctx.fillText(d.label, d.x, H - 47);
+        ctx.textAlign = "left";
+      });
+
+      tickets.forEach(function (t) {
+        var y = t === carrying ? H - 78 : 60;
+        ctx.fillStyle = ink[DESKS[t.desk].colour];
+        ctx.fillRect(Math.round(t.x) - 7, y, 14, 16);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(t.x) - 4, y + 3, 8, 2);
+        drawBar(ctx, ink, Math.round(t.x) - 8, y - 5, 16, 3, t.patience, t.patience > 0.35 ? "verify" : "danger");
+      });
+
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(clerk.x) - 5, H - 76, 10, 20);
+
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("SHIFT " + shift, 4, 12);
+      ctx.fillText("SERVED " + served, 4, 22);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("ABANDONED " + dropped, W - 106, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "SHIFT " + shift + " · SERVED " + served; };
+    return game;
+  }
+
+  /* ---- 48. ROUTE TABLE ---------------------------------------------------
+
+     Traffic control as a routing problem. Requests enter from the edges and
+     you flip junction switches to keep two of them off the same square. Every
+     collision is two calls that met where the table said they would not. */
+  function cabinetRouteTable(random) {
+    var CELL = 24;
+    var COLS = 13;
+    var ROWS = 8;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 36;
+
+    var game = { id: "route-table", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var junctions, cars, cursor, spawnTimer, level, delivered, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      junctions = [];
+      for (var y = 1; y < ROWS - 1; y += 2) {
+        for (var x = 2; x < COLS - 2; x += 3) junctions.push({ x: x, y: y, open: random() < 0.5 });
+      }
+      cars = [];
+      cursor = 0;
+      spawnTimer = 0.8;
+      level = 1;
+      delivered = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.fire) {
+          junctions[cursor].open = !junctions[cursor].open;
+          fx.shake(2);
+        } else if (input.left) cursor = (cursor + junctions.length - 1) % junctions.length;
+        else if (input.right) cursor = (cursor + 1) % junctions.length;
+        else if (input.up || input.down) cursor = (cursor + 3) % junctions.length;
+      }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.5, 1.8 - level * 0.09);
+        var lane = 1 + Math.floor(random() * (ROWS - 2));
+        cars.push({ x: -1, y: lane, speed: 1.4 + level * 0.1, dy: 0 });
+      }
+
+      for (var i = cars.length - 1; i >= 0; i -= 1) {
+        var c = cars[i];
+        c.x += c.speed * dt;
+        // A junction diverts a request one row down when open, which is the
+        // whole control surface: you are choosing which lane a call lands in.
+        junctions.forEach(function (j) {
+          if (!j.open) return;
+          if (Math.abs(c.x - j.x) < 0.08 && c.y === j.y) c.y = Math.min(ROWS - 1, c.y + 1);
+        });
+        if (c.x > COLS) {
+          cars.splice(i, 1);
+          delivered += 1;
+          game.score += 12;
+          if (delivered % 10 === 0) level += 1;
+        }
+      }
+
+      for (var a = 0; a < cars.length; a += 1) {
+        for (var b = a + 1; b < cars.length; b += 1) {
+          if (cars[a].y !== cars[b].y) continue;
+          if (Math.abs(cars[a].x - cars[b].x) > 0.7) continue;
+          bits.burst(OX + cars[a].x * CELL, OY + cars[a].y * CELL, 12, { colour: "danger", speed: 70, life: 0.5 });
+          cars.splice(b, 1);
+          cars.splice(a, 1);
+          game.lives -= 1;
+          fx.shake(10);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          return;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var y = 0; y < ROWS; y += 1) {
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(OX, OY + y * CELL - 3, COLS * CELL, 6);
+      }
+      junctions.forEach(function (j, i) {
+        ctx.fillStyle = j.open ? ink.verify : ink.wall[1];
+        ctx.fillRect(OX + j.x * CELL - 5, OY + j.y * CELL - 8, 10, 16);
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(OX + j.x * CELL - 8, OY + j.y * CELL - 12, 16, 2);
+          ctx.fillRect(OX + j.x * CELL - 8, OY + j.y * CELL + 10, 16, 2);
+        }
+      });
+      cars.forEach(function (c) {
+        ctx.fillStyle = ink.brass;
+        ctx.fillRect(Math.round(OX + c.x * CELL) - 6, OY + c.y * CELL - 4, 12, 8);
+      });
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("DELIVERED " + delivered, 4, 14);
+      ctx.fillText("LEVEL " + level, W - 66, 14);
+      centreText(ctx, ink, "← → pick a junction · SPACE divert", H - 8, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + delivered + " ROUTED"; };
+    return game;
+  }
+
+  /* ---- 49. LIFT SLA ------------------------------------------------------
+
+     An elevator with a service level to meet. Callers appear on floors with a
+     clock; you carry them to the floor they asked for. Everything about this
+     is queueing theory wearing a friendlier hat. */
+  function cabinetLiftSla(random) {
+    var FLOORS = 6;
+    var FLOOR_H = 30;
+    var OY = 26;
+
+    var game = { id: "lift-sla", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var car, riders, waiting, spawnTimer, delivered, breach, held, level;
+
+    function floorY(f) { return OY + (FLOORS - 1 - f) * FLOOR_H; }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      car = { floor: 0, y: floorY(0), target: 0 };
+      riders = [];
+      waiting = [];
+      spawnTimer = 1;
+      delivered = 0;
+      breach = 0;
+      level = 1;
+      held = false;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+
+      var pressed = input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.up) car.target = Math.min(FLOORS - 1, car.target + 1);
+        else if (input.down) car.target = Math.max(0, car.target - 1);
+      }
+
+      var want = floorY(car.target);
+      var diff = want - car.y;
+      car.y += clamp(diff, -70 * dt, 70 * dt);
+      var atFloor = Math.abs(diff) < 1.5;
+      if (atFloor) car.floor = car.target;
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0 && waiting.length < 6) {
+        spawnTimer = Math.max(0.9, 2.6 - level * 0.15);
+        var from = Math.floor(random() * FLOORS);
+        var to = Math.floor(random() * FLOORS);
+        if (to === from) to = (to + 1) % FLOORS;
+        waiting.push({ from: from, to: to, wait: 1 });
+      }
+
+      for (var i = waiting.length - 1; i >= 0; i -= 1) {
+        var w = waiting[i];
+        w.wait -= (0.045 + level * 0.004) * dt * 10 * 0.1;
+        if (w.wait <= 0) {
+          waiting.splice(i, 1);
+          breach += 1;
+          game.lives -= 1;
+          fx.shake(9);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          continue;
+        }
+        if (atFloor && w.from === car.floor && riders.length < 3) {
+          waiting.splice(i, 1);
+          riders.push(w);
+          fx.flash("brass", 0.4);
+        }
+      }
+
+      if (atFloor) {
+        for (var r = riders.length - 1; r >= 0; r -= 1) {
+          if (riders[r].to !== car.floor) continue;
+          var rider = riders.splice(r, 1)[0];
+          delivered += 1;
+          game.score += 20 + Math.round(rider.wait * 25);
+          fx.pop(W / 2, car.y - 12, "+" + (20 + Math.round(rider.wait * 25)), "verify");
+          if (delivered % 8 === 0) level += 1;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      for (var f = 0; f < FLOORS; f += 1) {
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(20, floorY(f) + 20, W - 40, 3);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.fillStyle = ink.dim;
+        ctx.fillText("F" + f, 6, floorY(f) + 12);
+      }
+      waiting.forEach(function (w, i) {
+        var y = floorY(w.from);
+        var x = 120 + (i % 4) * 22;
+        ctx.fillStyle = w.wait > 0.35 ? ink.brass : ink.danger;
+        ctx.fillRect(x, y + 6, 8, 14);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.fillStyle = ink.dim;
+        ctx.fillText("→" + w.to, x + 9, y + 14);
+      });
+      ctx.fillStyle = ink.wall[1];
+      ctx.fillRect(60, Math.round(car.y), 46, 24);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(62, Math.round(car.y) + 2, 42, 20);
+      riders.forEach(function (r, i) {
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(66 + i * 13, Math.round(car.y) + 6, 8, 14);
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("DELIVERED " + delivered, W - 116, 12);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("BREACHED " + breach, W - 116, 22);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "F" + car.floor + " · " + riders.length + " ABOARD"; };
+    return game;
+  }
+
+  /* ---- 50. ON CALL -------------------------------------------------------
+
+     Incident response. Alerts light up across a board of services; you walk to
+     one and hold to work it. Two alerts on the same service escalate, and an
+     escalation is the one thing you cannot fix by being fast. */
+  function cabinetOnCall(random) {
+    var COLS = 5;
+    var ROWS = 3;
+    var CELL = 56;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 50;
+
+    var game = { id: "on-call", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var services, cursor, spawnTimer, night, resolved, held, working;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      services = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) services.push({ alert: 0, timer: 0 });
+      cursor = 7;
+      spawnTimer = 1.2;
+      night = 1;
+      resolved = 0;
+      working = 0;
+      held = false;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+
+      var pressed = input.left || input.right || input.up || input.down;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.left) cursor = (cursor + services.length - 1) % services.length;
+        else if (input.right) cursor = (cursor + 1) % services.length;
+        else if (input.up) cursor = (cursor + services.length - COLS) % services.length;
+        else if (input.down) cursor = (cursor + COLS) % services.length;
+        working = 0;
+      }
+
+      // Holding is the verb: an incident takes time, and the time is the
+      // resource the genre is actually about.
+      if (input.fire && services[cursor].alert) {
+        working += dt;
+        if (working >= 1.1) {
+          working = 0;
+          services[cursor].alert = 0;
+          services[cursor].timer = 0;
+          resolved += 1;
+          game.score += 40;
+          fx.flash("verify", 0.7);
+          fx.pop(OX + (cursor % COLS) * CELL + CELL / 2, OY + Math.floor(cursor / COLS) * CELL, "RESOLVED", "verify");
+          if (resolved % 6 === 0) night += 1;
+        }
+      } else {
+        working = Math.max(0, working - dt * 2);
+      }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnTimer = Math.max(0.8, 3.2 - night * 0.22);
+        var free = [];
+        services.forEach(function (s, i) { if (!s.alert) free.push(i); });
+        if (free.length) services[free[Math.floor(random() * free.length)]].alert = 1;
+      }
+
+      for (var i = 0; i < services.length; i += 1) {
+        var s = services[i];
+        if (!s.alert) continue;
+        s.timer += dt;
+        if (s.timer > 9 - Math.min(5, night * 0.4)) {
+          s.timer = 0;
+          s.alert += 1;
+          if (s.alert > 2) {
+            s.alert = 0;
+            game.lives -= 1;
+            fx.shake(11);
+            fx.flash("danger", 1);
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "NIGHT " + night + " — HOLD TO WORK AN ALERT", 24, "dim");
+      services.forEach(function (s, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        ctx.fillStyle = s.alert > 1 ? ink.danger : s.alert ? ink.brass : ink.wall[3];
+        ctx.fillRect(x + 3, y + 3, CELL - 8, CELL - 8);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 10, y + 10, CELL - 22, CELL - 22);
+        if (s.alert) {
+          ctx.fillStyle = s.alert > 1 ? ink.bright : ink.brass;
+          ctx.fillRect(x + 18, y + 18, CELL - 38, CELL - 38);
+        }
+        if (i === cursor) {
+          ctx.fillStyle = ink.ink;
+          ctx.fillRect(x, y, CELL - 2, 2);
+          ctx.fillRect(x, y + CELL - 4, CELL - 2, 2);
+          ctx.fillRect(x, y, 2, CELL - 2);
+          ctx.fillRect(x + CELL - 4, y, 2, CELL - 2);
+        }
+      });
+      if (working > 0) drawBar(ctx, ink, W / 2 - 40, H - 26, 80, 6, working / 1.1, "verify");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("RESOLVED " + resolved, 4, 14);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "NIGHT " + night + " · RESOLVED " + resolved; };
+    return game;
+  }
+
+  /* ---- 51. HARVEST WINDOW ------------------------------------------------
+
+     Plant, wait, collect — and the window in which a crop is worth anything
+     is short. A farming loop is a retention loop with soil on it, and the
+     product-shaped version is batch scheduling. */
+  function cabinetHarvestWindow(random) {
+    var COLS = 6;
+    var ROWS = 4;
+    var CELL = 40;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 48;
+
+    var game = { id: "harvest-window", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var plots, cursor, season, quota, banked, clock, held;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      plots = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) plots.push({ age: -1 });
+      cursor = 0;
+      season = 1;
+      quota = 6;
+      banked = 0;
+      clock = 40;
+      held = false;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      clock -= dt;
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        if (input.fire) {
+          var plot = plots[cursor];
+          if (plot.age < 0) {
+            plot.age = 0;
+          } else if (plot.age > 3.2 && plot.age < 6.4) {
+            // The window: too early is a waste, too late is spoiled.
+            plot.age = -1;
+            banked += 1;
+            game.score += 30;
+            fx.pop(OX + (cursor % COLS) * CELL + CELL / 2, OY + Math.floor(cursor / COLS) * CELL, "+30", "verify");
+          } else if (plot.age >= 6.4) {
+            plot.age = -1;
+            game.score += 2;
+            fx.shake(3);
+          }
+        } else if (input.left) cursor = (cursor + plots.length - 1) % plots.length;
+        else if (input.right) cursor = (cursor + 1) % plots.length;
+        else if (input.up) cursor = (cursor + plots.length - COLS) % plots.length;
+        else if (input.down) cursor = (cursor + COLS) % plots.length;
+      }
+
+      plots.forEach(function (p) { if (p.age >= 0) p.age += dt; });
+
+      if (clock <= 0) {
+        if (banked >= quota) {
+          season += 1;
+          quota = Math.floor(quota * 1.6);
+          banked = 0;
+          clock = 40;
+          fx.flash("verify", 1);
+        } else {
+          game.lives -= 1;
+          banked = 0;
+          clock = 40;
+          fx.shake(10);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) game.over = true;
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "SEASON " + season + " — BANK " + quota + " IN THE WINDOW", 22, "dim");
+      plots.forEach(function (p, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(x + 2, y + 2, CELL - 5, CELL - 5);
+        if (p.age >= 0) {
+          var ripe = p.age > 3.2 && p.age < 6.4;
+          var spoiled = p.age >= 6.4;
+          var size = Math.min(CELL - 14, 6 + p.age * 4);
+          ctx.fillStyle = spoiled ? ink.danger : ripe ? ink.verify : ink.brass;
+          ctx.fillRect(x + CELL / 2 - size / 2, y + CELL / 2 - size / 2, size, size);
+        }
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x, y, CELL - 1, 2);
+          ctx.fillRect(x, y + CELL - 3, CELL - 1, 2);
+        }
+      });
+      drawBar(ctx, ink, 8, H - 22, W - 16, 6, clock / 40, clock < 10 ? "danger" : "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("BANKED " + banked + "/" + quota, 8, H - 28);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "SEASON " + season + " · " + banked + "/" + quota; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -8783,6 +10064,96 @@
       controls: "arrows move · SPACE swap",
       pad: "dpad+fire",
       make: cabinetMatchPolicy
+    },
+    {
+      id: "cold-start",
+      name: "COLD START",
+      genre: "CLIMB",
+      tagline: "Throttle, brake, and land the flips you started.",
+      controls: "↑ → throttle · ↓ ← brake",
+      pad: "dpad",
+      make: cabinetColdStart
+    },
+    {
+      id: "swish-rate",
+      name: "SWISH RATE",
+      genre: "HOOPS",
+      tagline: "A power meter, a moving hoop, a shot clock.",
+      controls: "SPACE shoot on the meter",
+      pad: "tap",
+      make: cabinetSwishRate
+    },
+    {
+      id: "siege-budget",
+      name: "SIEGE BUDGET",
+      genre: "SIEGE",
+      tagline: "Lob a payload at the legacy stack. Topple it.",
+      controls: "↑ ↓ angle · SPACE hold to charge",
+      pad: "ud+fire",
+      make: cabinetSiegeBudget
+    },
+    {
+      id: "tilt",
+      name: "TILT",
+      genre: "PINBALL",
+      tagline: "Bumpers pay. The drain does not.",
+      controls: "← → flippers · SPACE both",
+      pad: "lr+fire",
+      make: cabinetTilt
+    },
+    {
+      id: "soft-landing",
+      name: "SOFT LANDING",
+      genre: "LANDER",
+      tagline: "Read the gauge, not the ground.",
+      controls: "↑ thrust · ← → drift",
+      pad: "dpad",
+      make: cabinetSoftLanding
+    },
+    {
+      id: "ticket-queue",
+      name: "TICKET QUEUE",
+      genre: "SERVICE",
+      tagline: "Routing under load, with a patience bar on every caller.",
+      controls: "← → walk · SPACE pick up or drop",
+      pad: "lr+fire",
+      make: cabinetTicketQueue
+    },
+    {
+      id: "route-table",
+      name: "ROUTE TABLE",
+      genre: "TRAFFIC",
+      tagline: "Two calls met where the table said they would not.",
+      controls: "← → pick a junction · SPACE divert",
+      pad: "lr+fire",
+      make: cabinetRouteTable
+    },
+    {
+      id: "lift-sla",
+      name: "LIFT SLA",
+      genre: "ELEVATOR",
+      tagline: "Queueing theory in a friendlier hat.",
+      controls: "↑ ↓ call the car",
+      pad: "ud",
+      make: cabinetLiftSla
+    },
+    {
+      id: "on-call",
+      name: "ON CALL",
+      genre: "INCIDENT",
+      tagline: "Hold to work it. Escalation is the one thing speed cannot fix.",
+      controls: "arrows move · SPACE hold to work",
+      pad: "dpad+fire",
+      make: cabinetOnCall
+    },
+    {
+      id: "harvest-window",
+      name: "HARVEST WINDOW",
+      genre: "FARM",
+      tagline: "Too early is waste. Too late is spoiled.",
+      controls: "arrows move · SPACE plant or reap",
+      pad: "dpad+fire",
+      make: cabinetHarvestWindow
     }
   ];
 
