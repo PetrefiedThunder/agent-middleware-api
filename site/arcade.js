@@ -112,6 +112,20 @@
     return value < low ? low : value > high ? high : value;
   }
 
+  /* Signed shortest angle from `b` to `a`, in (-pi, pi].
+
+     JavaScript's `%` keeps the sign of its left operand, so the usual
+     "+ 3*PI then % 2*PI" trick silently breaks once the left side goes
+     negative — which it does as soon as a heading is left to accumulate past
+     3*PI. Written out rather than golfed, because the golfed version reads as
+     correct right up until the frame it stops being. */
+  function angleDelta(a, b) {
+    var d = (a - b) % (Math.PI * 2);
+    if (d <= -Math.PI) d += Math.PI * 2;
+    else if (d > Math.PI) d -= Math.PI * 2;
+    return d;
+  }
+
   /* Seeded generator: a deterministic arcade is a testable arcade. Every run
      starts from a fixed seed unless a caller reseeds it. */
   function makeRandom(seed) {
@@ -3159,15 +3173,29 @@
           rooms.push({
             tiles: tiles,
             daemons: daemons,
-            // One key per room that is neither the start nor the vault; the
-            // vault door wants two, so the floor is always crossable and
-            // never trivially so.
+            // A key in most rooms that are neither the start nor the vault.
+            // Which rooms is a roll; *how many* is not — see below.
             key: !isStart && !isVault && random() < 0.6,
             vault: isVault,
             opened: false,
             cleared: false
           });
         }
+      }
+
+      // The vault wants two permits and `keys` resets with the floor, so a
+      // floor that rolled fewer than two is a floor with no way out — about
+      // one in fifty at p=0.6 over seven rooms, which is often enough that a
+      // player would meet it and read it as the game being broken. Top the
+      // supply up rather than raising p: the distribution is the texture, the
+      // floor being finishable is the contract.
+      var carriers = rooms.filter(function (r) { return !r.vault && r !== rooms[0]; });
+      var supply = carriers.filter(function (r) { return r.key; });
+      while (supply.length < 2 && supply.length < carriers.length) {
+        var empty = carriers.filter(function (r) { return !r.key; });
+        var pick = empty[Math.floor(random() * empty.length)];
+        pick.key = true;
+        supply.push(pick);
       }
       here = { x: 0, y: 0 };
       hero = { x: 7, y: 5, face: 0 };
@@ -4198,15 +4226,17 @@
 
       var seen = false;
       watchers.forEach(function (w) {
-        w.angle += w.sweep * dt;
+        // Wrapped, not accumulated: an unbounded heading is what made the
+        // cone test below wrong in the first place, and it is also a float
+        // that grows all run.
+        w.angle = (w.angle + w.sweep * dt) % (Math.PI * 2);
         var dx = you.x - w.x;
         var dy = you.y - w.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var range = crouched ? 26 : 84;
         if (dist > range) return;
         var toward = Math.atan2(dy, dx);
-        var delta = Math.abs(((toward - w.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
-        if (delta > 0.42) return;
+        if (Math.abs(angleDelta(toward, w.angle)) > 0.42) return;
         // Line of sight is sampled along the ray rather than assumed: a rack
         // between you and a watcher is the entire point of the racks.
         for (var t = 6; t < dist; t += 5) {
