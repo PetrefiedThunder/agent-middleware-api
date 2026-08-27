@@ -502,7 +502,30 @@
 }
 
 .arcade-cabinet[data-family="TIMING"] {
-  --genre-hue: var(--text);
+  --genre-hue: var(--brass-bright);
+}
+
+/* An equaliser: bars of alternating height rising from the floor. The first
+   attempt was lanes with a line across them, which is closer to what these
+   cabinets draw — and read as RUN's ground-line marquee from any distance,
+   because both are a horizontal band plus verticals. Two shelves that look
+   alike are worse than one that is slightly off-theme. */
+.arcade-cabinet[data-family="TIMING"] .arcade-cabinet-art {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      var(--genre-hue) 0 6px,
+      transparent 6px 16px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 8px,
+      var(--genre-hue) 8px 14px,
+      transparent 14px 32px
+    );
+  background-size: 100% 40%, 100% 78%;
+  background-position: left bottom, left bottom;
+  background-repeat: repeat-x, repeat-x;
 }
 
 .arcade-cabinet[data-family="PUZZLE"] {
@@ -528,23 +551,11 @@
    Patterns only, in most cases — a fourth of these tiles is decoration and a
    fifth distinct colour would stop reading as one lineup. */
 
-.arcade-cabinet[data-family="RUN"] {
-  --genre-hue: var(--verify);
-}
-
-/* Steps: a stair of blocks climbing to the right. */
-.arcade-cabinet[data-family="RUN"] .arcade-cabinet-art {
-  background-image:
-    linear-gradient(180deg, transparent 0 66%, var(--genre-hue) 66% 78%, transparent 78%),
-    linear-gradient(180deg, transparent 0 44%, var(--genre-hue) 44% 56%, transparent 56%),
-    linear-gradient(180deg, transparent 0 22%, var(--genre-hue) 22% 34%, transparent 34%);
-  background-size: 34% 100%, 34% 100%, 34% 100%;
-  background-position: left, center, right;
-  background-repeat: no-repeat;
-}
-
+/* QUEST shares ACTION's hue: the palette carries eight, the roster needs nine,
+   and this is the pair whose marquees are furthest apart — a doorway against
+   two blocks facing each other across an empty middle. */
 .arcade-cabinet[data-family="QUEST"] {
-  --genre-hue: var(--brass-bright);
+  --genre-hue: var(--arcade-magenta);
 }
 
 /* A doorway: two jambs and a lintel, which is the one shape every room in
@@ -557,7 +568,7 @@
 }
 
 .arcade-cabinet[data-family="DRIVE"] {
-  --genre-hue: var(--brass);
+  --genre-hue: var(--text);
 }
 
 /* A road: two verges and a dashed centre line. */
@@ -572,7 +583,7 @@
 }
 
 .arcade-cabinet[data-family="MANAGE"] {
-  --genre-hue: var(--text);
+  --genre-hue: var(--text-dim);
 }
 
 /* Stacked blocks with mortar lines, offset row to row. */
@@ -583,7 +594,7 @@
 }
 
 .arcade-cabinet[data-family="SPORT"] {
-  --genre-hue: var(--brass);
+  --genre-hue: var(--verify);
 }
 
 /* A register: rows of small filled cells, some of them still empty. */

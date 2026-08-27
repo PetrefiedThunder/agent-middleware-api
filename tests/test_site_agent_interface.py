@@ -2433,11 +2433,42 @@ def test_arcade_families_shelve_every_cabinet() -> None:
         )
 
     used = {cabinet["family"] for cabinet in roster}
-    for family in used:
-        assert f'[data-family="{family}"]' in styles, (
-            f"family {family!r} has no identity in arcade.css; its tiles would "
-            f"render with the default marquee and hue"
+    hues = dict(
+        re.findall(
+            r'\.arcade-cabinet\[data-family="([A-Z]+)"\] \{\s*--genre-hue: ([^;]+);',
+            styles,
         )
+    )
+    marquees = re.findall(r'\[data-family="([A-Z]+)"\] \.arcade-cabinet-art', styles)
+
+    for family in used:
+        assert family in hues, (
+            f"family {family!r} sets no --genre-hue in arcade.css; its tiles "
+            f"render in the house default"
+        )
+        # Exactly one of each. Merely *appearing* is not enough: the
+        # genre-to-family rewrite collapsed PLATFORM and RUNNER onto RUN and
+        # left the file declaring RUN twice, so the later block silently won
+        # the cascade and every RUN tile wore the wrong hue and pattern. A
+        # duplicate is invisible in the rendered page and obvious here.
+        assert marquees.count(family) == 1, (
+            f"family {family!r} has {marquees.count(family)} marquee rules in "
+            f"arcade.css; it needs exactly one, or the cascade picks for you"
+        )
+        assert (
+            styles.count(f'.arcade-cabinet[data-family="{family}"] {{') == 1
+        ), (
+            f"family {family!r} declares its hue more than once in arcade.css; "
+            f"the last one silently wins"
+        )
+
+    # A family may share a hue — the palette carries eight and the roster needs
+    # nine shelves — but never with an identical marquee, or the two shelves are
+    # indistinguishable to everyone.
+    assert len(set(hues.values())) >= len(used) - 1, (
+        f"the families collapse onto {len(set(hues.values()))} hues; at most "
+        f"one pair may share one"
+    )
 
     # And the filter really does read the family attribute, not the genre.
     arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
