@@ -12861,6 +12861,750 @@
     return game;
   }
 
+  /* ---- 77. LONG POLL -----------------------------------------------------
+
+     Fishing, which is the original idle loop: cast, wait, and answer the
+     tug in the window it gives you. Named for the transport that works the
+     same way and is honest about it. */
+  function cabinetLongPoll(random) {
+    var game = { id: "long-poll", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var state, timer, depth, tension, caught, missed, held, best;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      state = "idle";
+      timer = 0;
+      depth = 0;
+      tension = 0;
+      caught = 0;
+      missed = 0;
+      best = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (state === "idle") {
+        if (input.fire && !held) {
+          held = true;
+          state = "waiting";
+          timer = 0.8 + random() * 3.4;
+          depth = 40 + random() * 120;
+        }
+      } else if (state === "waiting") {
+        timer -= dt;
+        if (input.fire && !held) {
+          held = true;
+          missed += 1;
+          fx.shake(5);
+          state = "idle";
+        } else if (timer <= 0) {
+          state = "bite";
+          timer = Math.max(0.28, 0.75 - caught * 0.02);
+          bits.burst(W / 2, 70 + depth, 6, { colour: "verify", speed: 40, life: 0.4 });
+        }
+      } else if (state === "bite") {
+        timer -= dt;
+        if (input.fire && !held) {
+          held = true;
+          state = "reel";
+          tension = 0.5;
+        } else if (timer <= 0) {
+          missed += 1;
+          state = "idle";
+          if (missed % 4 === 0) {
+            game.lives -= 1;
+            fx.flash("danger", 0.9);
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        }
+      } else if (state === "reel") {
+        // Holding reels in and raises tension; letting go drops both. The
+        // window is narrow and moves, which is the whole minigame.
+        tension += (input.fire ? 0.72 : -0.85) * dt;
+        depth -= (input.fire ? 44 : -18) * dt;
+        if (tension > 1) {
+          missed += 1;
+          fx.shake(9);
+          fx.flash("danger", 0.9);
+          state = "idle";
+          game.lives -= 1;
+          if (game.lives <= 0) { game.over = true; return; }
+        } else if (depth <= 0) {
+          caught += 1;
+          var value = 20 + Math.round(depth * -1) + caught * 4;
+          game.score += Math.max(20, value);
+          if (caught > best) best = caught;
+          fx.flash("verify", 1);
+          fx.pop(W / 2, 60, "+" + Math.max(20, value), "verify");
+          state = "idle";
+        }
+        tension = Math.max(0, tension);
+      }
+      if (!input.fire) held = false;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 60, W, H - 60);
+      ctx.fillStyle = ink.grid;
+      for (var y = 70; y < H; y += 18) ctx.fillRect(0, y, W, 1);
+      ctx.fillStyle = ink.wall[1];
+      ctx.fillRect(W / 2 - 30, 40, 60, 20);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(W / 2 - 1, 56, 2, Math.max(4, 14 + depth));
+      var hookY = 70 + depth;
+      ctx.fillStyle = state === "bite" ? ink.bright : ink.verify;
+      ctx.fillRect(W / 2 - 4, hookY - 4, 8, 8);
+      bits.draw(ctx, ink);
+      var label = state === "idle" ? "SPACE TO CAST" :
+                  state === "waiting" ? "WAITING…" :
+                  state === "bite" ? "TUG — NOW" : "REEL: HOLD, BUT NOT TOO HARD";
+      centreText(ctx, ink, label, 22, state === "bite" ? "bright" : "dim");
+      if (state === "reel") drawBar(ctx, ink, 40, 30, W - 80, 6, tension, tension > 0.75 ? "danger" : "verify");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("CAUGHT " + caught, 4, 12);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("LOST " + missed, W - 66, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "CAUGHT " + caught + " · LOST " + missed; };
+    return game;
+  }
+
+  /* ---- 78. PET AGENT -----------------------------------------------------
+
+     Keep one agent alive. It gets hungry, bored and unpatched at different
+     rates, and you can only attend to one need at a time. The virtual-pet
+     genre is a resource-allocation game wearing a face. */
+  function cabinetPetAgent(random) {
+    var NEEDS = [
+      { name: "TOKENS", drain: 0.055, colour: "brass" },
+      { name: "ATTENTION", drain: 0.04, colour: "verify" },
+      { name: "PATCHES", drain: 0.03, colour: "danger" }
+    ];
+
+    var game = { id: "pet-agent", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var levels, pick, age, held, mood, era;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      levels = [0.8, 0.8, 0.8];
+      pick = 0;
+      age = 0;
+      mood = 1;
+      era = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      age += dt;
+      era = 1 + Math.floor(age / 25);
+      game.score = Math.floor(age * 6);
+
+      var pressed = input.left || input.right;
+      if (!pressed) held = false;
+      else if (!held) {
+        held = true;
+        pick = (pick + (input.right ? 1 : NEEDS.length - 1)) % NEEDS.length;
+      }
+
+      NEEDS.forEach(function (need, i) {
+        var drain = need.drain * (1 + era * 0.14);
+        if (i === pick && input.fire) {
+          levels[i] = Math.min(1, levels[i] + 0.5 * dt);
+          if (random() < dt * 8) bits.burst(W / 2, 108, 1, { colour: need.colour, speed: 30, life: 0.4 });
+        } else {
+          levels[i] -= drain * dt;
+        }
+        if (levels[i] <= 0) {
+          levels[i] = 0.5;
+          game.lives -= 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) game.over = true;
+        }
+      });
+      mood = (levels[0] + levels[1] + levels[2]) / 3;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "GENERATION " + era, 20, "dim");
+
+      var bounce = Math.sin(age * 3) * (mood > 0.5 ? 3 : 0);
+      var face = mood > 0.66 ? ink.verify : mood > 0.33 ? ink.brass : ink.danger;
+      ctx.fillStyle = face;
+      ctx.fillRect(W / 2 - 26, 60 + bounce, 52, 46);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(W / 2 - 16, 74 + bounce, 8, 8);
+      ctx.fillRect(W / 2 + 8, 74 + bounce, 8, 8);
+      if (mood > 0.5) ctx.fillRect(W / 2 - 12, 92 + bounce, 24, 4);
+      else ctx.fillRect(W / 2 - 12, 96 + bounce, 24, 3);
+      bits.draw(ctx, ink);
+
+      NEEDS.forEach(function (need, i) {
+        var y = 138 + i * 26;
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.fillStyle = i === pick ? ink.bright : ink.dim;
+        ctx.fillText((i === pick ? "▶ " : "  ") + need.name, 20, y + 4);
+        drawBar(ctx, ink, 120, y - 4, 170, 8, levels[i], levels[i] > 0.35 ? need.colour : "danger");
+      });
+      centreText(ctx, ink, "← → pick a need · SPACE hold to tend", H - 10, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "GEN " + era + " · " + Math.floor(age) + "s ALIVE"; };
+    return game;
+  }
+
+  /* ---- 79. CHECKOUT ------------------------------------------------------
+
+     Darts, reduced to the only interesting part: you have a number to finish
+     on, three throws, and a board that punishes greed. A moving crosshair,
+     one button, and arithmetic. */
+  function cabinetCheckout(random) {
+    var game = { id: "checkout", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var target, remaining, throwsLeft, aim, dir, held, leg, message, messageAge;
+
+    var SEGMENTS = [20, 5, 12, 9, 14, 11, 8, 16, 7, 19, 3, 17, 2, 15, 10, 6, 13, 4, 18, 1];
+
+    function newLeg() {
+      remaining = 41 + Math.floor(random() * 60);
+      throwsLeft = 3;
+      target = remaining;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      leg = 1;
+      aim = 0;
+      dir = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      newLeg();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      aim += dir * dt * (0.9 + leg * 0.06);
+      if (aim > 1) { aim = 1; dir = -1; }
+      if (aim < 0) { aim = 0; dir = 1; }
+
+      if (!input.fire) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      var index = Math.min(SEGMENTS.length - 1, Math.floor(aim * SEGMENTS.length));
+      var value = SEGMENTS[index];
+      // A near-centre release doubles: the greed decision the genre is about.
+      var centred = Math.abs(aim - 0.5) < 0.06;
+      if (centred) value *= 2;
+      throwsLeft -= 1;
+      bits.burst(W / 2 + (aim - 0.5) * 200, 110, 5, { colour: centred ? "bright" : "brass", speed: 40, life: 0.4 });
+
+      if (value === remaining) {
+        game.score += 120 + leg * 20;
+        leg += 1;
+        message = "CHECKOUT ON " + value;
+        messageAge = 0;
+        fx.flash("verify", 1);
+        newLeg();
+        return;
+      }
+      if (value > remaining) {
+        message = "BUST — " + value + " OVER";
+        messageAge = 0;
+        fx.shake(7);
+        throwsLeft = 0;
+      } else {
+        remaining -= value;
+        game.score += value;
+        message = "SCORED " + value;
+        messageAge = 0;
+      }
+
+      if (throwsLeft <= 0) {
+        game.lives -= 1;
+        message = "LEG LOST ON " + remaining;
+        messageAge = 0;
+        if (game.lives <= 0) { game.over = true; return; }
+        newLeg();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "FINISH ON " + remaining, 30, "bright", 16);
+      centreText(ctx, ink, "FROM " + target + " · " + throwsLeft + " DARTS LEFT", 48, "dim");
+
+      for (var i = 0; i < SEGMENTS.length; i += 1) {
+        var x = W / 2 - 100 + i * 10;
+        ctx.fillStyle = i % 2 ? ink.wall[2] : ink.wall[1];
+        ctx.fillRect(x, 80, 9, 40);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.dim;
+        ctx.fillText(String(SEGMENTS[i]), x + 4, 100);
+        ctx.textAlign = "left";
+      }
+      ctx.fillStyle = ink.grid;
+      ctx.fillRect(W / 2 - 8, 76, 16, 48);
+      var ax = W / 2 - 100 + aim * 200;
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(ax) - 1, 70, 3, 58);
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEG " + leg, 6, 14);
+      centreText(ctx, ink, "CENTRE BAND DOUBLES", 140, "verify", 7);
+      if (messageAge < 2) centreText(ctx, ink, message, 170, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEG " + leg + " · NEEDS " + remaining; };
+    return game;
+  }
+
+  /* ---- 80. ONE UNDER -----------------------------------------------------
+
+     Top-down golf. Aim, power, and a ball that runs out of pace on the way;
+     the rough slows it and the water resets the hole. Par is a budget and
+     going over it costs you. */
+  function cabinetOneUnder(random) {
+    var game = { id: "one-under", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var ball, hole, hazards, aim, power, charging, strokes, par, holeNo, message, messageAge;
+
+    function build() {
+      ball = { x: 30, y: H / 2, vx: 0, vy: 0 };
+      hole = { x: W - 40 - random() * 40, y: 30 + random() * (H - 60) };
+      hazards = [];
+      for (var i = 0; i < 2 + Math.min(4, holeNo); i += 1) {
+        hazards.push({
+          x: 80 + random() * (W - 150),
+          y: 20 + random() * (H - 40),
+          r: 12 + random() * 14,
+          water: random() < 0.4
+        });
+      }
+      par = 3;
+      strokes = 0;
+      aim = 0;
+      power = 0.4;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      holeNo = 1;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      var moving = Math.hypot(ball.vx, ball.vy) > 3;
+      if (moving) {
+        var drag = 0.985;
+        hazards.forEach(function (h) {
+          if (h.water) return;
+          if (Math.hypot(h.x - ball.x, h.y - ball.y) < h.r) drag = 0.93;
+        });
+        ball.vx *= drag;
+        ball.vy *= drag;
+        ball.x += ball.vx * dt;
+        ball.y += ball.vy * dt;
+        if (ball.x < 4 || ball.x > W - 4) ball.vx *= -0.6;
+        if (ball.y < 4 || ball.y > H - 4) ball.vy *= -0.6;
+        ball.x = clamp(ball.x, 4, W - 4);
+        ball.y = clamp(ball.y, 4, H - 4);
+
+        var drowned = hazards.some(function (h) {
+          return h.water && Math.hypot(h.x - ball.x, h.y - ball.y) < h.r;
+        });
+        if (drowned) {
+          strokes += 1;
+          ball.x = 30; ball.y = H / 2; ball.vx = ball.vy = 0;
+          message = "IN THE WATER — PENALTY";
+          messageAge = 0;
+          fx.shake(7);
+        }
+        if (Math.hypot(hole.x - ball.x, hole.y - ball.y) < 7) {
+          var delta = strokes - par;
+          game.score += Math.max(20, 140 - delta * 40);
+          message = delta < 0 ? "UNDER PAR" : delta === 0 ? "PAR" : "OVER BY " + delta;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          bits.burst(hole.x, hole.y, 12, { colour: "verify", speed: 60, life: 0.5 });
+          if (delta > 2) {
+            game.lives -= 1;
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+          holeNo += 1;
+          build();
+        }
+        return;
+      }
+      ball.vx = ball.vy = 0;
+
+      if (input.left) aim -= 2.2 * dt;
+      if (input.right) aim += 2.2 * dt;
+      if (input.fire) {
+        charging = true;
+        power = Math.min(1, power + dt * 0.85);
+      } else if (charging) {
+        charging = false;
+        strokes += 1;
+        ball.vx = Math.cos(aim) * (90 + power * 190);
+        ball.vy = Math.sin(aim) * (90 + power * 190);
+        power = 0.2;
+        if (strokes > par + 3) {
+          game.lives -= 1;
+          message = "OFF THE CARD";
+          messageAge = 0;
+          if (game.lives <= 0) { game.over = true; return; }
+          holeNo += 1;
+          build();
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      hazards.forEach(function (h) {
+        ctx.fillStyle = h.water ? ink.grid : ink.wall[2];
+        ctx.fillRect(h.x - h.r, h.y - h.r, h.r * 2, h.r * 2);
+      });
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(hole.x - 5, hole.y - 5, 10, 10);
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(hole.x - 1, hole.y - 16, 2, 12);
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.ink;
+      ctx.fillRect(Math.round(ball.x) - 3, Math.round(ball.y) - 3, 6, 6);
+      if (Math.hypot(ball.vx, ball.vy) < 3) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(ball.x + Math.cos(aim) * 18) - 2, Math.round(ball.y + Math.sin(aim) * 18) - 2, 4, 4);
+        drawBar(ctx, ink, 8, H - 12, 90, 6, power, "brass");
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("HOLE " + holeNo + " · PAR " + par, 6, 14);
+      ctx.fillText("STROKES " + strokes, W - 94, 14);
+      if (messageAge < 2) centreText(ctx, ink, message, 30, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "HOLE " + holeNo + " · " + strokes + "/" + par; };
+    return game;
+  }
+
+  /* ---- 81. STRIKE QUOTA --------------------------------------------------
+
+     Bowling with a moving marker for line and a second for power. Two throws
+     a frame, ten frames a game, and a quota you have to beat. */
+  function cabinetStrikeQuota(random) {
+    var game = { id: "strike-quota", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var pins, ball, marker, dir, phase, line, frame, throwNo, framePins, quota, held, message, messageAge;
+
+    function rack() {
+      pins = [];
+      var rows = 4;
+      var i = 0;
+      for (var r = 0; r < rows; r += 1) {
+        for (var c = 0; c <= r; c += 1) {
+          pins.push({ x: W / 2 + (c - r / 2) * 16, y: 50 + r * 14, down: false, id: i++ });
+        }
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      frame = 1;
+      throwNo = 1;
+      framePins = 0;
+      quota = 4;
+      phase = "line";
+      marker = 0;
+      dir = 1;
+      ball = null;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      rack();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (ball) {
+        ball.y -= ball.speed * dt;
+        ball.x += ball.drift * dt;
+        pins.forEach(function (p) {
+          if (p.down) return;
+          if (Math.abs(p.x - ball.x) > 9 || Math.abs(p.y - ball.y) > 9) return;
+          p.down = true;
+          framePins += 1;
+          game.score += 10;
+          bits.burst(p.x, p.y, 5, { colour: "bright", speed: 60, life: 0.4 });
+          ball.drift += (random() - 0.5) * 30;
+        });
+        if (ball.y < 30) {
+          ball = null;
+          if (throwNo === 1 && framePins < pins.length) {
+            throwNo = 2;
+            phase = "line";
+          } else {
+            if (framePins >= quota) {
+              game.score += 40;
+              message = framePins === pins.length ? "STRIKE" : "QUOTA MET";
+            } else {
+              game.lives -= 1;
+              message = "QUOTA MISSED — " + framePins + "/" + quota;
+              fx.shake(9);
+              if (game.lives <= 0) { game.over = true; return; }
+            }
+            messageAge = 0;
+            frame += 1;
+            quota = Math.min(10, 4 + Math.floor(frame / 2));
+            throwNo = 1;
+            framePins = 0;
+            phase = "line";
+            rack();
+          }
+        }
+        return;
+      }
+
+      marker += dir * dt * 1.3;
+      if (marker > 1) { marker = 1; dir = -1; }
+      if (marker < 0) { marker = 0; dir = 1; }
+
+      if (input.fire && !held) {
+        held = true;
+        if (phase === "line") {
+          line = marker;
+          phase = "power";
+          marker = 0;
+          dir = 1;
+        } else {
+          ball = {
+            x: W / 2 + (line - 0.5) * 120,
+            y: H - 20,
+            speed: 120 + marker * 190,
+            drift: (0.5 - line) * 40
+          };
+          phase = "line";
+        }
+      } else if (!input.fire) held = false;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(W / 2 - 70, 20, 140, H - 20);
+      pins.forEach(function (p) {
+        if (p.down) return;
+        ctx.fillStyle = ink.ink;
+        ctx.fillRect(p.x - 4, p.y - 8, 8, 14);
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(p.x - 4, p.y - 4, 8, 3);
+      });
+      bits.draw(ctx, ink);
+      if (ball) {
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(Math.round(ball.x) - 6, Math.round(ball.y) - 6, 12, 12);
+      } else {
+        var mx = W / 2 - 70 + marker * 140;
+        ctx.fillStyle = phase === "line" ? ink.bright : ink.brass;
+        ctx.fillRect(Math.round(mx) - 2, H - 24, 5, 12);
+        centreText(ctx, ink, phase === "line" ? "SET THE LINE" : "SET THE POWER", H - 32, "dim", 7);
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("FRAME " + frame + " · THROW " + throwNo, 4, 12);
+      ctx.fillStyle = framePins >= quota ? ink.verify : ink.brass;
+      ctx.fillText("QUOTA " + framePins + "/" + quota, W - 96, 12);
+      if (messageAge < 2) centreText(ctx, ink, message, 32, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "FRAME " + frame + " · " + framePins + "/" + quota; };
+    return game;
+  }
+
+  /* ---- 82. SERVICE MENU --------------------------------------------------
+
+     Short-order cooking: tickets arrive with two or three components, you
+     assemble in order, and a wrong component throws the plate. The fastest
+     way to understand a pipeline is to have to run one. */
+  function cabinetServiceMenu(random) {
+    var PARTS = ["AUTH", "METER", "SIGN", "LOG"];
+
+    var game = { id: "service-menu", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var order, built, pick, timer, served, level, held;
+
+    function newOrder() {
+      var size = 2 + Math.min(2, Math.floor(level / 3));
+      order = [];
+      for (var i = 0; i < size; i += 1) order.push(Math.floor(random() * PARTS.length));
+      built = [];
+      timer = Math.max(3.5, 9 - level * 0.35);
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      served = 0;
+      pick = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+      newOrder();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      timer -= dt;
+      if (timer <= 0) {
+        game.lives -= 1;
+        fx.shake(10);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        newOrder();
+        return;
+      }
+
+      var pressed = input.left || input.right || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        if (order[built.length] === pick) {
+          built.push(pick);
+          bits.burst(W / 2, 150, 4, { colour: "verify", speed: 40, life: 0.3 });
+          if (built.length === order.length) {
+            served += 1;
+            game.score += 40 + Math.round(timer * 6);
+            fx.flash("verify", 0.8);
+            if (served % 5 === 0) level += 1;
+            newOrder();
+          }
+        } else {
+          built = [];
+          fx.shake(7);
+          fx.flash("danger", 0.8);
+        }
+        return;
+      }
+      pick = (pick + (input.right ? 1 : PARTS.length - 1)) % PARTS.length;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "TICKET — IN THIS ORDER", 22, "dim");
+      order.forEach(function (p, i) {
+        var x = W / 2 - (order.length * 34) / 2 + i * 34;
+        ctx.fillStyle = i < built.length ? ink.verify : ink.wall[2];
+        ctx.fillRect(x, 34, 30, 26);
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.bg;
+        ctx.fillText(PARTS[p], x + 15, 48);
+        ctx.textAlign = "left";
+      });
+      drawBar(ctx, ink, 30, 70, W - 60, 6, timer / 9, timer < 2.5 ? "danger" : "brass");
+
+      PARTS.forEach(function (p, i) {
+        var x = 20 + i * 72;
+        ctx.fillStyle = i === pick ? ink.bright : ink.wall[1];
+        ctx.fillRect(x, 120, 62, 44);
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = i === pick ? ink.bg : ink.ink;
+        ctx.fillText(p, x + 31, 144);
+        ctx.textAlign = "left";
+      });
+      bits.draw(ctx, ink);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("SERVED " + served, 6, 14);
+      ctx.fillText("LEVEL " + level, W - 66, 14);
+      centreText(ctx, ink, "← → choose · SPACE add", H - 12, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · SERVED " + served; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -13545,6 +14289,60 @@
       controls: "arrows move · SPACE commit",
       pad: "dpad+fire",
       make: cabinetMateInOne
+    },
+    {
+      id: "long-poll",
+      name: "LONG POLL",
+      genre: "FISHING",
+      tagline: "Cast, wait, and answer the tug in the window it gives you.",
+      controls: "SPACE cast, strike, and reel",
+      pad: "tap",
+      make: cabinetLongPoll
+    },
+    {
+      id: "pet-agent",
+      name: "PET AGENT",
+      genre: "CARE",
+      tagline: "Three needs, one of you, different drain rates.",
+      controls: "← → pick · SPACE hold to tend",
+      pad: "lr+fire",
+      make: cabinetPetAgent
+    },
+    {
+      id: "checkout",
+      name: "CHECKOUT",
+      genre: "DARTS",
+      tagline: "A number to finish on, three throws, and a board that punishes greed.",
+      controls: "SPACE throw",
+      pad: "tap",
+      make: cabinetCheckout
+    },
+    {
+      id: "one-under",
+      name: "ONE UNDER",
+      genre: "GOLF",
+      tagline: "Par is a budget. The water is a reset.",
+      controls: "← → aim · SPACE hold to power",
+      pad: "lr+fire",
+      make: cabinetOneUnder
+    },
+    {
+      id: "strike-quota",
+      name: "STRIKE QUOTA",
+      genre: "BOWLING",
+      tagline: "Set the line, then the power. Two throws a frame.",
+      controls: "SPACE set line then power",
+      pad: "tap",
+      make: cabinetStrikeQuota
+    },
+    {
+      id: "service-menu",
+      name: "SERVICE MENU",
+      genre: "COOKING",
+      tagline: "Assemble in order. A wrong component throws the plate.",
+      controls: "← → choose · SPACE add",
+      pad: "lr+fire",
+      make: cabinetServiceMenu
     }
   ];
 
