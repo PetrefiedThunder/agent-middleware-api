@@ -3317,14 +3317,20 @@
           var px = OX + x * TILE;
           var py = OY + y * TILE;
           if (room.tiles[y][x]) {
-            ctx.fillStyle = room.vault ? ink.brass : ink.wall[2];
+            // Walls in the brightest wall shade with a dark mortar line. At
+            // wall[2] against a grid-coloured floor checker the two sat one
+            // step apart in value and the room read as a single chequerboard
+            // with no walls in it — the doorways especially disappeared.
+            ctx.fillStyle = room.vault ? ink.brass : ink.wall[1];
             ctx.fillRect(px, py, TILE, TILE);
             ctx.fillStyle = ink.bg;
             ctx.fillRect(px + TILE - 2, py, 2, TILE);
             ctx.fillRect(px, py + TILE - 2, TILE, 2);
           } else if ((x + y) % 2 === 0) {
+            // Floor: a pip rather than a filled cell, so the pattern says
+            // "tiles" without competing with the walls for brightness.
             ctx.fillStyle = ink.grid;
-            ctx.fillRect(px, py, TILE, TILE);
+            ctx.fillRect(px + TILE / 2 - 1, py + TILE / 2 - 1, 2, 2);
           }
         }
       }
@@ -4037,14 +4043,20 @@
       ctx.fillStyle = ink.bg;
       ctx.fillRect(0, 0, W, H);
 
+      // The whole board is painted, not just the road: an unpainted verge is
+      // the same black as the void outside the board, so a car that left the
+      // circuit appeared to be driving on nothing. And the road's two checker
+      // shades have to be two shades — grid and wall[3] are the same colour in
+      // this palette, so the surface came out flat.
       for (var y = 0; y < ROWS; y += 1) {
         for (var x = 0; x < COLS; x += 1) {
           var px = OX + x * CELL;
           var py = OY + y * CELL;
-          if (TRACK[y].charAt(x) === ".") {
-            ctx.fillStyle = (x + y) % 2 === 0 ? ink.grid : ink.wall[3];
-            ctx.fillRect(px, py, CELL, CELL);
-          }
+          var road = TRACK[y].charAt(x) === ".";
+          ctx.fillStyle = road
+            ? ((x + y) % 2 === 0 ? ink.wall[1] : ink.wall[2])
+            : ink.wall[3];
+          ctx.fillRect(px, py, CELL, CELL);
         }
       }
 
@@ -5149,8 +5161,12 @@
 
       for (var lane = 0; lane < LANES; lane += 1) {
         var x = OX + lane * LANE_W;
-        ctx.fillStyle = lane % 2 ? ink.bg : ink.grid;
-        ctx.fillRect(x, 18, LANE_W - 2, H - 30);
+        // Every lane the same shade, separated by the gutter the width leaves.
+        // Alternating lane against background read as two wide lanes rather
+        // than four, which is the one thing this cabinet cannot afford to be
+        // ambiguous about.
+        ctx.fillStyle = ink.grid;
+        ctx.fillRect(x, 18, LANE_W - 3, H - 30);
         ctx.fillStyle = flashes[lane] > 0 ? ink.bright : ink.wall[2];
         ctx.fillRect(x, LINE, LANE_W - 2, 4);
         ctx.font = '7px "IBM Plex Mono", monospace';
