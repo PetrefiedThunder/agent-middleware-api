@@ -214,6 +214,16 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  /* Stuck to the top of the scrolling frame. At a hundred tiles the grid is
+     many screens tall, and a filter row that scrolls away means scrolling all
+     the way back up to change shelves — which is most of the reason a long
+     grid feels unnavigable rather than merely long. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.5rem 0;
+  background: var(--ink);
+  box-shadow: 0 6px 0 var(--ink);
 }
 
 .arcade-filter {
@@ -426,20 +436,20 @@
   color: var(--verify);
 }
 
-/* ---- genre identity ------------------------------------------------------
-   Hue runs hot to cool by how twitchy the cabinet is: FPS and DUEL at the red
-   end, PUZZLE at the cyan end, ARCADE neutral in the middle as the house
-   default. Each genre also gets its own marquee pattern, so the lineup is
-   still legible as eight kinds of cabinet in greyscale or to a visitor who
-   does not separate these colours — and the badge text says the genre outright
-   in every case. */
+/* ---- family identity -----------------------------------------------------
+   Keyed off the cabinet's *family* rather than its genre. At a hundred
+   cabinets there are around ninety genres, and a hue per genre is both
+   impossible and useless; nine families is a number a visitor can actually
+   learn. Hue runs hot to cool by how twitchy the family is, each gets its own
+   marquee pattern so the lineup reads in greyscale too, and the badge on every
+   tile still says the specific genre outright. */
 
-.arcade-cabinet[data-genre="FPS"] {
+.arcade-cabinet[data-family="SHOOT"] {
   --genre-hue: var(--danger);
 }
 
 /* Crosshair: two hard bars crossing at the centre of the marquee. */
-.arcade-cabinet[data-genre="FPS"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="SHOOT"] .arcade-cabinet-art {
   background-image:
     linear-gradient(
       90deg,
@@ -455,12 +465,12 @@
     );
 }
 
-.arcade-cabinet[data-genre="DUEL"] {
+.arcade-cabinet[data-family="ACTION"] {
   --genre-hue: var(--arcade-magenta);
 }
 
 /* Two blocks facing each other across an empty middle. */
-.arcade-cabinet[data-genre="DUEL"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="ACTION"] .arcade-cabinet-art {
   background-image: linear-gradient(
     90deg,
     var(--genre-hue) 0 12px,
@@ -469,32 +479,12 @@
   );
 }
 
-.arcade-cabinet[data-genre="SHOOTER"] {
-  --genre-hue: var(--brass-bright);
-}
-
-/* Ranks: a column pattern crossed with a row pattern, so the marquee reads as
-   a formation advancing down the screen. */
-.arcade-cabinet[data-genre="SHOOTER"] .arcade-cabinet-art {
-  background-image:
-    repeating-linear-gradient(
-      90deg,
-      var(--genre-hue) 0 6px,
-      transparent 6px 14px
-    ),
-    repeating-linear-gradient(
-      180deg,
-      rgba(0, 0, 0, 0) 0 6px,
-      var(--shadow-ink) 6px 12px
-    );
-}
-
-.arcade-cabinet[data-genre="RUNNER"] {
+.arcade-cabinet[data-family="RUN"] {
   --genre-hue: var(--brass);
 }
 
 /* Ground line with obstacles standing on it. */
-.arcade-cabinet[data-genre="RUNNER"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="RUN"] .arcade-cabinet-art {
   background-image:
     linear-gradient(
       180deg,
@@ -511,51 +501,18 @@
   background-repeat: no-repeat, repeat-x;
 }
 
-.arcade-cabinet[data-genre="ARCADE"] {
+.arcade-cabinet[data-family="TIMING"] {
   --genre-hue: var(--text);
 }
 
-.arcade-cabinet[data-genre="MAZE"] {
-  --genre-hue: var(--text-dim);
-}
-
-/* Lattice: corridors crossing at right angles. */
-.arcade-cabinet[data-genre="MAZE"] .arcade-cabinet-art {
-  background-image:
-    repeating-linear-gradient(
-      90deg,
-      var(--genre-hue) 0 2px,
-      transparent 2px 14px
-    ),
-    repeating-linear-gradient(
-      180deg,
-      var(--genre-hue) 0 2px,
-      transparent 2px 14px
-    );
-}
-
-.arcade-cabinet[data-genre="REFLEX"] {
-  --genre-hue: var(--verify);
-}
-
-/* Hard diagonal chevrons — the one pattern in the set with no axis-aligned
-   edge, which is what a reflex cabinet's marquee should feel like. */
-.arcade-cabinet[data-genre="REFLEX"] .arcade-cabinet-art {
-  background-image: repeating-linear-gradient(
-    45deg,
-    var(--genre-hue) 0 6px,
-    transparent 6px 16px
-  );
-}
-
-.arcade-cabinet[data-genre="PUZZLE"] {
+.arcade-cabinet[data-family="PUZZLE"] {
   --genre-hue: var(--arcade-cyan);
 }
 
 /* Checkerboard. repeating-conic-gradient draws it in one declaration; the
    background-size is what makes the cells square rather than the tile's
    aspect ratio. */
-.arcade-cabinet[data-genre="PUZZLE"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="PUZZLE"] .arcade-cabinet-art {
   background-image: repeating-conic-gradient(
     var(--genre-hue) 0% 25%,
     transparent 0% 50%
@@ -571,12 +528,12 @@
    Patterns only, in most cases — a fourth of these tiles is decoration and a
    fifth distinct colour would stop reading as one lineup. */
 
-.arcade-cabinet[data-genre="PLATFORM"] {
+.arcade-cabinet[data-family="RUN"] {
   --genre-hue: var(--verify);
 }
 
 /* Steps: a stair of blocks climbing to the right. */
-.arcade-cabinet[data-genre="PLATFORM"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="RUN"] .arcade-cabinet-art {
   background-image:
     linear-gradient(180deg, transparent 0 66%, var(--genre-hue) 66% 78%, transparent 78%),
     linear-gradient(180deg, transparent 0 44%, var(--genre-hue) 44% 56%, transparent 56%),
@@ -586,56 +543,25 @@
   background-repeat: no-repeat;
 }
 
-.arcade-cabinet[data-genre="ADVENTURE"] {
+.arcade-cabinet[data-family="QUEST"] {
   --genre-hue: var(--brass-bright);
 }
 
 /* A doorway: two jambs and a lintel, which is the one shape every room in
    that cabinet is built out of. */
-.arcade-cabinet[data-genre="ADVENTURE"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="QUEST"] .arcade-cabinet-art {
   background-image:
     linear-gradient(180deg, var(--genre-hue) 0 5px, transparent 5px),
     linear-gradient(90deg, var(--genre-hue) 0 5px, transparent 5px),
     linear-gradient(270deg, var(--genre-hue) 0 5px, transparent 5px);
 }
 
-.arcade-cabinet[data-genre="RPG"] {
-  --genre-hue: var(--arcade-magenta);
-}
-
-/* A menu: three left-aligned bars, the way every battle screen in the genre
-   put its verbs. */
-.arcade-cabinet[data-genre="RPG"] .arcade-cabinet-art {
-  background-image: repeating-linear-gradient(
-    180deg,
-    var(--genre-hue) 0 3px,
-    transparent 3px 9px
-  );
-  background-size: 40% 100%;
-  background-position: left 8px center;
-  background-repeat: no-repeat;
-}
-
-.arcade-cabinet[data-genre="FIGHTING"] {
-  --genre-hue: var(--danger);
-}
-
-/* Two health bars draining toward each other from the ends. */
-.arcade-cabinet[data-genre="FIGHTING"] .arcade-cabinet-art {
-  background-image:
-    linear-gradient(90deg, var(--genre-hue) 0 40%, transparent 40%),
-    linear-gradient(270deg, var(--genre-hue) 0 40%, transparent 40%);
-  background-size: 100% 6px, 100% 6px;
-  background-position: top 6px left, bottom 6px left;
-  background-repeat: no-repeat;
-}
-
-.arcade-cabinet[data-genre="RACING"] {
+.arcade-cabinet[data-family="DRIVE"] {
   --genre-hue: var(--brass);
 }
 
 /* A road: two verges and a dashed centre line. */
-.arcade-cabinet[data-genre="RACING"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="DRIVE"] .arcade-cabinet-art {
   background-image:
     linear-gradient(90deg, var(--genre-hue) 0 4px, transparent 4px),
     linear-gradient(270deg, var(--genre-hue) 0 4px, transparent 4px),
@@ -645,85 +571,23 @@
   background-repeat: no-repeat, no-repeat, no-repeat;
 }
 
-.arcade-cabinet[data-genre="STEALTH"] {
-  --genre-hue: var(--text-dim);
-}
-
-/* A cone of light widening from one corner. */
-.arcade-cabinet[data-genre="STEALTH"] .arcade-cabinet-art {
-  background-image: repeating-linear-gradient(
-    115deg,
-    var(--genre-hue) 0 2px,
-    transparent 2px 18px
-  );
-}
-
-.arcade-cabinet[data-genre="HORROR"] {
-  --genre-hue: var(--arcade-cyan);
-}
-
-/* A torch: one lit square with the rest of the plate dark. */
-.arcade-cabinet[data-genre="HORROR"] .arcade-cabinet-art {
-  background-image:
-    radial-gradient(circle at 50% 50%, var(--genre-hue) 0 14%, transparent 14%),
-    radial-gradient(circle at 50% 50%, var(--genre-hue) 0 26%, transparent 26%);
-  background-size: 100% 100%, 100% 100%;
-  opacity: 0.75;
-}
-
-.arcade-cabinet[data-genre="SANDBOX"] {
+.arcade-cabinet[data-family="MANAGE"] {
   --genre-hue: var(--text);
 }
 
 /* Stacked blocks with mortar lines, offset row to row. */
-.arcade-cabinet[data-genre="SANDBOX"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="MANAGE"] .arcade-cabinet-art {
   background-image:
     repeating-linear-gradient(90deg, var(--genre-hue) 0 1px, transparent 1px 12px),
     repeating-linear-gradient(180deg, var(--genre-hue) 0 1px, transparent 1px 12px);
 }
 
-.arcade-cabinet[data-genre="ROYALE"] {
-  --genre-hue: var(--verify);
-}
-
-/* Two rings, the outer one closing on the inner. */
-.arcade-cabinet[data-genre="ROYALE"] .arcade-cabinet-art {
-  background-image:
-    radial-gradient(circle at 50% 50%, transparent 0 30%, var(--genre-hue) 30% 34%, transparent 34%),
-    radial-gradient(circle at 50% 50%, transparent 0 52%, var(--genre-hue) 52% 56%, transparent 56%);
-}
-
-.arcade-cabinet[data-genre="RHYTHM"] {
-  --genre-hue: var(--arcade-cyan);
-}
-
-/* Four lanes with a judgement line across them. */
-.arcade-cabinet[data-genre="RHYTHM"] .arcade-cabinet-art {
-  background-image:
-    linear-gradient(180deg, transparent 0 70%, var(--genre-hue) 70% 76%, transparent 76%),
-    repeating-linear-gradient(90deg, var(--genre-hue) 0 2px, transparent 2px 16px);
-}
-
-.arcade-cabinet[data-genre="BRAWLER"] {
-  --genre-hue: var(--arcade-magenta);
-}
-
-/* A belt: a floor line with figures standing along it at both ends. */
-.arcade-cabinet[data-genre="BRAWLER"] .arcade-cabinet-art {
-  background-image:
-    linear-gradient(180deg, transparent 0 calc(100% - 8px), var(--genre-hue) calc(100% - 8px) calc(100% - 6px), transparent calc(100% - 6px)),
-    repeating-linear-gradient(90deg, var(--genre-hue) 0 5px, transparent 5px 24px);
-  background-size: 100% 100%, 100% 18px;
-  background-position: center, left calc(100% - 24px);
-  background-repeat: no-repeat, repeat-x;
-}
-
-.arcade-cabinet[data-genre="COLLECT"] {
+.arcade-cabinet[data-family="SPORT"] {
   --genre-hue: var(--brass);
 }
 
 /* A register: rows of small filled cells, some of them still empty. */
-.arcade-cabinet[data-genre="COLLECT"] .arcade-cabinet-art {
+.arcade-cabinet[data-family="SPORT"] .arcade-cabinet-art {
   background-image: repeating-linear-gradient(
     90deg,
     var(--genre-hue) 0 6px,

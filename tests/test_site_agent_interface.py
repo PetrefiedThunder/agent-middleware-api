@@ -1986,9 +1986,6 @@ ARCADE_CABINET_IDS = (
     "key-rotation",
     "tail-latency",
     "race-condition",
-    # The console-era lineup: one cabinet per genre that sold a generation of
-    # hardware, all of them riffs rather than ports, and all of them named
-    # after a failure mode of this product's own domain.
     "countersign",
     "happy-path",
     "least-privilege",
@@ -2002,6 +1999,81 @@ ARCADE_CABINET_IDS = (
     "heartbeat",
     "brute-force",
     "catalog",
+    "rate-gate",
+    "merge-ledger",
+    "tap-forge",
+    "drop-stack",
+    "slice-queue",
+    "lane-hop",
+    "swarm",
+    "bullet-ledger",
+    "chokepoint",
+    "deck-of-scopes",
+    "backstop",
+    "cold-move",
+    "quorum-flip",
+    "idempotency",
+    "replay-order",
+    "match-policy",
+    "cold-start",
+    "swish-rate",
+    "siege-budget",
+    "tilt",
+    "soft-landing",
+    "ticket-queue",
+    "route-table",
+    "lift-sla",
+    "on-call",
+    "harvest-window",
+    "tunnel",
+    "uptime",
+    "growth",
+    "absorb",
+    "cavern",
+    "tap-order",
+    "aim-drill",
+    "cold-path",
+    "pop-the-queue",
+    "spin-plates",
+    "shard-field",
+    "intercept",
+    "artillery",
+    "invert",
+    "depth-charge",
+    "pipe-permit",
+    "circuit-route",
+    "factory-line",
+    "bridge-build",
+    "sort-keys",
+    "blast-map",
+    "word-lock",
+    "tile-audit",
+    "patience",
+    "mate-in-one",
+    "long-poll",
+    "pet-agent",
+    "checkout",
+    "one-under",
+    "strike-quota",
+    "service-menu",
+    "drift-queue",
+    "mine-cart",
+    "thrust-budget",
+    "wall-jump",
+    "cold-slope",
+    "handoff",
+    "bubble-queue",
+    "scope-match",
+    "reorder",
+    "breaker",
+    "bank-shot",
+    "draw-weight",
+    "crossfade",
+    "orbital",
+    "spot-kick",
+    "handshake",
+    "untangle",
+    "grid-proof",
 )
 
 # Everything the arcade's key map binds: the four arrows, their WASD aliases
@@ -2161,7 +2233,8 @@ def test_arcade_cabinet_roster_is_coherent() -> None:
     for cabinet in roster:
         cabinet_id = cabinet.get("id", "<unnamed entry>")
         missing = sorted(
-            {"id", "name", "genre", "tagline", "controls", "make"} - cabinet.keys()
+            {"id", "name", "genre", "family", "tagline", "controls", "pad", "make"}
+            - cabinet.keys()
         )
         assert not missing, (
             f"cabinet {cabinet_id} is missing {missing}; the select screen "
@@ -2273,6 +2346,105 @@ def test_arcade_controls_only_promise_keys_the_arcade_binds() -> None:
         assert re.search(r"←|→|↑|↓|arrows|SPACE|\b[WASD]\b", controls), (
             f"cabinet {cabinet_id} names no control at all: {controls!r}"
         )
+
+
+# The layouts the touch pad knows how to build. A cabinet asking for anything
+# else silently falls back to the four-way pad, which is the wrong controls
+# under a player's thumb rather than a visible error.
+ARCADE_PAD_LAYOUTS = ("dpad+fire", "dpad", "lr+fire", "lr", "ud+fire", "ud", "lanes", "tap")
+
+# The families the filter row is built from. Nine shelves for a hundred
+# cabinets; the specific genre stays on the tile badge.
+ARCADE_FAMILIES = (
+    "SHOOT",
+    "ACTION",
+    "PUZZLE",
+    "RUN",
+    "DRIVE",
+    "SPORT",
+    "MANAGE",
+    "QUEST",
+    "TIMING",
+)
+
+
+def test_arcade_pads_are_layouts_the_shell_can_build() -> None:
+    """A cabinet may only ask for a touch layout that exists.
+
+    ``applyPad`` falls back to the four-way pad for an unknown name, so a typo
+    here is not an error anyone sees — it is a phone player given a d-pad for a
+    cabinet that reads two keys, or no action button on one that needs it. The
+    layouts are named after the *inputs* a cabinet reads rather than its genre,
+    so this also checks the promise: a cabinet whose controls line mentions
+    SPACE has to have an action key on its pad, and one that never mentions the
+    vertical arrows must not be given them.
+    """
+
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+    for name in ARCADE_PAD_LAYOUTS:
+        assert f'"{name}":' in arcade, f"the shell defines no pad layout {name!r}"
+
+    for cabinet in _arcade_cabinet_roster():
+        pad = cabinet["pad"]
+        assert pad in ARCADE_PAD_LAYOUTS, (
+            f"cabinet {cabinet['id']} asks for pad {pad!r}, which the shell "
+            f"cannot build; it would silently get the default four-way pad"
+        )
+
+        controls = cabinet["controls"]
+        wants_action = "SPACE" in controls
+        has_action = pad in ("dpad+fire", "lr+fire", "ud+fire", "tap")
+        assert wants_action == has_action, (
+            f"cabinet {cabinet['id']} promises {controls!r} but its pad is "
+            f"{pad!r}: a cabinet that names SPACE needs an action key, and one "
+            f"that does not must not be given a dead button"
+        )
+
+        # The vertical arrows: promised in the controls line, or absent from
+        # the pad. "arrows" covers all four.
+        wants_vertical = "arrows" in controls or "↑" in controls or "↓" in controls
+        has_vertical = pad in ("dpad+fire", "dpad", "ud+fire", "ud", "lanes")
+        assert wants_vertical == has_vertical, (
+            f"cabinet {cabinet['id']} promises {controls!r} but its pad is "
+            f"{pad!r}: the vertical keys are on the pad or in the line, "
+            f"never one without the other"
+        )
+
+
+def test_arcade_families_shelve_every_cabinet() -> None:
+    """The filter row runs on families, and every cabinet needs one.
+
+    A hundred cabinets carry about ninety distinct genres between them, so the
+    filter row cannot be built from genres — ninety chips is a worse maze than
+    the grid it is meant to tame. Each cabinet therefore declares a family as
+    well, the chips are built from those, and the CSS hangs its colour and
+    marquee off the family too. A cabinet with a family the stylesheet does not
+    know still works, but arrives with no identity at all.
+    """
+
+    styles = (SITE / "arcade.css").read_text(encoding="utf-8")
+    roster = _arcade_cabinet_roster()
+
+    for cabinet in roster:
+        assert cabinet["family"] in ARCADE_FAMILIES, (
+            f"cabinet {cabinet['id']} is in family {cabinet['family']!r}, which "
+            f"is not one of the {len(ARCADE_FAMILIES)} shelves the filter row "
+            f"is built from"
+        )
+
+    used = {cabinet["family"] for cabinet in roster}
+    for family in used:
+        assert f'[data-family="{family}"]' in styles, (
+            f"family {family!r} has no identity in arcade.css; its tiles would "
+            f"render with the default marquee and hue"
+        )
+
+    # And the filter really does read the family attribute, not the genre.
+    arcade = (SITE / "arcade.js").read_text(encoding="utf-8")
+    assert 'button.getAttribute("data-family") === genre' in arcade, (
+        "the filter still matches on data-genre; with ~90 genres that leaves "
+        "most chips selecting exactly one cabinet"
+    )
 
 
 def test_arcade_receipts_are_marked_simulated() -> None:

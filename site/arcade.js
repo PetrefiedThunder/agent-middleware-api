@@ -6708,8 +6708,8 @@
 
      Cross the lanes. Every lane is a service with its own traffic and its own
      rhythm, the log rafts are batch windows that carry you if you time them,
-     and the board scrolls whether or not you moved — the genre's one cruelty
-     and the reason it is not just Frogger with the serial numbers filed off. */
+     and the board scrolls whether or not you moved — the genre's one cruelty,
+     and the thing that separates it from the arcade original it descends from. */
   function cabinetLaneHop(random) {
     var LANE_H = 20;
     var LANES = Math.ceil(H / LANE_H) + 2;
@@ -15138,11 +15138,774 @@
     return game;
   }
 
+  /* ---- 95. CROSSFADE -----------------------------------------------------
+
+     Two decks drifting out of sync and one fader. Hold the mix inside the
+     window and the crowd meter climbs; let either deck run away and it drops.
+     Beat-matching is a control-loop problem, which is why it belongs here. */
+  function cabinetCrossfade(random) {
+    var game = { id: "crossfade", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var deckA, deckB, fader, crowd, set, phaseTimer;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      deckA = { phase: 0, rate: 1 };
+      deckB = { phase: 0.4, rate: 1.06 };
+      fader = 0.5;
+      crowd = 0.6;
+      set = 1;
+      phaseTimer = 0;
+      fx.reset();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      phaseTimer += dt;
+
+      if (input.left) fader -= 0.9 * dt;
+      if (input.right) fader += 0.9 * dt;
+      fader = clamp(fader, 0, 1);
+
+      deckA.phase = (deckA.phase + deckA.rate * dt) % 1;
+      deckB.phase = (deckB.phase + deckB.rate * dt) % 1;
+
+      // Nudge the trailing deck with the action key: the one real verb.
+      if (input.fire) deckB.phase = (deckB.phase + 0.55 * dt) % 1;
+
+      var drift = Math.abs(deckA.phase - deckB.phase);
+      drift = Math.min(drift, 1 - drift);
+      var wantFader = 0.5 + (deckA.phase - deckB.phase);
+      var faderOff = Math.abs(fader - clamp(wantFader, 0, 1));
+
+      if (drift < 0.08 && faderOff < 0.25) {
+        crowd = Math.min(1, crowd + 0.24 * dt);
+        game.score += Math.round(30 * dt);
+      } else {
+        crowd -= (0.16 + set * 0.02) * dt;
+      }
+
+      if (crowd <= 0) {
+        crowd = 0.55;
+        game.lives -= 1;
+        fx.shake(10);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+      }
+      if (phaseTimer > 22) {
+        phaseTimer = 0;
+        set += 1;
+        deckB.rate = 1 + (random() - 0.3) * 0.14;
+        fx.flash("verify", 0.8);
+        game.score += 120;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "SET " + set + " — HOLD THE MIX", 20, "dim");
+
+      [deckA, deckB].forEach(function (deck, i) {
+        var y = 46 + i * 62;
+        ctx.fillStyle = ink.wall[3];
+        ctx.fillRect(20, y, W - 40, 44);
+        for (var b = 0; b < 16; b += 1) {
+          var lit = Math.floor(deck.phase * 16) === b;
+          ctx.fillStyle = lit ? (i ? ink.brass : ink.verify) : ink.wall[2];
+          ctx.fillRect(26 + b * ((W - 52) / 16), y + 8, 12, 28);
+        }
+        ctx.font = '7px "IBM Plex Mono", monospace';
+        ctx.fillStyle = ink.dim;
+        ctx.fillText(i ? "DECK B" : "DECK A", 24, y + 42);
+      });
+
+      drawBar(ctx, ink, 30, 178, W - 60, 10, fader, "ink");
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(30 + fader * (W - 60)) - 2, 174, 5, 18);
+      centreText(ctx, ink, "← → FADER · SPACE NUDGE DECK B", 204, "dim", 7);
+      drawBar(ctx, ink, 30, 214, W - 60, 8, crowd, crowd > 0.35 ? "verify" : "danger");
+      centreText(ctx, ink, "CROWD", 232, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "SET " + set + " · CROWD " + Math.round(crowd * 100) + "%"; };
+    return game;
+  }
+
+  /* ---- 96. ORBITAL -------------------------------------------------------
+
+     Slingshot a probe past a gravity well onto a target orbit. You get one
+     burn and the well does the rest, so the whole skill is predicting a curve
+     you cannot draw. */
+  function cabinetOrbital(random) {
+    var game = { id: "orbital", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var probe, well, goal, aim, power, charging, launches, level, trail, message, messageAge;
+
+    function build() {
+      well = { x: W / 2 + (random() - 0.5) * 50, y: H / 2, mass: 5200 + level * 500 };
+      goal = { x: W - 40 - random() * 30, y: 30 + random() * (H - 60), r: Math.max(9, 18 - level) };
+      probe = null;
+      aim = -0.5;
+      power = 0.4;
+      trail = [];
+      launches = 3;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (probe) {
+        var dx = well.x - probe.x, dy = well.y - probe.y;
+        var d2 = Math.max(80, dx * dx + dy * dy);
+        var d = Math.sqrt(d2);
+        probe.vx += (dx / d) * (well.mass / d2) * dt * 60;
+        probe.vy += (dy / d) * (well.mass / d2) * dt * 60;
+        probe.x += probe.vx * dt;
+        probe.y += probe.vy * dt;
+        trail.push({ x: probe.x, y: probe.y });
+        if (trail.length > 80) trail.shift();
+
+        if (d < 14) {
+          bits.burst(probe.x, probe.y, 16, { colour: "danger", speed: 70, life: 0.6 });
+          fx.shake(9);
+          probe = null;
+          message = "FELL INTO THE WELL";
+          messageAge = 0;
+        } else if (Math.hypot(goal.x - probe.x, goal.y - probe.y) < goal.r) {
+          level += 1;
+          game.score += 180 + launches * 40;
+          message = "ORBIT ACHIEVED";
+          messageAge = 0;
+          fx.flash("verify", 1);
+          bits.burst(goal.x, goal.y, 16, { colour: "verify", speed: 60, life: 0.6 });
+          build();
+          return;
+        } else if (probe.x < -30 || probe.x > W + 30 || probe.y < -30 || probe.y > H + 30) {
+          probe = null;
+          message = "LOST TO SPACE";
+          messageAge = 0;
+        }
+        if (!probe && launches <= 0) {
+          game.lives -= 1;
+          if (game.lives <= 0) { game.over = true; return; }
+          build();
+        }
+        return;
+      }
+
+      if (input.up) aim -= 1.4 * dt;
+      if (input.down) aim += 1.4 * dt;
+      if (input.fire) {
+        charging = true;
+        power = Math.min(1, power + dt * 0.8);
+      } else if (charging) {
+        charging = false;
+        launches -= 1;
+        trail = [];
+        probe = { x: 24, y: H / 2, vx: Math.cos(aim) * (60 + power * 130), vy: Math.sin(aim) * (60 + power * 130) };
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 40);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(well.x - 12, well.y - 12, 24, 24);
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(well.x - 7, well.y - 7, 14, 14);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(well.x - 3, well.y - 3, 6, 6);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(goal.x - goal.r, goal.y - goal.r, goal.r * 2, goal.r * 2);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(goal.x - goal.r + 3, goal.y - goal.r + 3, goal.r * 2 - 6, goal.r * 2 - 6);
+      trail.forEach(function (t, i) {
+        if (i % 2) return;
+        ctx.fillStyle = ink.grid;
+        ctx.fillRect(Math.round(t.x), Math.round(t.y), 1, 1);
+      });
+      bits.draw(ctx, ink);
+      if (probe) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(probe.x) - 2, Math.round(probe.y) - 2, 5, 5);
+      } else {
+        ctx.fillStyle = ink.verify;
+        ctx.fillRect(18, H / 2 - 6, 12, 12);
+        ctx.fillStyle = ink.bright;
+        for (var t = 1; t < 4; t += 1) {
+          ctx.fillRect(Math.round(24 + Math.cos(aim) * t * 12) - 1, Math.round(H / 2 + Math.sin(aim) * t * 12) - 1, 3, 3);
+        }
+        drawBar(ctx, ink, 8, 8, 74, 5, power, "brass");
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("BURNS " + launches, 8, 24);
+      ctx.fillText("LEVEL " + level, W - 66, 14);
+      if (messageAge < 2) centreText(ctx, ink, message, 40, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · BURNS " + launches; };
+    return game;
+  }
+
+  /* ---- 97. SPOT KICK -----------------------------------------------------
+
+     A penalty shootout, alternating: you take one, then you keep one. Both
+     halves are a read — the keeper commits early and so do you. */
+  function cabinetSpotKick(random) {
+    var game = { id: "spot-kick", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var phase, pick, keeper, ball, scored, conceded, round, timer, held, message, messageAge;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      phase = "shoot";
+      pick = 1;
+      keeper = 1;
+      ball = null;
+      scored = 0;
+      conceded = 0;
+      round = 1;
+      timer = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (ball) {
+        timer -= dt;
+        if (timer > 0) return;
+        var saved = keeper === ball.lane;
+        if (ball.mine) {
+          if (saved) {
+            message = "SAVED";
+            fx.shake(7);
+          } else {
+            scored += 1;
+            game.score += 90;
+            message = "SCORED";
+            fx.flash("verify", 0.9);
+            bits.burst(60 + ball.lane * 100, 70, 10, { colour: "verify", speed: 60, life: 0.5 });
+          }
+        } else {
+          if (saved) {
+            game.score += 70;
+            message = "YOU SAVED IT";
+            fx.flash("verify", 0.9);
+          } else {
+            conceded += 1;
+            message = "CONCEDED";
+            fx.shake(9);
+            if (conceded - scored > 2) {
+              game.lives -= 1;
+              scored = conceded = 0;
+              if (game.lives <= 0) { game.over = true; return; }
+            }
+          }
+        }
+        messageAge = 0;
+        ball = null;
+        round += 1;
+        phase = phase === "shoot" ? "keep" : "shoot";
+        return;
+      }
+
+      var pressed = input.left || input.right || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+      if (input.left) pick = Math.max(0, pick - 1);
+      else if (input.right) pick = Math.min(2, pick + 1);
+      else if (input.fire) {
+        if (phase === "shoot") {
+          keeper = Math.floor(random() * 3);
+          ball = { lane: pick, mine: true };
+        } else {
+          keeper = pick;
+          ball = { lane: Math.floor(random() * 3), mine: false };
+        }
+        timer = 0.65;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(30, 30, W - 60, 80);
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(34, 34, W - 68, 72);
+      for (var l = 0; l < 3; l += 1) {
+        var x = 40 + l * 82;
+        ctx.fillStyle = l === pick ? ink.bright : ink.grid;
+        ctx.fillRect(x, 40, 74, 60);
+      }
+      if (ball) {
+        ctx.fillStyle = ink.ink;
+        ctx.fillRect(40 + ball.lane * 82 + 32, 62, 12, 12);
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(40 + keeper * 82 + 22, 52, 32, 34);
+      } else {
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(W / 2 - 16, 52, 32, 34);
+      }
+      bits.draw(ctx, ink);
+      centreText(ctx, ink, phase === "shoot" ? "YOUR KICK — PICK A CORNER" : "THEIR KICK — PICK A DIVE", 132, "dim");
+      centreText(ctx, ink, "YOU " + scored + "   THEM " + conceded, 158, "ink", 16);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUND " + round, 6, 14);
+      if (messageAge < 1.6) centreText(ctx, ink, message, 186, "bright");
+      centreText(ctx, ink, "← → choose · SPACE commit", H - 10, "dim", 7);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "YOU " + scored + " · THEM " + conceded; };
+    return game;
+  }
+
+  /* ---- 98. HANDSHAKE -----------------------------------------------------
+
+     Repeat a pattern of long and short presses. The protocol grows by one
+     symbol each round and the timing window narrows — a handshake that gets
+     stricter the longer it goes, which is a fair description of most of them. */
+  function cabinetHandshake(random) {
+    var game = { id: "handshake", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var pattern, step, phase, timer, pressTime, held, round, message, messageAge;
+
+    function extend() {
+      pattern.push(random() < 0.5 ? "short" : "long");
+      phase = "show";
+      step = 0;
+      timer = 0.5;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      pattern = [];
+      round = 1;
+      held = false;
+      pressTime = 0;
+      messageAge = 9;
+      fx.reset();
+      extend();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+
+      if (phase === "show") {
+        timer -= dt;
+        if (timer > 0) return;
+        step += 1;
+        if (step > pattern.length) {
+          phase = "input";
+          step = 0;
+        } else {
+          timer = pattern[step - 1] === "long" ? 0.62 : 0.26;
+          timer += 0.22;
+        }
+        return;
+      }
+
+      if (input.fire) {
+        held = true;
+        pressTime += dt;
+        return;
+      }
+      if (!held) return;
+      held = false;
+      var symbol = pressTime > 0.32 ? "long" : "short";
+      pressTime = 0;
+
+      if (symbol === pattern[step]) {
+        step += 1;
+        game.score += 6;
+        if (step >= pattern.length) {
+          round += 1;
+          game.score += 40 + pattern.length * 8;
+          message = "HANDSHAKE COMPLETE (" + pattern.length + ")";
+          messageAge = 0;
+          fx.flash("verify", 0.9);
+          extend();
+        }
+      } else {
+        game.lives -= 1;
+        message = "PROTOCOL MISMATCH AT " + (step + 1);
+        messageAge = 0;
+        fx.shake(9);
+        fx.flash("danger", 1);
+        if (game.lives <= 0) { game.over = true; return; }
+        pattern = [];
+        extend();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, phase === "show" ? "LISTEN" : "REPEAT IT", 30, phase === "show" ? "brass" : "verify", 16);
+
+      pattern.forEach(function (sym, i) {
+        var x = 20 + (i % 12) * 24;
+        var y = 70 + Math.floor(i / 12) * 30;
+        var lit = phase === "show" ? step - 1 === i : i < step;
+        ctx.fillStyle = lit ? ink.bright : ink.wall[2];
+        ctx.fillRect(x, y, sym === "long" ? 20 : 9, 14);
+      });
+
+      if (phase === "input") {
+        drawBar(ctx, ink, 40, H - 50, W - 80, 8, Math.min(1, pressTime / 0.6), pressTime > 0.32 ? "verify" : "brass");
+        centreText(ctx, ink, pressTime > 0.32 ? "LONG" : "SHORT", H - 60, "dim", 7);
+      }
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("ROUND " + round, 6, 14);
+      ctx.fillText("LENGTH " + pattern.length, W - 92, 14);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 14, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · LEN " + pattern.length; };
+    return game;
+  }
+
+  /* ---- 99. UNTANGLE ------------------------------------------------------
+
+     Drag nodes until no dependency crosses another. Every graph here is
+     planar by construction, so a clean layout always exists — the difficulty
+     is entirely in seeing it. */
+  function cabinetUntangle(random) {
+    var game = { id: "untangle", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var nodes, edges, cursor, grabbed, level, held, clock, message, messageAge;
+
+    function build() {
+      var count = 4 + Math.min(4, level);
+      nodes = [];
+      for (var i = 0; i < count; i += 1) {
+        var a = (i / count) * Math.PI * 2;
+        // Laid out on a circle (planar), then scrambled into random slots.
+        nodes.push({ x: W / 2 + Math.cos(a) * 80, y: H / 2 + Math.sin(a) * 62 });
+      }
+      edges = [];
+      for (var e = 0; e < count; e += 1) edges.push([e, (e + 1) % count]);
+      for (var extra = 0; extra < Math.min(3, level); extra += 1) {
+        var a2 = Math.floor(random() * count);
+        var b2 = (a2 + 2 + Math.floor(random() * (count - 3))) % count;
+        edges.push([a2, b2]);
+      }
+      // Scramble positions: the graph stays planar, the drawing does not.
+      nodes.forEach(function (n) {
+        n.x = 30 + random() * (W - 60);
+        n.y = 40 + random() * (H - 80);
+      });
+      cursor = 0;
+      grabbed = false;
+      clock = 40 + level * 4;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    function crosses() {
+      function ccw(a, b, c) { return (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x); }
+      var count = 0;
+      for (var i = 0; i < edges.length; i += 1) {
+        for (var j = i + 1; j < edges.length; j += 1) {
+          var e1 = edges[i], e2 = edges[j];
+          if (e1[0] === e2[0] || e1[0] === e2[1] || e1[1] === e2[0] || e1[1] === e2[1]) continue;
+          var a = nodes[e1[0]], b = nodes[e1[1]], c = nodes[e2[0]], d = nodes[e2[1]];
+          if (ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d)) count += 1;
+        }
+      }
+      return count;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      clock -= dt;
+      if (clock <= 0) {
+        game.lives -= 1;
+        message = "STILL TANGLED";
+        messageAge = 0;
+        fx.shake(9);
+        if (game.lives <= 0) { game.over = true; return; }
+        build();
+        return;
+      }
+
+      if (grabbed) {
+        var speed = 84 * dt;
+        if (input.left) nodes[cursor].x -= speed;
+        if (input.right) nodes[cursor].x += speed;
+        if (input.up) nodes[cursor].y -= speed;
+        if (input.down) nodes[cursor].y += speed;
+        nodes[cursor].x = clamp(nodes[cursor].x, 10, W - 10);
+        nodes[cursor].y = clamp(nodes[cursor].y, 20, H - 16);
+      }
+
+      if (input.fire) {
+        if (!held) {
+          held = true;
+          grabbed = !grabbed;
+          if (!grabbed && crosses() === 0) {
+            level += 1;
+            game.score += 150 + Math.round(clock * 3);
+            message = "PLANAR — LEVEL " + level;
+            messageAge = 0;
+            fx.flash("verify", 1);
+            build();
+          }
+        }
+        return;
+      }
+      held = false;
+
+      if (!grabbed) {
+        var pressed = input.left || input.right || input.up || input.down;
+        if (!pressed) return;
+        if (input.left || input.up) cursor = (cursor + nodes.length - 1) % nodes.length;
+        else cursor = (cursor + 1) % nodes.length;
+        held = true;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      var bad = crosses();
+      edges.forEach(function (e) {
+        var a = nodes[e[0]], b = nodes[e[1]];
+        var steps = Math.max(2, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 4));
+        for (var s = 0; s <= steps; s += 1) {
+          ctx.fillStyle = ink.wall[1];
+          ctx.fillRect(Math.round(a.x + ((b.x - a.x) * s) / steps), Math.round(a.y + ((b.y - a.y) * s) / steps), 2, 2);
+        }
+      });
+      nodes.forEach(function (n, i) {
+        ctx.fillStyle = i === cursor ? (grabbed ? ink.bright : ink.brass) : ink.verify;
+        ctx.fillRect(Math.round(n.x) - 6, Math.round(n.y) - 6, 12, 12);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(n.x) - 3, Math.round(n.y) - 3, 6, 6);
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = bad ? ink.danger : ink.verify;
+      ctx.fillText("CROSSINGS " + bad, 6, 14);
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, W - 66, 14);
+      drawBar(ctx, ink, 6, 18, W - 12, 3, clock / (40 + level * 4), clock < 10 ? "danger" : "brass");
+      centreText(ctx, ink, grabbed ? "MOVING — SPACE TO DROP" : "SPACE TO GRAB", H - 8, "dim", 7);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 20, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + crosses() + " CROSSINGS"; };
+    return game;
+  }
+
+  /* ---- 100. GRID PROOF ---------------------------------------------------
+
+     A nonogram: the numbers along each row and column say how many cells are
+     filled and in what runs, and the grid is the only proof. Deduction with
+     no hidden information and no luck, which makes it the right cabinet to
+     end a hundred on. */
+  function cabinetGridProof(random) {
+    var SIZE = 5;
+    var CELL = 26;
+    var OX = (W - SIZE * CELL) / 2 + 24;
+    var OY = 70;
+
+    var game = { id: "grid-proof", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var answer, marks, cursor, rowHints, colHints, level, held, mistakes, message, messageAge;
+
+    function hintsFor(values) {
+      var out = [];
+      var run = 0;
+      values.forEach(function (v) {
+        if (v) run += 1;
+        else if (run) { out.push(run); run = 0; }
+      });
+      if (run) out.push(run);
+      return out.length ? out : [0];
+    }
+
+    function build() {
+      answer = [];
+      for (var i = 0; i < SIZE * SIZE; i += 1) answer.push(random() < 0.55 ? 1 : 0);
+      marks = answer.map(function () { return 0; });
+      rowHints = [];
+      colHints = [];
+      for (var r = 0; r < SIZE; r += 1) rowHints.push(hintsFor(answer.slice(r * SIZE, r * SIZE + SIZE)));
+      for (var c = 0; c < SIZE; c += 1) {
+        var col = [];
+        for (var y = 0; y < SIZE; y += 1) col.push(answer[y * SIZE + c]);
+        colHints.push(hintsFor(col));
+      }
+      cursor = 0;
+      mistakes = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        if (marks[cursor]) { marks[cursor] = 0; return; }
+        marks[cursor] = 1;
+        if (!answer[cursor]) {
+          mistakes += 1;
+          fx.shake(7);
+          fx.flash("danger", 0.8);
+          if (mistakes >= 3) {
+            game.lives -= 1;
+            message = "TOO MANY WRONG CELLS";
+            messageAge = 0;
+            if (game.lives <= 0) { game.over = true; return; }
+            build();
+            return;
+          }
+        } else {
+          game.score += 8;
+        }
+        var solvedIt = answer.every(function (v, i) { return v === marks[i]; });
+        if (solvedIt) {
+          level += 1;
+          game.score += 200;
+          message = "PROVEN — LEVEL " + level;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          build();
+        }
+        return;
+      }
+      if (input.left) cursor = (cursor + marks.length - 1) % marks.length;
+      else if (input.right) cursor = (cursor + 1) % marks.length;
+      else if (input.up) cursor = (cursor + marks.length - SIZE) % marks.length;
+      else if (input.down) cursor = (cursor + SIZE) % marks.length;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "THE GRID IS THE ONLY PROOF", 24, "dim");
+      ctx.font = '7px "IBM Plex Mono", monospace';
+      rowHints.forEach(function (hint, r) {
+        ctx.textAlign = "right";
+        ctx.fillStyle = ink.dim;
+        ctx.fillText(hint.join(" "), OX - 6, OY + r * CELL + CELL / 2);
+        ctx.textAlign = "left";
+      });
+      colHints.forEach(function (hint, c) {
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.dim;
+        hint.forEach(function (n, i) {
+          ctx.fillText(String(n), OX + c * CELL + CELL / 2, OY - 22 + i * 9);
+        });
+        ctx.textAlign = "left";
+      });
+      marks.forEach(function (m, i) {
+        var x = OX + (i % SIZE) * CELL;
+        var y = OY + Math.floor(i / SIZE) * CELL;
+        ctx.fillStyle = m ? (answer[i] ? ink.verify : ink.danger) : ink.wall[3];
+        ctx.fillRect(x + 1, y + 1, CELL - 3, CELL - 3);
+        if (i === cursor) {
+          ctx.fillStyle = ink.bright;
+          ctx.fillRect(x, y, CELL - 1, 2);
+          ctx.fillRect(x, y + CELL - 3, CELL - 1, 2);
+          ctx.fillRect(x, y, 2, CELL - 1);
+          ctx.fillRect(x + CELL - 3, y, 2, CELL - 1);
+        }
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 6, 14);
+      ctx.fillStyle = mistakes ? ink.danger : ink.dim;
+      ctx.fillText("WRONG " + mistakes + "/3", W - 78, 14);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · WRONG " + mistakes + "/3"; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
       name: "BLAST RADIUS",
       genre: "FPS",
+      family: "SHOOT",
       tagline: "Walk the permit boundary. Nothing unscoped reaches the tool.",
       controls: "← → turn · ↑ ↓ walk · SPACE fire",
       pad: "dpad+fire",
@@ -15152,6 +15915,7 @@
       id: "hold-the-line",
       name: "HOLD THE LINE",
       genre: "FPS",
+      family: "SHOOT",
       tagline: "Four corridors. One post. Do not let a call through.",
       controls: "← → turn · ↑ ↓ step · SPACE fire",
       pad: "dpad+fire",
@@ -15161,6 +15925,7 @@
       id: "scope-creep",
       name: "SCOPE CREEP",
       genre: "SHOOTER",
+      family: "SHOOT",
       tagline: "Deny the permissions before they reach production.",
       controls: "← → move · SPACE deny",
       pad: "lr+fire",
@@ -15170,6 +15935,7 @@
       id: "retry-storm",
       name: "RETRY STORM",
       genre: "SHOOTER",
+      family: "SHOOT",
       tagline: "Shoot a duplicate and now there are two of them.",
       controls: "← → turn · ↑ thrust · SPACE fire",
       pad: "dpad+fire",
@@ -15179,6 +15945,7 @@
       id: "token-bucket",
       name: "TOKEN BUCKET",
       genre: "ARCADE",
+      family: "TIMING",
       tagline: "Drain the burst. The bucket refills. Forever.",
       controls: "← → limiter · SPACE serve",
       pad: "lr+fire",
@@ -15188,6 +15955,7 @@
       id: "double-spend",
       name: "DOUBLE SPEND",
       genre: "ARCADE",
+      family: "TIMING",
       tagline: "Cross the settlement lanes. Get charged exactly once.",
       controls: "arrows step",
       pad: "dpad",
@@ -15197,6 +15965,7 @@
       id: "backpressure",
       name: "BACKPRESSURE",
       genre: "PUZZLE",
+      family: "PUZZLE",
       tagline: "Work arrives faster than it drains. Stack it anyway.",
       controls: "← → shift · SPACE rotate · ↓ drop",
       pad: "dpad+fire",
@@ -15206,6 +15975,7 @@
       id: "append-only",
       name: "APPEND-ONLY",
       genre: "PUZZLE",
+      family: "PUZZLE",
       tagline: "The ledger grows. It may never cross itself.",
       controls: "arrows steer the write head",
       pad: "dpad",
@@ -15215,6 +15985,7 @@
       id: "nonce-burn",
       name: "NONCE BURN",
       genre: "REFLEX",
+      family: "TIMING",
       tagline: "Each one is good once, and not for long.",
       controls: "arrows move · SPACE burn",
       pad: "dpad+fire",
@@ -15224,6 +15995,7 @@
       id: "key-rotation",
       name: "KEY ROTATION",
       genre: "MAZE",
+      family: "ACTION",
       tagline: "Collect the new key before the revocations reach you.",
       controls: "arrows move",
       pad: "dpad",
@@ -15233,6 +16005,7 @@
       id: "tail-latency",
       name: "TAIL LATENCY",
       genre: "RUNNER",
+      family: "RUN",
       tagline: "p50 is fine. p50 is not what your users get.",
       controls: "↑ jump · ↓ duck",
       pad: "ud",
@@ -15242,6 +16015,7 @@
       id: "race-condition",
       name: "RACE CONDITION",
       genre: "DUEL",
+      family: "ACTION",
       tagline: "Rally against an agent that does not blink.",
       controls: "↑ ↓ move · first to 7",
       pad: "ud",
@@ -15251,6 +16025,7 @@
       id: "countersign",
       name: "COUNTERSIGN",
       genre: "FPS",
+      family: "SHOOT",
       tagline: "The fuse is a TTL. Hold the key down and it never fires.",
       controls: "← → turn · ↑ ↓ walk · SPACE fire / hold to countersign",
       pad: "dpad+fire",
@@ -15260,6 +16035,7 @@
       id: "happy-path",
       name: "HAPPY PATH",
       genre: "PLATFORM",
+      family: "RUN",
       tagline: "Run right. The gaps are the cases nobody wrote.",
       controls: "← → run · SPACE jump",
       pad: "lr+fire",
@@ -15269,6 +16045,7 @@
       id: "least-privilege",
       name: "LEAST PRIVILEGE",
       genre: "ADVENTURE",
+      family: "QUEST",
       tagline: "Nine rooms, two permits, one vault. Take only what opens it.",
       controls: "arrows move · SPACE revoke",
       pad: "dpad+fire",
@@ -15278,6 +16055,7 @@
       id: "escalation",
       name: "ESCALATION",
       genre: "RPG",
+      family: "QUEST",
       tagline: "Turn-based. The committee has more hit points than you.",
       controls: "↑ ↓ choose · SPACE commit",
       pad: "ud+fire",
@@ -15287,6 +16065,7 @@
       id: "arbitration",
       name: "ARBITRATION",
       genre: "FIGHTING",
+      family: "ACTION",
       tagline: "Two parties, one dispute, best of three.",
       controls: "← → step · ↑ jump · ↓ block · SPACE strike",
       pad: "dpad+fire",
@@ -15296,6 +16075,7 @@
       id: "throughput",
       name: "THROUGHPUT",
       genre: "RACING",
+      family: "DRIVE",
       tagline: "Off the road you are not crashed, only throttled.",
       controls: "← → steer · ↑ throttle · ↓ brake",
       pad: "dpad",
@@ -15305,6 +16085,7 @@
       id: "side-channel",
       name: "SIDE CHANNEL",
       genre: "STEALTH",
+      family: "ACTION",
       tagline: "One observation is nothing. Enough of them is the leak.",
       controls: "arrows move · SPACE hold to crouch",
       pad: "dpad+fire",
@@ -15314,6 +16095,7 @@
       id: "cold-storage",
       name: "COLD STORAGE",
       genre: "HORROR",
+      family: "ACTION",
       tagline: "Three shards, one torch, and not enough rounds.",
       controls: "arrows move · SPACE fire",
       pad: "dpad+fire",
@@ -15323,6 +16105,7 @@
       id: "block-store",
       name: "BLOCK STORE",
       genre: "SANDBOX",
+      family: "MANAGE",
       tagline: "Dig all day. Be behind a wall when the scan runs.",
       controls: "arrows move · SPACE mine or place",
       pad: "dpad+fire",
@@ -15332,6 +16115,7 @@
       id: "last-quorum",
       name: "LAST QUORUM",
       genre: "ROYALE",
+      family: "ACTION",
       tagline: "The quorum shrinks. Outside it you are only partitioned.",
       controls: "arrows move · SPACE fire",
       pad: "dpad+fire",
@@ -15341,6 +16125,7 @@
       id: "heartbeat",
       name: "HEARTBEAT",
       genre: "RHYTHM",
+      family: "TIMING",
       tagline: "Four lanes of health checks. Answer them on the beat.",
       controls: "← ↑ ↓ → hit the lanes",
       pad: "lanes",
@@ -15350,6 +16135,7 @@
       id: "brute-force",
       name: "BRUTE FORCE",
       genre: "BRAWLER",
+      family: "ACTION",
       tagline: "No cleverness, just volume. Do not get surrounded.",
       controls: "arrows move · SPACE strike",
       pad: "dpad+fire",
@@ -15359,6 +16145,7 @@
       id: "catalog",
       name: "CATALOG",
       genre: "COLLECT",
+      family: "MANAGE",
       tagline: "Every tool in the estate that nobody wrote down.",
       controls: "arrows move · SPACE bind the scope",
       pad: "dpad+fire",
@@ -15368,6 +16155,7 @@
       id: "rate-gate",
       name: "RATE GATE",
       genre: "ONE-TOUCH",
+      family: "RUN",
       tagline: "One button. Endless rate limits, each with a gap in it.",
       controls: "SPACE flap",
       pad: "tap",
@@ -15377,6 +16165,7 @@
       id: "merge-ledger",
       name: "MERGE LEDGER",
       genre: "MERGE",
+      family: "PUZZLE",
       tagline: "Equal entries combine. The board fills either way.",
       controls: "arrows slide",
       pad: "dpad",
@@ -15386,6 +16175,7 @@
       id: "tap-forge",
       name: "TAP FORGE",
       genre: "IDLE",
+      family: "MANAGE",
       tagline: "Mint by hand until something mints for you.",
       controls: "↑ ↓ choose · SPACE mint or buy",
       pad: "ud+fire",
@@ -15395,6 +16185,7 @@
       id: "drop-stack",
       name: "DROP STACK",
       genre: "STACKER",
+      family: "MANAGE",
       tagline: "Whatever hangs over the edge shears off.",
       controls: "SPACE drop",
       pad: "tap",
@@ -15404,6 +16195,7 @@
       id: "slice-queue",
       name: "SLICE QUEUE",
       genre: "SLICE",
+      family: "TIMING",
       tagline: "Cut the signed ones. Let the unsigned ones fall.",
       controls: "arrows move the blade · SPACE swing",
       pad: "dpad+fire",
@@ -15413,6 +16205,7 @@
       id: "lane-hop",
       name: "LANE HOP",
       genre: "CROSSING",
+      family: "RUN",
       tagline: "Every lane is a service with its own traffic.",
       controls: "arrows hop",
       pad: "dpad",
@@ -15422,6 +16215,7 @@
       id: "swarm",
       name: "SWARM",
       genre: "SURVIVOR",
+      family: "ACTION",
       tagline: "You never press fire. The aura is always running.",
       controls: "arrows move",
       pad: "dpad",
@@ -15431,6 +16225,7 @@
       id: "bullet-ledger",
       name: "BULLET LEDGER",
       genre: "BULLET HELL",
+      family: "SHOOT",
       tagline: "Your hitbox is one pixel. Grazing pays.",
       controls: "arrows move · SPACE focus",
       pad: "dpad+fire",
@@ -15440,6 +16235,7 @@
       id: "chokepoint",
       name: "CHOKEPOINT",
       genre: "TOWER DEF",
+      family: "SHOOT",
       tagline: "You cannot cover everything. Pick where the path bends.",
       controls: "arrows move · SPACE place a denial",
       pad: "dpad+fire",
@@ -15449,6 +16245,7 @@
       id: "deck-of-scopes",
       name: "DECK OF SCOPES",
       genre: "DECKBUILD",
+      family: "QUEST",
       tagline: "Five scopes, three energy, and it already told you what it hits for.",
       controls: "← → pick · SPACE play · ↑ ↓ end turn",
       pad: "dpad+fire",
@@ -15458,6 +16255,7 @@
       id: "backstop",
       name: "BACKSTOP",
       genre: "DEFENCE",
+      family: "SHOOT",
       tagline: "One gun, and it overheats. Knowing when to stop is the game.",
       controls: "← → aim · SPACE fire",
       pad: "lr+fire",
@@ -15467,6 +16265,7 @@
       id: "cold-move",
       name: "COLD MOVE",
       genre: "SOKOBAN",
+      family: "PUZZLE",
       tagline: "Push each record onto its pad. There is no undo.",
       controls: "arrows push",
       pad: "dpad",
@@ -15476,6 +16275,7 @@
       id: "quorum-flip",
       name: "QUORUM FLIP",
       genre: "LIGHTS",
+      family: "PUZZLE",
       tagline: "Every local fix has non-local consequences.",
       controls: "arrows move · SPACE flip",
       pad: "dpad+fire",
@@ -15485,6 +16285,7 @@
       id: "idempotency",
       name: "IDEMPOTENCY",
       genre: "MEMORY",
+      family: "PUZZLE",
       tagline: "Every request has exactly one twin.",
       controls: "arrows move · SPACE turn",
       pad: "dpad+fire",
@@ -15494,6 +16295,7 @@
       id: "replay-order",
       name: "REPLAY ORDER",
       genre: "SEQUENCE",
+      family: "TIMING",
       tagline: "A log is only useful if you can replay it in order.",
       controls: "← ↑ ↓ → repeat the log",
       pad: "lanes",
@@ -15503,6 +16305,7 @@
       id: "match-policy",
       name: "MATCH POLICY",
       genre: "MATCH-3",
+      family: "PUZZLE",
       tagline: "Line up three rules and watch the file collapse.",
       controls: "arrows move · SPACE swap",
       pad: "dpad+fire",
@@ -15512,6 +16315,7 @@
       id: "cold-start",
       name: "COLD START",
       genre: "CLIMB",
+      family: "RUN",
       tagline: "Throttle, brake, and land the flips you started.",
       controls: "↑ → throttle · ↓ ← brake",
       pad: "dpad",
@@ -15521,6 +16325,7 @@
       id: "swish-rate",
       name: "SWISH RATE",
       genre: "HOOPS",
+      family: "SPORT",
       tagline: "A power meter, a moving hoop, a shot clock.",
       controls: "SPACE shoot on the meter",
       pad: "tap",
@@ -15530,6 +16335,7 @@
       id: "siege-budget",
       name: "SIEGE BUDGET",
       genre: "SIEGE",
+      family: "SHOOT",
       tagline: "Lob a payload at the legacy stack. Topple it.",
       controls: "↑ ↓ angle · SPACE hold to charge",
       pad: "ud+fire",
@@ -15539,6 +16345,7 @@
       id: "tilt",
       name: "TILT",
       genre: "PINBALL",
+      family: "SPORT",
       tagline: "Bumpers pay. The drain does not.",
       controls: "← → flippers · SPACE both",
       pad: "lr+fire",
@@ -15548,6 +16355,7 @@
       id: "soft-landing",
       name: "SOFT LANDING",
       genre: "LANDER",
+      family: "DRIVE",
       tagline: "Read the gauge, not the ground.",
       controls: "↑ thrust · ← → drift",
       pad: "dpad",
@@ -15557,6 +16365,7 @@
       id: "ticket-queue",
       name: "TICKET QUEUE",
       genre: "SERVICE",
+      family: "MANAGE",
       tagline: "Routing under load, with a patience bar on every caller.",
       controls: "← → walk · SPACE pick up or drop",
       pad: "lr+fire",
@@ -15566,6 +16375,7 @@
       id: "route-table",
       name: "ROUTE TABLE",
       genre: "TRAFFIC",
+      family: "MANAGE",
       tagline: "Two calls met where the table said they would not.",
       controls: "← → pick a junction · SPACE divert",
       pad: "lr+fire",
@@ -15575,6 +16385,7 @@
       id: "lift-sla",
       name: "LIFT SLA",
       genre: "ELEVATOR",
+      family: "MANAGE",
       tagline: "Queueing theory in a friendlier hat.",
       controls: "↑ ↓ call the car",
       pad: "ud",
@@ -15584,6 +16395,7 @@
       id: "on-call",
       name: "ON CALL",
       genre: "INCIDENT",
+      family: "MANAGE",
       tagline: "Hold to work it. Escalation is the one thing speed cannot fix.",
       controls: "arrows move · SPACE hold to work",
       pad: "dpad+fire",
@@ -15593,6 +16405,7 @@
       id: "harvest-window",
       name: "HARVEST WINDOW",
       genre: "FARM",
+      family: "MANAGE",
       tagline: "Too early is waste. Too late is spoiled.",
       controls: "arrows move · SPACE plant or reap",
       pad: "dpad+fire",
@@ -15602,6 +16415,7 @@
       id: "tunnel",
       name: "TUNNEL",
       genre: "TUNNEL",
+      family: "RUN",
       tagline: "Rings rush the camera. One sector is open.",
       controls: "← → rotate",
       pad: "lr",
@@ -15611,6 +16425,7 @@
       id: "uptime",
       name: "UPTIME",
       genre: "CLIMBER",
+      family: "RUN",
       tagline: "Every release holds your weight exactly once.",
       controls: "← → drift",
       pad: "lr",
@@ -15620,6 +16435,7 @@
       id: "growth",
       name: "GROWTH",
       genre: "ARENA",
+      family: "ACTION",
       tagline: "You die by crossing your own trail. So do they.",
       controls: "arrows turn",
       pad: "dpad",
@@ -15629,6 +16445,7 @@
       id: "absorb",
       name: "ABSORB",
       genre: "ARENA",
+      family: "ACTION",
       tagline: "Eat what is smaller. Get slower doing it.",
       controls: "arrows move",
       pad: "dpad",
@@ -15638,6 +16455,7 @@
       id: "cavern",
       name: "CAVERN",
       genre: "ONE-TOUCH",
+      family: "RUN",
       tagline: "Hold to climb, release to fall, and it narrows.",
       controls: "SPACE hold to climb",
       pad: "tap",
@@ -15647,6 +16465,7 @@
       id: "tap-order",
       name: "TAP ORDER",
       genre: "REACTION",
+      family: "TIMING",
       tagline: "Answer the one at the line. Out of order is a miss.",
       controls: "← ↑ ↓ → answer",
       pad: "lanes",
@@ -15656,6 +16475,7 @@
       id: "aim-drill",
       name: "AIM DRILL",
       genre: "AIM",
+      family: "SHOOT",
       tagline: "The clock only extends on accuracy. Spraying is worse.",
       controls: "arrows aim · SPACE fire",
       pad: "dpad+fire",
@@ -15665,6 +16485,7 @@
       id: "cold-path",
       name: "COLD PATH",
       genre: "REACTION",
+      family: "TIMING",
       tagline: "Early is worse than slow. Wait for green.",
       controls: "SPACE on green",
       pad: "tap",
@@ -15674,6 +16495,7 @@
       id: "pop-the-queue",
       name: "POP THE QUEUE",
       genre: "WHACK",
+      family: "ACTION",
       tagline: "Jobs surface and sink whether or not you got to them.",
       controls: "arrows move · SPACE pop",
       pad: "dpad+fire",
@@ -15683,6 +16505,7 @@
       id: "spin-plates",
       name: "SPIN PLATES",
       genre: "UPKEEP",
+      family: "MANAGE",
       tagline: "Every second spent tending one is five others decaying.",
       controls: "← → pick · SPACE hold to tend",
       pad: "lr+fire",
@@ -15692,6 +16515,7 @@
       id: "shard-field",
       name: "SHARD FIELD",
       genre: "SPACE",
+      family: "SHOOT",
       tagline: "Shoot a shard and it splits. Re-sharding, from inside.",
       controls: "← → turn · ↑ thrust · SPACE fire",
       pad: "dpad+fire",
@@ -15701,6 +16525,7 @@
       id: "intercept",
       name: "INTERCEPT",
       genre: "DEFENCE",
+      family: "SHOOT",
       tagline: "One burst that catches three beats three that catch one.",
       controls: "arrows aim · SPACE burst",
       pad: "dpad+fire",
@@ -15710,6 +16535,7 @@
       id: "artillery",
       name: "ARTILLERY",
       genre: "ARTILLERY",
+      family: "SHOOT",
       tagline: "Angle, power, wind, and one shot each.",
       controls: "↑ ↓ angle · SPACE hold to charge",
       pad: "ud+fire",
@@ -15719,6 +16545,7 @@
       id: "invert",
       name: "INVERT",
       genre: "RUNNER",
+      family: "RUN",
       tagline: "One verb: flip which way down is.",
       controls: "SPACE invert",
       pad: "tap",
@@ -15728,6 +16555,7 @@
       id: "depth-charge",
       name: "DEPTH CHARGE",
       genre: "SONAR",
+      family: "SHOOT",
       tagline: "Between pings you are working from memory.",
       controls: "← → steer · SPACE drop",
       pad: "lr+fire",
@@ -15737,6 +16565,7 @@
       id: "pipe-permit",
       name: "PIPE PERMIT",
       genre: "PIPES",
+      family: "PUZZLE",
       tagline: "The pressure does not wait for you to finish thinking.",
       controls: "arrows move · SPACE rotate",
       pad: "dpad+fire",
@@ -15746,6 +16575,7 @@
       id: "circuit-route",
       name: "CIRCUIT ROUTE",
       genre: "ROUTING",
+      family: "PUZZLE",
       tagline: "Every pair you connect makes the rest of the board worse.",
       controls: "arrows draw · SPACE start or finish",
       pad: "dpad+fire",
@@ -15755,6 +16585,7 @@
       id: "factory-line",
       name: "FACTORY LINE",
       genre: "FACTORY",
+      family: "MANAGE",
       tagline: "Three stamps, one belt, and it never stops.",
       controls: "← → stamp · SPACE press",
       pad: "lr+fire",
@@ -15764,6 +16595,7 @@
       id: "bridge-build",
       name: "BRIDGE BUILD",
       genre: "SPAN",
+      family: "MANAGE",
       tagline: "You can see exactly how wrong you were.",
       controls: "SPACE hold to extend",
       pad: "tap",
@@ -15773,6 +16605,7 @@
       id: "sort-keys",
       name: "SORT KEYS",
       genre: "SORT",
+      family: "PUZZLE",
       tagline: "Every pour is progress or a wasted tube.",
       controls: "← → pick · SPACE lift or pour",
       pad: "lr+fire",
@@ -15782,6 +16615,7 @@
       id: "blast-map",
       name: "BLAST MAP",
       genre: "MINEFIELD",
+      family: "PUZZLE",
       tagline: "Deduction, where one wrong click ends the board.",
       controls: "arrows move · SPACE open",
       pad: "dpad+fire",
@@ -15791,6 +16625,7 @@
       id: "word-lock",
       name: "WORD LOCK",
       genre: "WORD",
+      family: "PUZZLE",
       tagline: "Five letters, six tries, one scope.",
       controls: "↑ ↓ letter · ← → slot · SPACE submit",
       pad: "dpad+fire",
@@ -15800,6 +16635,7 @@
       id: "tile-audit",
       name: "TILE AUDIT",
       genre: "TILES",
+      family: "PUZZLE",
       tagline: "The order you clear in decides whether the board opens.",
       controls: "arrows move · SPACE pick a pair",
       pad: "dpad+fire",
@@ -15809,6 +16645,7 @@
       id: "patience",
       name: "PATIENCE",
       genre: "CARDS",
+      family: "PUZZLE",
       tagline: "One higher or one lower, and a stock that runs out.",
       controls: "← → pick · SPACE play · ↑ ↓ draw",
       pad: "dpad+fire",
@@ -15818,6 +16655,7 @@
       id: "mate-in-one",
       name: "MATE IN ONE",
       genre: "CHESS",
+      family: "PUZZLE",
       tagline: "One move, one board, one correct answer.",
       controls: "arrows move · SPACE commit",
       pad: "dpad+fire",
@@ -15827,6 +16665,7 @@
       id: "long-poll",
       name: "LONG POLL",
       genre: "FISHING",
+      family: "MANAGE",
       tagline: "Cast, wait, and answer the tug in the window it gives you.",
       controls: "SPACE cast, strike, and reel",
       pad: "tap",
@@ -15836,6 +16675,7 @@
       id: "pet-agent",
       name: "PET AGENT",
       genre: "CARE",
+      family: "MANAGE",
       tagline: "Three needs, one of you, different drain rates.",
       controls: "← → pick · SPACE hold to tend",
       pad: "lr+fire",
@@ -15845,6 +16685,7 @@
       id: "checkout",
       name: "CHECKOUT",
       genre: "DARTS",
+      family: "SPORT",
       tagline: "A number to finish on, three throws, and a board that punishes greed.",
       controls: "SPACE throw",
       pad: "tap",
@@ -15854,6 +16695,7 @@
       id: "one-under",
       name: "ONE UNDER",
       genre: "GOLF",
+      family: "SPORT",
       tagline: "Par is a budget. The water is a reset.",
       controls: "← → aim · SPACE hold to power",
       pad: "lr+fire",
@@ -15863,6 +16705,7 @@
       id: "strike-quota",
       name: "STRIKE QUOTA",
       genre: "BOWLING",
+      family: "SPORT",
       tagline: "Set the line, then the power. Two throws a frame.",
       controls: "SPACE set line then power",
       pad: "tap",
@@ -15872,6 +16715,7 @@
       id: "service-menu",
       name: "SERVICE MENU",
       genre: "COOKING",
+      family: "MANAGE",
       tagline: "Assemble in order. A wrong component throws the plate.",
       controls: "← → choose · SPACE add",
       pad: "lr+fire",
@@ -15881,6 +16725,7 @@
       id: "drift-queue",
       name: "DRIFT QUEUE",
       genre: "RACING",
+      family: "DRIVE",
       tagline: "Holding the slide pays more than driving it clean.",
       controls: "← → steer · SPACE handbrake",
       pad: "lr+fire",
@@ -15890,6 +16735,7 @@
       id: "mine-cart",
       name: "MINE CART",
       genre: "RAILS",
+      family: "RUN",
       tagline: "Pick the branch, jump the gap, only ever forward.",
       controls: "↑ ↓ switch rail · SPACE jump",
       pad: "ud+fire",
@@ -15899,6 +16745,7 @@
       id: "thrust-budget",
       name: "THRUST BUDGET",
       genre: "JETPACK",
+      family: "RUN",
       tagline: "Fuel burns while you hold and refills on the ground.",
       controls: "SPACE hold to fly",
       pad: "tap",
@@ -15908,6 +16755,7 @@
       id: "wall-jump",
       name: "WALL JUMP",
       genre: "SHAFT",
+      family: "RUN",
       tagline: "You stick where you land. Hesitating is the loss.",
       controls: "SPACE push off",
       pad: "tap",
@@ -15917,6 +16765,7 @@
       id: "cold-slope",
       name: "COLD SLOPE",
       genre: "DOWNHILL",
+      family: "RUN",
       tagline: "Miss a gate and you find out at the bottom.",
       controls: "← → carve",
       pad: "lr",
@@ -15926,6 +16775,7 @@
       id: "handoff",
       name: "HANDOFF",
       genre: "PARKOUR",
+      family: "RUN",
       tagline: "The service you are standing on is about to go away.",
       controls: "SPACE leap",
       pad: "tap",
@@ -15935,6 +16785,7 @@
       id: "bubble-queue",
       name: "BUBBLE QUEUE",
       genre: "BUBBLE",
+      family: "PUZZLE",
       tagline: "A shot that clears nothing costs you twice.",
       controls: "← → aim · SPACE fire",
       pad: "lr+fire",
@@ -15944,6 +16795,7 @@
       id: "scope-match",
       name: "SCOPE MATCH",
       genre: "RINGS",
+      family: "RUN",
       tagline: "Your scope changes at every gate. Read it again.",
       controls: "SPACE hold to slow the fall",
       pad: "tap",
@@ -15953,6 +16805,7 @@
       id: "reorder",
       name: "REORDER",
       genre: "SLIDE",
+      family: "PUZZLE",
       tagline: "One blank, four moves, an optimum you will not find.",
       controls: "arrows slide a tile in",
       pad: "dpad",
@@ -15962,6 +16815,7 @@
       id: "breaker",
       name: "BREAKER",
       genre: "BREAKOUT",
+      family: "SPORT",
       tagline: "A deprecation nobody finished is back next release.",
       controls: "← → paddle",
       pad: "lr",
@@ -15971,6 +16825,7 @@
       id: "bank-shot",
       name: "BANK SHOT",
       genre: "POOL",
+      family: "SPORT",
       tagline: "Think one bounce further than feels necessary.",
       controls: "← → aim · SPACE hold to power",
       pad: "lr+fire",
@@ -15980,10 +16835,71 @@
       id: "draw-weight",
       name: "DRAW WEIGHT",
       genre: "ARCHERY",
+      family: "SPORT",
       tagline: "Wind, drop, and no straight lines.",
       controls: "↑ ↓ elevation · SPACE hold to draw",
       pad: "ud+fire",
       make: cabinetDrawWeight
+    },
+    {
+      id: "crossfade",
+      name: "CROSSFADE",
+      genre: "MIXING",
+      family: "TIMING",
+      tagline: "Beat-matching is a control loop with a crowd attached.",
+      controls: "← → fader · SPACE nudge the second deck",
+      pad: "lr+fire",
+      make: cabinetCrossfade
+    },
+    {
+      id: "orbital",
+      name: "ORBITAL",
+      genre: "ORBIT",
+      family: "DRIVE",
+      tagline: "One burn. The well does the rest.",
+      controls: "↑ ↓ angle · SPACE hold to burn",
+      pad: "ud+fire",
+      make: cabinetOrbital
+    },
+    {
+      id: "spot-kick",
+      name: "SPOT KICK",
+      genre: "SHOOTOUT",
+      family: "SPORT",
+      tagline: "You take one, then you keep one. Both are a read.",
+      controls: "← → choose · SPACE commit",
+      pad: "lr+fire",
+      make: cabinetSpotKick
+    },
+    {
+      id: "handshake",
+      name: "HANDSHAKE",
+      genre: "PROTOCOL",
+      family: "TIMING",
+      tagline: "Long and short presses, and it gets stricter.",
+      controls: "SPACE tap short or hold long",
+      pad: "tap",
+      make: cabinetHandshake
+    },
+    {
+      id: "untangle",
+      name: "UNTANGLE",
+      genre: "GRAPH",
+      family: "PUZZLE",
+      tagline: "A clean layout always exists. Seeing it is the work.",
+      controls: "arrows move · SPACE grab or drop",
+      pad: "dpad+fire",
+      make: cabinetUntangle
+    },
+    {
+      id: "grid-proof",
+      name: "GRID PROOF",
+      genre: "NONOGRAM",
+      family: "PUZZLE",
+      tagline: "No hidden information and no luck.",
+      controls: "arrows move · SPACE fill",
+      pad: "dpad+fire",
+      make: cabinetGridProof
     }
   ];
 
@@ -16129,17 +17045,19 @@
 
     var selectHead = el("div", "arcade-select-head");
     selectHead.appendChild(el("h2", "arcade-select-title", "SELECT A CABINET"));
-    selectHead.appendChild(
-      el("p", "arcade-credits", "CREDITS \u221e · FREE PLAY · ALSO METERED")
-    );
+    nodes.selectCount = el("p", "arcade-credits", "");
+    selectHead.appendChild(nodes.selectCount);
     nodes.select.appendChild(selectHead);
 
-    /* Genre filters. The roster is the source of truth for which ones exist,
-       so adding a cabinet with a new genre grows this row on its own rather
-       than needing a second list kept in step by hand. */
+    /* Filters run on the cabinet's *family*, not its genre. The roster is
+       still the source of truth, but at a hundred cabinets there are ~90
+       distinct genres, and a filter row with ninety chips in it is a worse
+       maze than the grid it is meant to tame. Each tile keeps its specific
+       genre on the badge — the family is the shelf, the genre is the label. */
     var genres = ["ALL"];
     CABINETS.forEach(function (cabinet) {
-      if (genres.indexOf(cabinet.genre) === -1) genres.push(cabinet.genre);
+      var family = cabinet.family || cabinet.genre;
+      if (genres.indexOf(family) === -1) genres.push(family);
     });
     nodes.filters = el("div", "arcade-filters");
     nodes.filters.setAttribute("role", "group");
@@ -16162,6 +17080,7 @@
       button.type = "button";
       button.setAttribute("data-cabinet", cabinet.id);
       button.setAttribute("data-genre", cabinet.genre);
+      button.setAttribute("data-family", cabinet.family || cabinet.genre);
 
       // Decorative: the marquee is drawn by CSS off the genre, and a screen
       // reader announcing "image" for a gradient helps nobody.
@@ -16728,13 +17647,20 @@
     );
     var shown = 0;
     visibleCabinets().forEach(function (button) {
-      var match = genre === "ALL" || button.getAttribute("data-genre") === genre;
+      var match = genre === "ALL" || button.getAttribute("data-family") === genre;
       // `hidden` rather than display:none in CSS: a filtered-out tile must
       // leave the tab order as well as the layout, and hidden does both
       // without the stylesheet having to know about filtering at all.
       button.hidden = !match;
       if (match) shown += 1;
     });
+    // A hundred tiles is enough that "how many am I looking at" stops being
+    // obvious from the grid itself.
+    if (nodes.selectCount) {
+      nodes.selectCount.textContent =
+        (genre === "ALL" ? shown + " CABINETS" : shown + " OF " + CABINETS.length) +
+        " · FREE PLAY · ALSO METERED";
+    }
     // Repick immediately rather than letting the running demo finish. It draws
     // from the filtered pool, so leaving it alone shows a PUZZLE cabinet under
     // an FPS-only filter until it happens to die — and under reduced motion,
@@ -16805,7 +17731,7 @@
 
   function pickAttract() {
     var pool = CABINETS.filter(function (c) {
-      return activeGenre === "ALL" || c.genre === activeGenre;
+      return activeGenre === "ALL" || (c.family || c.genre) === activeGenre;
     });
     if (!pool.length) pool = CABINETS;
     var cabinet = pool[Math.floor(random() * pool.length)];
