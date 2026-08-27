@@ -12203,6 +12203,664 @@
     return game;
   }
 
+  /* ---- 72. BLAST MAP -----------------------------------------------------
+
+     Sweep a grid for unsigned cells using nothing but the counts around the
+     ones you have already opened. The genre is deduction under a rule that
+     one wrong click ends the board, which is also the deployment model most
+     teams are on. */
+  function cabinetBlastMap(random) {
+    var COLS = 12;
+    var ROWS = 9;
+    var CELL = 20;
+    var OX = (W - COLS * CELL) / 2;
+    var OY = 40;
+
+    var game = { id: "blast-map", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var cells, cursor, level, cleared, held, flagging, message, messageAge;
+
+    function idx(x, y) { return y * COLS + x; }
+
+    function neighbours(x, y) {
+      var out = [];
+      for (var dy = -1; dy <= 1; dy += 1) {
+        for (var dx = -1; dx <= 1; dx += 1) {
+          if (!dx && !dy) continue;
+          var nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+          out.push(idx(nx, ny));
+        }
+      }
+      return out;
+    }
+
+    function deal() {
+      cells = [];
+      for (var i = 0; i < COLS * ROWS; i += 1) cells.push({ mine: false, open: false, flag: false, count: 0 });
+      var mines = Math.min(28, 12 + level * 2);
+      while (mines > 0) {
+        var pick = Math.floor(random() * cells.length);
+        if (cells[pick].mine) continue;
+        cells[pick].mine = true;
+        mines -= 1;
+      }
+      for (var y = 0; y < ROWS; y += 1) {
+        for (var x = 0; x < COLS; x += 1) {
+          if (cells[idx(x, y)].mine) continue;
+          cells[idx(x, y)].count = neighbours(x, y).filter(function (n) { return cells[n].mine; }).length;
+        }
+      }
+      cursor = { x: 0, y: 0 };
+      cleared = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      flagging = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    function open(x, y) {
+      var cell = cells[idx(x, y)];
+      if (cell.open || cell.flag) return;
+      cell.open = true;
+      cleared += 1;
+      game.score += 4;
+      if (cell.count === 0 && !cell.mine) {
+        neighbours(x, y).forEach(function (n) {
+          if (!cells[n].open) open(n % COLS, Math.floor(n / COLS));
+        });
+      }
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var cell = cells[idx(cursor.x, cursor.y)];
+        if (cell.mine) {
+          game.lives -= 1;
+          message = "UNSIGNED CELL — BOARD LOST";
+          messageAge = 0;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          deal();
+          return;
+        }
+        open(cursor.x, cursor.y);
+        var safe = cells.filter(function (c) { return !c.mine; }).length;
+        if (cells.filter(function (c) { return c.open; }).length >= safe) {
+          level += 1;
+          game.score += 200;
+          message = "SWEPT — LEVEL " + level;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          deal();
+        }
+        return;
+      }
+      if (input.left) cursor.x = (cursor.x + COLS - 1) % COLS;
+      else if (input.right) cursor.x = (cursor.x + 1) % COLS;
+      else if (input.up) cursor.y = (cursor.y + ROWS - 1) % ROWS;
+      else if (input.down) cursor.y = (cursor.y + 1) % ROWS;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      cells.forEach(function (cell, i) {
+        var x = OX + (i % COLS) * CELL;
+        var y = OY + Math.floor(i / COLS) * CELL;
+        if (!cell.open) {
+          ctx.fillStyle = ink.wall[1];
+          ctx.fillRect(x + 1, y + 1, CELL - 3, CELL - 3);
+          ctx.fillStyle = ink.wall[2];
+          ctx.fillRect(x + 3, y + 3, CELL - 7, CELL - 7);
+        } else {
+          ctx.fillStyle = ink.grid;
+          ctx.fillRect(x + 1, y + 1, CELL - 3, CELL - 3);
+          if (cell.count) {
+            ctx.font = '8px "IBM Plex Mono", monospace';
+            ctx.textAlign = "center";
+            ctx.fillStyle = cell.count > 2 ? ink.danger : cell.count > 1 ? ink.brass : ink.verify;
+            ctx.fillText(String(cell.count), x + CELL / 2 - 1, y + CELL / 2);
+            ctx.textAlign = "left";
+          }
+        }
+      });
+      var cx = OX + cursor.x * CELL, cy = OY + cursor.y * CELL;
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(cx, cy, CELL - 1, 2);
+      ctx.fillRect(cx, cy + CELL - 3, CELL - 1, 2);
+      ctx.fillRect(cx, cy, 2, CELL - 1);
+      ctx.fillRect(cx + CELL - 3, cy, 2, CELL - 1);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 6, 20);
+      ctx.fillText("OPENED " + cleared, W - 90, 20);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · OPENED " + cleared; };
+    return game;
+  }
+
+  /* ---- 73. WORD LOCK -----------------------------------------------------
+
+     Guess the five-letter scope. Right letter in the right slot goes green,
+     right letter in the wrong slot goes amber, and you have six tries. Built
+     for five keys: up and down cycle a letter, left and right change slot. */
+  function cabinetWordLock(random) {
+    var WORDS = [
+      "SCOPE", "TOKEN", "GRANT", "AUDIT", "PROOF", "NONCE", "LEDGE",
+      "QUOTA", "CLAIM", "TRUST", "LIMIT", "BATCH", "CHAIN", "STAMP"
+    ];
+    var ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    var game = { id: "word-lock", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var answer, guesses, current, slot, held, round, message, messageAge;
+
+    function newWord() {
+      answer = WORDS[Math.floor(random() * WORDS.length)];
+      guesses = [];
+      current = ["A", "A", "A", "A", "A"];
+      slot = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      round = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      newWord();
+    };
+
+    function scoreGuess(word) {
+      var marks = [];
+      for (var i = 0; i < 5; i += 1) {
+        marks.push(word[i] === answer.charAt(i) ? 2 : answer.indexOf(word[i]) >= 0 ? 1 : 0);
+      }
+      return marks;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var word = current.join("");
+        var marks = scoreGuess(current);
+        guesses.push({ word: word, marks: marks });
+        var solvedIt = marks.every(function (m) { return m === 2; });
+        if (solvedIt) {
+          round += 1;
+          game.score += 200 - guesses.length * 20;
+          message = "LOCK OPEN — " + word;
+          messageAge = 0;
+          fx.flash("verify", 1);
+          newWord();
+        } else if (guesses.length >= 6) {
+          game.lives -= 1;
+          message = "IT WAS " + answer;
+          messageAge = 0;
+          fx.shake(10);
+          if (game.lives <= 0) { game.over = true; return; }
+          newWord();
+        }
+        return;
+      }
+      if (input.left) slot = (slot + 4) % 5;
+      else if (input.right) slot = (slot + 1) % 5;
+      else if (input.up || input.down) {
+        var at = ALPHABET.indexOf(current[slot]);
+        current[slot] = ALPHABET.charAt((at + (input.up ? 1 : 25)) % 26);
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "GUESS THE SCOPE", 18, "dim");
+      guesses.forEach(function (g, row) {
+        for (var i = 0; i < 5; i += 1) {
+          var x = W / 2 - 100 + i * 40;
+          var y = 30 + row * 26;
+          ctx.fillStyle = g.marks[i] === 2 ? ink.verify : g.marks[i] === 1 ? ink.brass : ink.wall[2];
+          ctx.fillRect(x, y, 36, 22);
+          ctx.font = '10px "IBM Plex Mono", monospace';
+          ctx.textAlign = "center";
+          ctx.fillStyle = ink.bg;
+          ctx.fillText(g.word.charAt(i), x + 18, y + 12);
+          ctx.textAlign = "left";
+        }
+      });
+      for (var i = 0; i < 5; i += 1) {
+        var x = W / 2 - 100 + i * 40;
+        var y = 30 + guesses.length * 26;
+        ctx.fillStyle = i === slot ? ink.bright : ink.wall[3];
+        ctx.fillRect(x, y, 36, 22);
+        ctx.font = '10px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = i === slot ? ink.bg : ink.ink;
+        ctx.fillText(current[i], x + 18, y + 12);
+        ctx.textAlign = "left";
+      }
+      centreText(ctx, ink, "↑ ↓ letter · ← → slot · SPACE submit", H - 22, "dim", 7);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("TRY " + (guesses.length + 1) + "/6", 6, 16);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 8, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LOCK " + round + " · TRY " + (guesses.length + 1) + "/6"; };
+    return game;
+  }
+
+  /* ---- 74. TILE AUDIT ----------------------------------------------------
+
+     Clear the stack by matching free pairs. A tile is free when nothing sits
+     on its left or its right, so the order you clear in decides whether the
+     board opens up or seizes — which is the same property a dependency graph
+     has. */
+  function cabinetTileAudit(random) {
+    var FACES = ["SIG", "TTL", "REF", "TXN", "IDX", "ACK", "SUM", "SEQ"];
+
+    var game = { id: "tile-audit", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var tiles, cursor, picked, level, held, clock, message, messageAge;
+
+    function deal() {
+      tiles = [];
+      var rows = 4;
+      var cols = 7;
+      var pool = [];
+      for (var i = 0; i < (rows * cols) / 2; i += 1) {
+        var face = FACES[i % FACES.length];
+        pool.push(face, face);
+      }
+      for (var s = pool.length - 1; s > 0; s -= 1) {
+        var j = Math.floor(random() * (s + 1));
+        var t = pool[s]; pool[s] = pool[j]; pool[j] = t;
+      }
+      pool.forEach(function (face, i) {
+        tiles.push({ face: face, x: i % cols, y: Math.floor(i / cols), gone: false });
+      });
+      cursor = 0;
+      picked = -1;
+      clock = 60 + level * 5;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    function free(tile) {
+      if (tile.gone) return false;
+      var left = tiles.some(function (t) { return !t.gone && t.y === tile.y && t.x === tile.x - 1; });
+      var right = tiles.some(function (t) { return !t.gone && t.y === tile.y && t.x === tile.x + 1; });
+      return !left || !right;
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      clock -= dt;
+      if (clock <= 0) {
+        game.lives -= 1;
+        message = "AUDIT WINDOW CLOSED";
+        messageAge = 0;
+        fx.shake(9);
+        if (game.lives <= 0) { game.over = true; return; }
+        deal();
+        return;
+      }
+
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var tile = tiles[cursor];
+        if (!tile || tile.gone || !free(tile)) { fx.shake(3); return; }
+        if (picked < 0) { picked = cursor; return; }
+        if (picked === cursor) { picked = -1; return; }
+        var other = tiles[picked];
+        if (other.face === tile.face) {
+          other.gone = tile.gone = true;
+          game.score += 30;
+          fx.flash("verify", 0.6);
+          if (tiles.every(function (t) { return t.gone; })) {
+            level += 1;
+            game.score += 200;
+            message = "STACK CLEARED — LEVEL " + level;
+            messageAge = 0;
+            deal();
+          }
+        } else {
+          fx.shake(5);
+        }
+        picked = -1;
+        return;
+      }
+      var step = input.left ? -1 : input.right ? 1 : input.up ? -7 : 7;
+      for (var guard = 0; guard < tiles.length; guard += 1) {
+        cursor = (cursor + step + tiles.length) % tiles.length;
+        if (!tiles[cursor].gone) break;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      tiles.forEach(function (t, i) {
+        if (t.gone) return;
+        var x = 22 + t.x * 40;
+        var y = 46 + t.y * 42;
+        var open = free(t);
+        ctx.fillStyle = i === picked ? ink.bright : open ? ink.wall[1] : ink.wall[3];
+        ctx.fillRect(x, y, 36, 38);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(x + 2, y + 2, 32, 34);
+        ctx.font = '8px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = open ? ink.ink : ink.dim;
+        ctx.fillText(t.face, x + 18, y + 20);
+        ctx.textAlign = "left";
+        if (i === cursor) {
+          ctx.fillStyle = ink.verify;
+          ctx.fillRect(x, y + 36, 36, 3);
+        }
+      });
+      drawBar(ctx, ink, 6, 16, W - 12, 5, clock / (60 + level * 5), clock < 12 ? "danger" : "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("LEVEL " + level, 6, 12);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 8, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "LEVEL " + level + " · " + Math.ceil(clock) + "s"; };
+    return game;
+  }
+
+  /* ---- 75. PATIENCE ------------------------------------------------------
+
+     A one-column solitaire: play a card one higher or one lower than the pile
+     top, or draw a new one at the cost of a card from a small stock. The
+     smallest complete card game that still has a decision in it. */
+  function cabinetPatience(random) {
+    var game = { id: "patience", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var hand, pileTop, stock, cursor, held, streak, round, message, messageAge;
+
+    function deal() {
+      hand = [];
+      for (var i = 0; i < 6; i += 1) hand.push(1 + Math.floor(random() * 13));
+      pileTop = 1 + Math.floor(random() * 13);
+      stock = 8;
+      cursor = 0;
+      streak = 0;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      round = 1;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      deal();
+    };
+
+    function playable(v) {
+      var diff = Math.abs(v - pileTop);
+      return diff === 1 || diff === 12; // king wraps to ace
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var card = hand[cursor];
+        if (card == null) return;
+        if (playable(card)) {
+          pileTop = card;
+          hand.splice(cursor, 1);
+          if (cursor >= hand.length) cursor = Math.max(0, hand.length - 1);
+          streak += 1;
+          game.score += 10 * streak;
+          fx.flash("verify", 0.5);
+          if (!hand.length) {
+            round += 1;
+            game.score += 150;
+            message = "HAND CLEARED — ROUND " + round;
+            messageAge = 0;
+            deal();
+          }
+        } else {
+          fx.shake(4);
+          streak = 0;
+        }
+        return;
+      }
+      if (input.up || input.down) {
+        // Draw: turn the top of the stock onto the pile, at a cost.
+        if (stock > 0) {
+          stock -= 1;
+          pileTop = 1 + Math.floor(random() * 13);
+          streak = 0;
+        } else {
+          game.lives -= 1;
+          message = "STOCK EMPTY";
+          messageAge = 0;
+          fx.shake(9);
+          if (game.lives <= 0) { game.over = true; return; }
+          deal();
+        }
+        return;
+      }
+      if (input.left) cursor = (cursor + hand.length - 1) % hand.length;
+      else if (input.right) cursor = (cursor + 1) % hand.length;
+    };
+
+    function label(v) {
+      return v === 1 ? "A" : v === 11 ? "J" : v === 12 ? "Q" : v === 13 ? "K" : String(v);
+    }
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "ONE HIGHER OR ONE LOWER", 20, "dim");
+      ctx.fillStyle = ink.brass;
+      ctx.fillRect(W / 2 - 26, 44, 52, 66);
+      ctx.font = '20px "IBM Plex Mono", monospace';
+      ctx.textAlign = "center";
+      ctx.fillStyle = ink.bg;
+      ctx.fillText(label(pileTop), W / 2, 78);
+      ctx.textAlign = "left";
+
+      hand.forEach(function (card, i) {
+        var x = 20 + i * 48;
+        var y = H - 90;
+        var ok = playable(card);
+        ctx.fillStyle = i === cursor ? ink.bright : ok ? ink.verify : ink.wall[2];
+        ctx.fillRect(x, y, 40, 56);
+        ctx.font = '14px "IBM Plex Mono", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = ink.bg;
+        ctx.fillText(label(card), x + 20, y + 28);
+        ctx.textAlign = "left";
+      });
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("STOCK " + stock, 6, 16);
+      ctx.fillText("STREAK " + streak, W - 78, 16);
+      centreText(ctx, ink, "↑ ↓ draw from stock", H - 18, "dim", 7);
+      if (messageAge < 2) centreText(ctx, ink, message, H - 6, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · STOCK " + stock; };
+    return game;
+  }
+
+  /* ---- 76. MATE IN ONE ---------------------------------------------------
+
+     One move, one board, one correct answer. A puzzle cabinet where the whole
+     content is recognising the shape — no clock pressure, just a queue of
+     positions that get less obvious. */
+  function cabinetMateInOne(random) {
+    var SIZE = 6;
+    var CELL = 28;
+    var OX = (W - SIZE * CELL) / 2;
+    var OY = 48;
+
+    var game = { id: "mate-in-one", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var rook, king, blocker, cursor, level, held, message, messageAge, solvedCount;
+
+    function build() {
+      // Generated backwards from a known mate: place the enemy key on an
+      // edge, put the rook where it can reach the mating file, and add a
+      // blocker that rules out one wrong answer.
+      king = { x: Math.floor(random() * SIZE), y: 0 };
+      var mateY = SIZE - 1;
+      rook = { x: Math.floor(random() * SIZE), y: 2 + Math.floor(random() * (SIZE - 3)) };
+      if (rook.x === king.x) rook.x = (rook.x + 1) % SIZE;
+      blocker = { x: (king.x + 2 + Math.floor(random() * 2)) % SIZE, y: 1 + Math.floor(random() * 2) };
+      cursor = { x: rook.x, y: rook.y };
+      // The answer is: move the rook onto the king's file (same column),
+      // anywhere it is not blocked.
+      if (blocker.x === king.x) blocker.x = (blocker.x + 1) % SIZE;
+      void mateY;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      level = 1;
+      solvedCount = 0;
+      held = false;
+      messageAge = 9;
+      fx.reset();
+      build();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      messageAge += dt;
+      var pressed = input.left || input.right || input.up || input.down || input.fire;
+      if (!pressed) { held = false; return; }
+      if (held) return;
+      held = true;
+
+      if (input.fire) {
+        var legal = cursor.x === rook.x || cursor.y === rook.y;
+        var correct = legal && cursor.x === king.x && cursor.y !== king.y;
+        if (correct) {
+          solvedCount += 1;
+          level += 1;
+          game.score += 120;
+          message = "MATE — THE FILE WAS THE ANSWER";
+          messageAge = 0;
+          fx.flash("verify", 1);
+          build();
+        } else {
+          game.lives -= 1;
+          message = legal ? "NOT MATE" : "THAT IS NOT A LEGAL ROOK MOVE";
+          messageAge = 0;
+          fx.shake(8);
+          if (game.lives <= 0) { game.over = true; return; }
+          build();
+        }
+        return;
+      }
+      if (input.left) cursor.x = (cursor.x + SIZE - 1) % SIZE;
+      else if (input.right) cursor.x = (cursor.x + 1) % SIZE;
+      else if (input.up) cursor.y = (cursor.y + SIZE - 1) % SIZE;
+      else if (input.down) cursor.y = (cursor.y + 1) % SIZE;
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      centreText(ctx, ink, "ONE MOVE. PUT IT ON THE FILE.", 24, "dim");
+      for (var y = 0; y < SIZE; y += 1) {
+        for (var x = 0; x < SIZE; x += 1) {
+          ctx.fillStyle = (x + y) % 2 ? ink.wall[3] : ink.wall[2];
+          ctx.fillRect(OX + x * CELL, OY + y * CELL, CELL, CELL);
+        }
+      }
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(OX + king.x * CELL + 6, OY + king.y * CELL + 6, CELL - 12, CELL - 12);
+      ctx.fillStyle = ink.wall[1];
+      ctx.fillRect(OX + blocker.x * CELL + 8, OY + blocker.y * CELL + 8, CELL - 16, CELL - 16);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(OX + rook.x * CELL + 5, OY + rook.y * CELL + 5, CELL - 10, CELL - 10);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(OX + cursor.x * CELL, OY + cursor.y * CELL, CELL, 2);
+      ctx.fillRect(OX + cursor.x * CELL, OY + cursor.y * CELL + CELL - 2, CELL, 2);
+      ctx.fillRect(OX + cursor.x * CELL, OY + cursor.y * CELL, 2, CELL);
+      ctx.fillRect(OX + cursor.x * CELL + CELL - 2, OY + cursor.y * CELL, 2, CELL);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("PUZZLE " + level, 6, 16);
+      if (messageAge < 2.4) centreText(ctx, ink, message, H - 10, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "PUZZLE " + level + " · SOLVED " + solvedCount; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -12842,6 +13500,51 @@
       controls: "← → pick · SPACE lift or pour",
       pad: "lr+fire",
       make: cabinetSortKeys
+    },
+    {
+      id: "blast-map",
+      name: "BLAST MAP",
+      genre: "MINEFIELD",
+      tagline: "Deduction, where one wrong click ends the board.",
+      controls: "arrows move · SPACE open",
+      pad: "dpad+fire",
+      make: cabinetBlastMap
+    },
+    {
+      id: "word-lock",
+      name: "WORD LOCK",
+      genre: "WORD",
+      tagline: "Five letters, six tries, one scope.",
+      controls: "↑ ↓ letter · ← → slot · SPACE submit",
+      pad: "dpad+fire",
+      make: cabinetWordLock
+    },
+    {
+      id: "tile-audit",
+      name: "TILE AUDIT",
+      genre: "TILES",
+      tagline: "The order you clear in decides whether the board opens.",
+      controls: "arrows move · SPACE pick a pair",
+      pad: "dpad+fire",
+      make: cabinetTileAudit
+    },
+    {
+      id: "patience",
+      name: "PATIENCE",
+      genre: "CARDS",
+      tagline: "One higher or one lower, and a stock that runs out.",
+      controls: "← → pick · SPACE play · ↑ ↓ draw",
+      pad: "dpad+fire",
+      make: cabinetPatience
+    },
+    {
+      id: "mate-in-one",
+      name: "MATE IN ONE",
+      genre: "CHESS",
+      tagline: "One move, one board, one correct answer.",
+      controls: "arrows move · SPACE commit",
+      pad: "dpad+fire",
+      make: cabinetMateInOne
     }
   ];
 
