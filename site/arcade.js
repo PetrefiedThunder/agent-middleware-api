@@ -10847,6 +10847,685 @@
     return game;
   }
 
+  /* ---- 62. SHARD FIELD ---------------------------------------------------
+
+     Drifting shards of a partitioned store. Shoot one and it splits; the
+     field only clears when every piece is small enough to collect, which is
+     what re-sharding feels like from the inside. */
+  function cabinetShardField(random) {
+    var game = { id: "shard-field", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(70);
+    var ship, shards, shots, wave, hurt, cooldown;
+
+    function spawn(x, y, tier) {
+      var a = random() * Math.PI * 2;
+      shards.push({
+        x: x, y: y, tier: tier,
+        vx: Math.cos(a) * (14 + tier * 8),
+        vy: Math.sin(a) * (14 + tier * 8),
+        spin: random() * 4
+      });
+    }
+
+    function seed() {
+      shards = [];
+      for (var i = 0; i < 2 + wave; i += 1) {
+        spawn(random() < 0.5 ? 10 : W - 10, random() * H, 3);
+      }
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      ship = { x: W / 2, y: H / 2, angle: -Math.PI / 2, vx: 0, vy: 0 };
+      shots = [];
+      wave = 1;
+      hurt = 0;
+      cooldown = 0;
+      fx.reset();
+      bits.clear();
+      seed();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      cooldown = Math.max(0, cooldown - dt);
+
+      if (input.left) ship.angle -= 3 * dt;
+      if (input.right) ship.angle += 3 * dt;
+      if (input.up) {
+        ship.vx += Math.cos(ship.angle) * 110 * dt;
+        ship.vy += Math.sin(ship.angle) * 110 * dt;
+        bits.burst(ship.x - Math.cos(ship.angle) * 6, ship.y - Math.sin(ship.angle) * 6, 1,
+          { colour: "brass", speed: 30, life: 0.25 });
+      }
+      ship.vx *= 0.99;
+      ship.vy *= 0.99;
+      ship.x = (ship.x + ship.vx * dt + W) % W;
+      ship.y = (ship.y + ship.vy * dt + H) % H;
+
+      if (input.fire && cooldown <= 0) {
+        cooldown = 0.22;
+        shots.push({ x: ship.x, y: ship.y, vx: Math.cos(ship.angle) * 190, vy: Math.sin(ship.angle) * 190, life: 1.1 });
+      }
+
+      shots.forEach(function (s) {
+        s.x = (s.x + s.vx * dt + W) % W;
+        s.y = (s.y + s.vy * dt + H) % H;
+        s.life -= dt;
+      });
+      shots = shots.filter(function (s) { return s.life > 0; });
+
+      for (var i = shards.length - 1; i >= 0; i -= 1) {
+        var sh = shards[i];
+        sh.x = (sh.x + sh.vx * dt + W) % W;
+        sh.y = (sh.y + sh.vy * dt + H) % H;
+        sh.spin += dt * 2;
+        var size = sh.tier * 5;
+
+        for (var s = shots.length - 1; s >= 0; s -= 1) {
+          if (Math.abs(shots[s].x - sh.x) > size || Math.abs(shots[s].y - sh.y) > size) continue;
+          shots.splice(s, 1);
+          shards.splice(i, 1);
+          game.score += sh.tier * 12;
+          bits.burst(sh.x, sh.y, 8, { colour: "brass", speed: 60, life: 0.5 });
+          fx.shake(3);
+          if (sh.tier > 1) {
+            spawn(sh.x, sh.y, sh.tier - 1);
+            spawn(sh.x, sh.y, sh.tier - 1);
+          }
+          break;
+        }
+        if (!shards[i]) continue;
+        if (hurt <= 0 && Math.abs(sh.x - ship.x) < size && Math.abs(sh.y - ship.y) < size) {
+          hurt = 1.2;
+          game.lives -= 1;
+          fx.shake(12);
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+          ship.vx = ship.vy = 0;
+        }
+      }
+
+      if (!shards.length) {
+        wave += 1;
+        game.score += 100;
+        fx.flash("verify", 1);
+        seed();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 40);
+      fx.begin(ctx);
+      shards.forEach(function (sh) {
+        var size = sh.tier * 5;
+        ctx.fillStyle = ink.wall[1];
+        ctx.fillRect(Math.round(sh.x) - size, Math.round(sh.y) - size, size * 2, size * 2);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(sh.x) - size + 3, Math.round(sh.y) - size + 3, size * 2 - 6, size * 2 - 6);
+      });
+      shots.forEach(function (s) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(s.x) - 1, Math.round(s.y) - 1, 3, 3);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 10) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(Math.round(ship.x) - 4, Math.round(ship.y) - 4, 8, 8);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(ship.x + Math.cos(ship.angle) * 6) - 1, Math.round(ship.y + Math.sin(ship.angle) * 6) - 1, 3, 3);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WAVE " + wave + " · " + shards.length + " SHARDS", 4, 10);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · " + shards.length + " LEFT"; };
+    return game;
+  }
+
+  /* ---- 63. INTERCEPT -----------------------------------------------------
+
+     Missile defence. Unsigned calls fall on six tools; you place bursts ahead
+     of them and let the blast do the work. Ammunition is finite per wave, so
+     one burst that catches three is worth more than three that catch one. */
+  function cabinetIntercept(random) {
+    var game = { id: "intercept", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(80);
+    var cursor, bursts, falling, cities, ammo, wave, spawnLeft, spawnTimer, held;
+
+    function seedWave() {
+      spawnLeft = 5 + wave * 2;
+      spawnTimer = 0.6;
+      ammo = 10 + wave;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      cursor = { x: W / 2, y: H / 2 };
+      bursts = [];
+      falling = [];
+      cities = [];
+      for (var i = 0; i < 6; i += 1) cities.push({ x: 22 + i * 55, alive: true });
+      wave = 1;
+      held = false;
+      fx.reset();
+      bits.clear();
+      seedWave();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      if (input.pointerX != null) {
+        cursor.x = input.pointerX;
+        cursor.y = input.pointerY;
+      } else {
+        var speed = 140 * dt;
+        if (input.left) cursor.x -= speed;
+        if (input.right) cursor.x += speed;
+        if (input.up) cursor.y -= speed;
+        if (input.down) cursor.y += speed;
+      }
+      cursor.x = clamp(cursor.x, 4, W - 4);
+      cursor.y = clamp(cursor.y, 10, H - 30);
+
+      if (input.fire && !held && ammo > 0) {
+        held = true;
+        ammo -= 1;
+        bursts.push({ x: cursor.x, y: cursor.y, r: 2, grow: true });
+      } else if (!input.fire) held = false;
+
+      spawnTimer -= dt;
+      if (spawnLeft > 0 && spawnTimer <= 0) {
+        spawnTimer = Math.max(0.3, 1.4 - wave * 0.08);
+        spawnLeft -= 1;
+        var live = cities.filter(function (c) { return c.alive; });
+        if (live.length) {
+          var target = live[Math.floor(random() * live.length)];
+          falling.push({ x: random() * W, y: -6, tx: target.x, speed: 22 + wave * 3 });
+        }
+      }
+
+      bursts.forEach(function (b) {
+        if (b.grow) { b.r += 46 * dt; if (b.r > 22) b.grow = false; }
+        else b.r -= 30 * dt;
+      });
+      bursts = bursts.filter(function (b) { return b.r > 0; });
+
+      for (var i = falling.length - 1; i >= 0; i -= 1) {
+        var f = falling[i];
+        var dx = f.tx - f.x;
+        var d = Math.hypot(dx, H - 26 - f.y) || 1;
+        f.x += (dx / d) * f.speed * dt;
+        f.y += ((H - 26 - f.y) / d) * f.speed * dt;
+
+        var caught = bursts.some(function (b) { return Math.hypot(b.x - f.x, b.y - f.y) < b.r; });
+        if (caught) {
+          falling.splice(i, 1);
+          game.score += 25;
+          bits.burst(f.x, f.y, 8, { colour: "verify", speed: 60, life: 0.4 });
+          continue;
+        }
+        if (f.y >= H - 26) {
+          falling.splice(i, 1);
+          var hitCity = null;
+          cities.forEach(function (c) { if (c.alive && Math.abs(c.x - f.x) < 20) hitCity = c; });
+          if (hitCity) {
+            hitCity.alive = false;
+            game.lives -= 1;
+            fx.shake(12);
+            fx.flash("danger", 1);
+            bits.burst(hitCity.x, H - 20, 20, { colour: "danger", speed: 90, life: 0.7 });
+            if (game.lives <= 0) { game.over = true; return; }
+          }
+        }
+      }
+
+      if (!spawnLeft && !falling.length) {
+        wave += 1;
+        game.score += 80 + ammo * 5;
+        cities.forEach(function (c) { if (!c.alive && random() < 0.4) c.alive = true; });
+        seedWave();
+        fx.flash("verify", 0.8);
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, 0, 26);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, H - 22, W, 22);
+      cities.forEach(function (c) {
+        ctx.fillStyle = c.alive ? ink.verify : ink.grid;
+        ctx.fillRect(c.x - 14, H - 30, 28, 10);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(c.x - 9, H - 27, 4, 4);
+        ctx.fillRect(c.x + 4, H - 27, 4, 4);
+      });
+      falling.forEach(function (f) {
+        ctx.fillStyle = ink.danger;
+        ctx.fillRect(Math.round(f.x) - 2, Math.round(f.y) - 4, 4, 8);
+      });
+      bursts.forEach(function (b) {
+        ctx.fillStyle = b.grow ? ink.bright : ink.brass;
+        var r = Math.round(b.r);
+        ctx.fillRect(Math.round(b.x) - r, Math.round(b.y) - r, r * 2, r * 2);
+        ctx.fillStyle = ink.bg;
+        ctx.fillRect(Math.round(b.x) - r + 3, Math.round(b.y) - r + 3, r * 2 - 6, r * 2 - 6);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ammo ? ink.verify : ink.danger;
+      ctx.fillRect(Math.round(cursor.x) - 6, Math.round(cursor.y), 13, 1);
+      ctx.fillRect(Math.round(cursor.x), Math.round(cursor.y) - 6, 1, 13);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("BURSTS " + ammo, 4, 12);
+      ctx.fillText("WAVE " + wave, W - 60, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · BURSTS " + ammo; };
+    return game;
+  }
+
+  /* ---- 64. ARTILLERY -----------------------------------------------------
+
+     Two emplacements, one hill, alternating shots, and wind. Adjust angle and
+     power, fire, and watch. Turn-based aiming is the one competitive shape
+     that works with a single button and no reflexes at all. */
+  function cabinetArtillery(random) {
+    var game = { id: "artillery", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(60);
+    var angle, power, charging, shell, wind, turn, foeHp, myHp, terrain, message, messageAge, round;
+
+    function buildTerrain() {
+      terrain = [];
+      for (var x = 0; x <= W; x += 4) {
+        terrain.push(H - 44 - Math.sin(x * 0.012 + round) * 22 - Math.sin(x * 0.03) * 8);
+      }
+      wind = (random() - 0.5) * 30;
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      angle = 0.8;
+      power = 0.5;
+      charging = false;
+      shell = null;
+      turn = "you";
+      foeHp = 3;
+      myHp = 3;
+      round = 1;
+      messageAge = 9;
+      fx.reset();
+      bits.clear();
+      buildTerrain();
+    };
+
+    function groundAt(x) {
+      return terrain[clamp(Math.floor(x / 4), 0, terrain.length - 1)];
+    }
+
+    function launch(fromX, fromY, ang, pow, mine) {
+      shell = {
+        x: fromX, y: fromY,
+        vx: Math.cos(ang) * (70 + pow * 150) * (mine ? 1 : -1),
+        vy: -Math.sin(ang) * (70 + pow * 150),
+        mine: mine
+      };
+    }
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      messageAge += dt;
+
+      if (shell) {
+        shell.vx += wind * dt * 0.4;
+        shell.vy += 190 * dt;
+        shell.x += shell.vx * dt;
+        shell.y += shell.vy * dt;
+        var hitGround = shell.y >= groundAt(shell.x);
+        var targetX = shell.mine ? W - 24 : 24;
+        var hitTarget = Math.abs(shell.x - targetX) < 12 && shell.y > groundAt(targetX) - 22;
+        if (hitTarget || hitGround || shell.x < -20 || shell.x > W + 20) {
+          bits.burst(shell.x, Math.min(shell.y, H), 12, { colour: hitTarget ? "verify" : "brass", speed: 70, life: 0.5, gravity: 120 });
+          fx.shake(hitTarget ? 10 : 4);
+          if (hitTarget) {
+            if (shell.mine) {
+              foeHp -= 1;
+              game.score += 60;
+              message = "DIRECT HIT";
+              if (foeHp <= 0) {
+                round += 1;
+                game.score += 150;
+                foeHp = 3;
+                myHp = Math.min(3, myHp + 1);
+                buildTerrain();
+                message = "EMPLACEMENT DOWN — ROUND " + round;
+              }
+            } else {
+              myHp -= 1;
+              message = "TAKEN A HIT";
+              if (myHp <= 0) {
+                game.lives -= 1;
+                myHp = 3;
+                foeHp = 3;
+                if (game.lives <= 0) { game.over = true; return; }
+              }
+            }
+          } else {
+            message = shell.mine ? "SHORT" : "THEY MISSED";
+          }
+          messageAge = 0;
+          shell = null;
+          turn = turn === "you" ? "foe" : "you";
+          if (turn === "foe") {
+            // The opponent walks its aim toward you over successive rounds.
+            var guess = 0.65 + random() * 0.4;
+            var pw = 0.45 + random() * 0.4 + round * 0.02;
+            launch(W - 24, groundAt(W - 24) - 12, guess, Math.min(1, pw), false);
+          }
+        }
+        return;
+      }
+
+      if (turn !== "you") return;
+      if (input.up) angle = Math.min(1.4, angle + dt);
+      if (input.down) angle = Math.max(0.15, angle - dt);
+      if (input.fire) {
+        charging = true;
+        power = Math.min(1, power + dt * 0.7);
+      } else if (charging) {
+        charging = false;
+        launch(24, groundAt(24) - 12, angle, power, true);
+        power = 0.2;
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawParallaxBands(ctx, ink, 0, H * 0.55);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      terrain.forEach(function (y, i) { ctx.fillRect(i * 4, y, 4, H - y); });
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(16, groundAt(24) - 14, 18, 14);
+      ctx.fillStyle = ink.danger;
+      ctx.fillRect(W - 34, groundAt(W - 24) - 14, 18, 14);
+      if (shell) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(shell.x) - 2, Math.round(shell.y) - 2, 5, 5);
+      }
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.bright;
+      ctx.fillRect(Math.round(24 + Math.cos(angle) * 20) - 2, Math.round(groundAt(24) - 14 - Math.sin(angle) * 20) - 2, 4, 4);
+
+      drawBar(ctx, ink, 8, 8, 70, 5, power, "brass");
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WIND " + (wind > 0 ? "→" : "←") + Math.abs(wind).toFixed(0), 8, 24);
+      ctx.fillStyle = ink.verify;
+      ctx.fillText("YOU " + myHp, W - 96, 12);
+      ctx.fillStyle = ink.danger;
+      ctx.fillText("THEM " + foeHp, W - 46, 12);
+      if (messageAge < 1.8) centreText(ctx, ink, message, 40, "bright");
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "ROUND " + round + " · " + (turn === "you" ? "YOUR SHOT" : "THEIRS"); };
+    return game;
+  }
+
+  /* ---- 65. INVERT --------------------------------------------------------
+
+     A runner with one verb: flip which way down is. The obstacles alternate
+     between floor and ceiling, so the whole run is a rhythm of inversions
+     rather than a series of jumps. */
+  function cabinetInvert(random) {
+    var game = { id: "invert", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(40);
+    var runner, blocks, scroll, speed, held, hurt;
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      runner = { y: H - 40, vy: 0, flipped: false };
+      blocks = [];
+      scroll = 0;
+      speed = 82;
+      held = false;
+      hurt = 0;
+      fx.reset();
+      bits.clear();
+      for (var i = 0; i < 6; i += 1) blocks.push({ x: 200 + i * 90, top: random() < 0.5, h: 20 + random() * 26 });
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+      hurt = Math.max(0, hurt - dt);
+      speed = Math.min(190, 82 + scroll * 0.01);
+      scroll += speed * dt;
+      game.score = Math.floor(scroll / 12);
+
+      if (input.fire || input.up) {
+        if (!held) {
+          held = true;
+          runner.flipped = !runner.flipped;
+          fx.shake(2);
+          bits.burst(50, runner.y, 5, { colour: "verify", speed: 40, life: 0.3 });
+        }
+      } else held = false;
+
+      var target = runner.flipped ? 24 : H - 40;
+      runner.y += (target - runner.y) * Math.min(1, dt * 11);
+
+      for (var i = blocks.length - 1; i >= 0; i -= 1) {
+        var b = blocks[i];
+        b.x -= speed * dt;
+        if (b.x < -40) {
+          blocks.splice(i, 1);
+          var last = blocks.reduce(function (a, k) { return Math.max(a, k.x); }, W);
+          blocks.push({ x: last + 70 + random() * 60, top: random() < 0.5, h: 20 + random() * 30 });
+          continue;
+        }
+        if (b.x > 62 || b.x + 22 < 38) continue;
+        var inTop = runner.y < H / 2;
+        if (b.top === inTop && hurt <= 0) {
+          hurt = 1;
+          game.lives -= 1;
+          fx.shake(11);
+          fx.flash("danger", 1);
+          bits.burst(50, runner.y, 14, { colour: "danger", speed: 80, life: 0.5 });
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      drawStarfield(ctx, ink, scroll, 26);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[2];
+      ctx.fillRect(0, 0, W, 16);
+      ctx.fillRect(0, H - 16, W, 16);
+      blocks.forEach(function (b) {
+        ctx.fillStyle = ink.danger;
+        if (b.top) ctx.fillRect(Math.round(b.x), 16, 22, b.h);
+        else ctx.fillRect(Math.round(b.x), H - 16 - b.h, 22, b.h);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = hurt > 0 && Math.floor(hurt * 12) % 2 === 0 ? ink.danger : ink.verify;
+      ctx.fillRect(44, Math.round(runner.y) - 8, 12, 16);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText(Math.floor(scroll / 12) + "m", 4, 28);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return Math.floor(scroll / 12) + "m · " + Math.round(speed) + " m/s"; };
+    return game;
+  }
+
+  /* ---- 66. DEPTH CHARGE --------------------------------------------------
+
+     Hunt from the surface with sonar. Contacts are only visible in the ping;
+     between pings you are working from memory, which is what makes it a game
+     rather than a shooting gallery. */
+  function cabinetDepthCharge(random) {
+    var game = { id: "depth-charge", score: 0, lives: 3, over: false };
+    var fx = makeFx();
+    var bits = makeParticles(50);
+    var boat, charges, contacts, ping, pingTimer, wave, spawnLeft, held, leaked;
+
+    function seed() {
+      spawnLeft = 4 + wave;
+      contacts = [];
+    }
+
+    game.reset = function () {
+      game.score = 0;
+      game.lives = 3;
+      game.over = false;
+      boat = { x: W / 2 };
+      charges = [];
+      ping = 0;
+      pingTimer = 0;
+      wave = 1;
+      leaked = 0;
+      held = false;
+      fx.reset();
+      bits.clear();
+      seed();
+    };
+
+    game.update = function (dt, input) {
+      if (game.over) return;
+      fx.update(dt);
+      bits.update(dt);
+
+      var speed = 84 * dt;
+      if (input.left) boat.x -= speed;
+      if (input.right) boat.x += speed;
+      boat.x = clamp(boat.x, 12, W - 12);
+
+      pingTimer -= dt;
+      if (pingTimer <= 0) {
+        pingTimer = 2.4;
+        ping = 1;
+      }
+      ping = Math.max(0, ping - dt * 0.9);
+
+      if (input.fire && !held) {
+        held = true;
+        charges.push({ x: boat.x, y: 26, vy: 46 });
+      } else if (!input.fire) held = false;
+
+      if (spawnLeft > 0 && contacts.length < 4 && random() < dt * 0.9) {
+        spawnLeft -= 1;
+        contacts.push({
+          x: random() < 0.5 ? -10 : W + 10,
+          y: 70 + random() * (H - 100),
+          vx: (random() < 0.5 ? 1 : -1) * (16 + wave * 2)
+        });
+      }
+
+      for (var i = charges.length - 1; i >= 0; i -= 1) {
+        var c = charges[i];
+        c.y += c.vy * dt;
+        if (c.y > H) { charges.splice(i, 1); continue; }
+        for (var k = contacts.length - 1; k >= 0; k -= 1) {
+          if (Math.abs(contacts[k].x - c.x) > 12 || Math.abs(contacts[k].y - c.y) > 10) continue;
+          bits.burst(contacts[k].x, contacts[k].y, 12, { colour: "verify", speed: 70, life: 0.5 });
+          contacts.splice(k, 1);
+          charges.splice(i, 1);
+          game.score += 40;
+          fx.shake(6);
+          break;
+        }
+      }
+
+      for (var m = contacts.length - 1; m >= 0; m -= 1) {
+        contacts[m].x += contacts[m].vx * dt;
+        if (contacts[m].x > W + 20 || contacts[m].x < -20) {
+          contacts.splice(m, 1);
+          leaked += 1;
+          game.lives -= 1;
+          fx.flash("danger", 1);
+          if (game.lives <= 0) { game.over = true; return; }
+        }
+      }
+
+      if (!spawnLeft && !contacts.length) {
+        wave += 1;
+        game.score += 90;
+        fx.flash("verify", 0.8);
+        seed();
+      }
+    };
+
+    game.draw = function (ctx, ink) {
+      ctx.fillStyle = ink.bg;
+      ctx.fillRect(0, 0, W, H);
+      fx.begin(ctx);
+      ctx.fillStyle = ink.wall[3];
+      ctx.fillRect(0, 32, W, H - 32);
+      ctx.fillStyle = ink.grid;
+      for (var y = 40; y < H; y += 16) ctx.fillRect(0, y, W, 1);
+
+      // Contacts are only drawn while the ping is live.
+      if (ping > 0.05) {
+        contacts.forEach(function (c) {
+          ctx.fillStyle = ink.danger;
+          ctx.fillRect(Math.round(c.x) - 8, Math.round(c.y) - 4, 16, 8);
+        });
+        ctx.fillStyle = ink.verify;
+        var r = Math.round((1 - ping) * 200);
+        ctx.fillRect(Math.round(boat.x) - r, 30, r * 2, 1);
+      }
+      charges.forEach(function (c) {
+        ctx.fillStyle = ink.bright;
+        ctx.fillRect(Math.round(c.x) - 2, Math.round(c.y) - 3, 5, 6);
+      });
+      bits.draw(ctx, ink);
+      ctx.fillStyle = ink.verify;
+      ctx.fillRect(Math.round(boat.x) - 12, 20, 24, 10);
+      ctx.font = '8px "IBM Plex Mono", monospace';
+      ctx.fillStyle = ink.dim;
+      ctx.fillText("WAVE " + wave, 4, 12);
+      ctx.fillText("PING " + pingTimer.toFixed(1), W - 70, 12);
+      fx.end(ctx, ink);
+    };
+
+    game.hud = function () { return "WAVE " + wave + " · LEAKED " + leaked; };
+    return game;
+  }
+
   var CABINETS = [
     {
       id: "blast-radius",
@@ -11396,6 +12075,51 @@
       controls: "← → pick · SPACE hold to tend",
       pad: "lr+fire",
       make: cabinetSpinPlates
+    },
+    {
+      id: "shard-field",
+      name: "SHARD FIELD",
+      genre: "SPACE",
+      tagline: "Shoot a shard and it splits. Re-sharding, from inside.",
+      controls: "← → turn · ↑ thrust · SPACE fire",
+      pad: "dpad+fire",
+      make: cabinetShardField
+    },
+    {
+      id: "intercept",
+      name: "INTERCEPT",
+      genre: "DEFENCE",
+      tagline: "One burst that catches three beats three that catch one.",
+      controls: "arrows aim · SPACE burst",
+      pad: "dpad+fire",
+      make: cabinetIntercept
+    },
+    {
+      id: "artillery",
+      name: "ARTILLERY",
+      genre: "ARTILLERY",
+      tagline: "Angle, power, wind, and one shot each.",
+      controls: "↑ ↓ angle · SPACE hold to charge",
+      pad: "ud+fire",
+      make: cabinetArtillery
+    },
+    {
+      id: "invert",
+      name: "INVERT",
+      genre: "RUNNER",
+      tagline: "One verb: flip which way down is.",
+      controls: "SPACE invert",
+      pad: "tap",
+      make: cabinetInvert
+    },
+    {
+      id: "depth-charge",
+      name: "DEPTH CHARGE",
+      genre: "SONAR",
+      tagline: "Between pings you are working from memory.",
+      controls: "← → steer · SPACE drop",
+      pad: "lr+fire",
+      make: cabinetDepthCharge
     }
   ];
 
