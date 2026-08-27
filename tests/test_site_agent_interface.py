@@ -1986,6 +1986,22 @@ ARCADE_CABINET_IDS = (
     "key-rotation",
     "tail-latency",
     "race-condition",
+    # The console-era lineup: one cabinet per genre that sold a generation of
+    # hardware, all of them riffs rather than ports, and all of them named
+    # after a failure mode of this product's own domain.
+    "countersign",
+    "happy-path",
+    "least-privilege",
+    "escalation",
+    "arbitration",
+    "throughput",
+    "side-channel",
+    "cold-storage",
+    "block-store",
+    "last-quorum",
+    "heartbeat",
+    "brute-force",
+    "catalog",
 )
 
 # Everything the arcade's key map binds: the four arrows, their WASD aliases
@@ -2068,6 +2084,38 @@ def test_arcade_cabinets_are_generic_and_unbranded() -> None:
         "minecraft",
         "fortnite",
         "roblox",
+        # The console lineup pulls in forty years of franchises, so the names
+        # a contributor might reach for are no longer only shooters.
+        "super mario",
+        "sonic the hedgehog",
+        "zelda",
+        "metroid",
+        "final fantasy",
+        "dragon quest",
+        "pokemon",
+        "pokémon",
+        "street fighter",
+        "mortal kombat",
+        "tekken",
+        "mario kart",
+        "gran turismo",
+        "metal gear",
+        "resident evil",
+        "silent hill",
+        "grand theft auto",
+        "call of duty",
+        "guitar hero",
+        "streets of rage",
+        "double dragon",
+        "playstation",
+        "xbox",
+        "game boy",
+        "capcom",
+        "square enix",
+        "rockstar games",
+        "mojang",
+        "sony interactive",
+        "electronic arts",
     )
 
     for path in (SITE / "arcade.js", SITE / "arcade.css", SITE / "index.html"):
@@ -2100,8 +2148,9 @@ def test_arcade_cabinet_roster_is_coherent() -> None:
 
     ids = [cabinet.get("id", "") for cabinet in roster]
     assert sorted(ids) == sorted(ARCADE_CABINET_IDS), (
-        f"the cabinet roster is {sorted(ids)}, which is not the twelve cabinets "
-        f"the arcade is supposed to ship: {sorted(ARCADE_CABINET_IDS)}"
+        f"the cabinet roster is {sorted(ids)}, which is not the "
+        f"{len(ARCADE_CABINET_IDS)} cabinets the arcade is supposed to ship: "
+        f"{sorted(ARCADE_CABINET_IDS)}"
     )
     duplicates = sorted({one for one in ids if ids.count(one) > 1})
     assert not duplicates, (
@@ -2142,9 +2191,9 @@ def test_arcade_first_person_cabinets_say_they_turn_and_fire() -> None:
         cabinet["id"]: cabinet for cabinet in roster if cabinet.get("genre") == "FPS"
     }
 
-    assert set(first_person) == {"blast-radius", "hold-the-line"}, (
-        f"the cabinets declaring genre FPS are {sorted(first_person)}; the two "
-        "raycaster cabinets are blast-radius and hold-the-line"
+    assert set(first_person) == {"blast-radius", "hold-the-line", "countersign"}, (
+        f"the cabinets declaring genre FPS are {sorted(first_person)}; the "
+        "raycaster cabinets are blast-radius, hold-the-line and countersign"
     )
 
     for cabinet_id, cabinet in first_person.items():
