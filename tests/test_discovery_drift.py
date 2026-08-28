@@ -167,6 +167,12 @@ async def test_openapi_contains_core_control_plane_routes(client):
     assert "/mcp/messages" in paths
     assert "/mcp/tools/{service_id}/invoke" in paths
     assert "/mcp" not in paths
+    legacy_mcp_description = paths["/mcp/messages"]["post"]["description"]
+    assert "does not implement the standard MCP initialization lifecycle" in (
+        legacy_mcp_description
+    )
+    assert "New integrations should use" not in legacy_mcp_description
+    assert "/.well-known/agent.json" in legacy_mcp_description
     assert "/v1/billing/charge" in paths
     assert "/v1/audit/events" in paths
     assert "/v1/planner/optimize" in paths
