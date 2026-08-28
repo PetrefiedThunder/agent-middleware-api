@@ -211,6 +211,8 @@ def test_private_pilot_sop_runs_schema_check_inside_api_container() -> None:
     assert 'test "$sentinel_count" -eq 1' in sop
     assert 'test "$post_ready" = "true"' in sop
     assert sop.count('--manifest "$MANIFEST" --url "$API_URL"') == 2
+    assert 'railway variable set COMMIT_SHA="$DEPLOY_SHA"' in private_release
+    assert "--build-arg COMMIT_SHA" not in private_release
     source_gate = private_release.index(
         "python scripts/railway_preflight.py --manifest-only"
     )
@@ -223,6 +225,20 @@ def test_private_pilot_sop_runs_schema_check_inside_api_container() -> None:
     )
     assert source_gate < current_gate < deploy < post_gate
     assert "`railway run` executes locally" in sop
+
+
+def test_canonical_railway_sop_uses_service_variable_build_stamp() -> None:
+    sop = (REPO_ROOT / "docs" / "deploy-railway.md").read_text()
+    canonical = sop[
+        sop.index("## Canonical deploy path") : sop.index(
+            "## Required production variables"
+        )
+    ]
+
+    assert 'railway variable set COMMIT_SHA="$DEPLOY_SHA"' in canonical
+    assert "--skip-deploys" in canonical
+    assert "--build-arg COMMIT_SHA" not in canonical
+    assert "| `COMMIT_SHA` |" in sop
 
 
 def test_customer_restore_sop_does_not_misstate_volume_restore_semantics() -> None:

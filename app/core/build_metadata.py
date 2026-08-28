@@ -55,12 +55,15 @@ def get_build_provenance() -> str:
     *where that answer came from*, which is what distinguishes a release built
     through the documented operator path from one Railway rebuilt on its own.
 
-    Only ``railway up --build-arg COMMIT_SHA=...`` writes
-    ``/app/.build_commit_sha``. Railway sets ``RAILWAY_GIT_COMMIT_SHA`` on any
-    deployment it builds, including one triggered by a variable write against a
-    connected GitHub source. On a correct operator build both exist and agree,
-    so a disagreement — or a missing stamp — is the signature of a build that
-    did not come through the SOP.
+    The documented Railway release path sets the non-secret COMMIT_SHA
+    service variable immediately before ``railway up``. Railway supplies
+    defined service variables at build time, and the Dockerfile's matching ARG
+    writes ``/app/.build_commit_sha``. Railway sets
+    ``RAILWAY_GIT_COMMIT_SHA`` on any deployment it builds, including one
+    triggered by a variable write against a connected GitHub source. On a
+    correct operator build both exist and agree, so a disagreement — or a
+    missing stamp — is the signature of a build that did not come through the
+    SOP.
 
     Returns one of:
 

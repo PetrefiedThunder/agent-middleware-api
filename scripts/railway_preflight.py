@@ -450,8 +450,9 @@ def check_live(
         failures.append("enable_proof_surfaces=true — must be false in production")
 
     # Build provenance: did this image come through the documented release
-    # path? Only `railway up --build-arg COMMIT_SHA=...` bakes the stamp, so
-    # anything other than "stamped" means the running image was built by
+    # path? The operator sets COMMIT_SHA as a non-secret Railway service
+    # variable immediately before `railway up`; the Dockerfile's ARG bakes the
+    # stamp. Anything other than "stamped" means the running image was built by
     # something else — a Railway rebuild from a connected GitHub source, for
     # instance, which a plain variable write is enough to trigger.
     #
@@ -480,8 +481,8 @@ def check_live(
         if provenance != "stamped":
             failures.append(
                 f"build_provenance={provenance!r} — the running image was not "
-                "built by `railway up --build-arg COMMIT_SHA=...`; it did not "
-                "come through the documented release path"
+                "built with the documented COMMIT_SHA service-variable release "
+                "path; it did not come through the documented release path"
             )
 
     # Key presence, not truthiness: a *published* null must still fail the
