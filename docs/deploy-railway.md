@@ -62,7 +62,7 @@ releases are operator-run from a clean exact-SHA checkout.**
 # From repository root, linked to the Railway service:
 DEPLOY_SHA="$(git rev-parse HEAD)"
 RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
-railway up "$RELEASE_CONTEXT" --path-as-root \
+railway up "$RELEASE_CONTEXT" --path-as-root --no-gitignore \
   --service api-service --environment production --ci
 ```
 
@@ -84,6 +84,11 @@ deployment with the wrong SHA.
 Local Docker development uses `Dockerfile.dev` through `docker-compose.yml`;
 only the production `Dockerfile` requires the immutable stamp. Do not use the
 development Dockerfile for a production upload.
+
+`--no-gitignore` is mandatory for the release upload because
+`.build_commit_sha` is ignored in normal checkouts. The generated context
+contains only the exact `git archive` tree plus that non-secret stamp; never
+use `--no-gitignore` against an ordinary working tree.
 
 Railway uses `railway.json` → `build.builder = DOCKERFILE`. That is the only
 supported production image path for this project.
@@ -293,6 +298,7 @@ RELEASE_MARKER="manual-exact-sha-$DEPLOY_SHA-$RELEASE_NONCE"
 RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
 test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"
 railway up "$RELEASE_CONTEXT" --path-as-root \
+  --no-gitignore \
   --project "$PROJECT_ID" --service "$SERVICE" \
   --environment "$ENVIRONMENT" --ci \
   --message "$RELEASE_MARKER"

@@ -226,6 +226,10 @@ def test_private_pilot_sop_runs_schema_check_inside_api_container() -> None:
         'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"'
     )
     deploy = private_release.index('railway up "$RELEASE_CONTEXT" --path-as-root')
+    private_deploy = private_release[deploy : private_release.index(
+        "# Resolve and wait for the uniquely marked deployment"
+    )]
+    assert "--no-gitignore" in private_deploy
     post_gate = private_release.rindex(
         "python3 scripts/railway_preflight.py --live --strict"
     )
@@ -243,6 +247,8 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
 
     assert 'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in canonical
     assert 'railway up "$RELEASE_CONTEXT" --path-as-root' in canonical
+    canonical_deploy = canonical[canonical.index('railway up "$RELEASE_CONTEXT"') :]
+    assert "--no-gitignore" in canonical_deploy
     assert "railway variable set COMMIT_SHA" not in canonical
     assert "--build-arg COMMIT_SHA" not in canonical
     assert "Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA`" in canonical
