@@ -18,10 +18,12 @@ full release gate; do not backfill a final `v1.2.0` tag.
   `down` without exposing configuration or transport errors. A successful
   entry means the unauthenticated provider health endpoint was reachable and
   the local URL/key pair is present; it does not claim the key was accepted.
-- **Exact-SHA and stamped Railway releases fail preflight unless Sentinel is
-  `up`.** A legacy image may omit the field only when it also lacks build
-  provenance and no expected commit is requested, allowing the pre-mutation
-  inspection step without weakening the new release gate.
+- **Release preflight requires Sentinel `up`, with one explicit cutover
+  exception.** Exact-SHA checks never allow the exception. A legacy image
+  without build provenance retains its rollout note.
+  The first pre-mutation check against the stamped pre-Sentinel image uses an
+  explicit, narrowly constrained compatibility flag; manifests, identity
+  expectations, and post-deploy checks cannot use that exception.
 
 ### 🧹 One supported production configuration path
 

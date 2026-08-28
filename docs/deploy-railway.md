@@ -170,12 +170,16 @@ fails, so it works as a gate in a shell or in CI:
   service is healthy, reports `production_like=true`, has no unhealthy
   dependency, did **not** fall back to memory state, and has both
   `ENABLE_PROOF_SURFACES=false` and
-  `ENABLE_DOGFOOD_TOOL=false`. An exact-SHA or stamped release must also
-  publish `dependencies.sentinel.status=up`; any present non-`up` Sentinel
+  `ENABLE_DOGFOOD_TOOL=false`. Every exact-SHA check and ordinary stamped
+  release check must also publish `dependencies.sentinel.status=up`; any
+  present non-`up` Sentinel
   state fails. An older image that publishes neither Sentinel readiness nor
-  build provenance receives a rollout note only, so this pre-deploy check can
-  inspect it before the new image exists, provided no expected commit SHA is
-  requested. Add `--expected-version` and
+  build provenance receives a rollout note only. The first upgrade from the
+  stamped pre-Sentinel image may use the explicit, temporary
+  `--allow-legacy-missing-sentinel` mode for the pre-mutation check. That flag
+  is accepted only with `--live --strict` and without database checks, a
+  manifest, or release-identity expectations; it never accepts a present
+  non-`up` or malformed Sentinel entry. Add `--expected-version` and
   `--expected-commit-sha` after deployment to require exact release identity
   from both `/health` and `/health/dependencies`; the SHA must be the full
   40-character value.
@@ -272,10 +276,16 @@ test "$ci_conclusion" = "success"
 
 # Bind the candidate manifest to this clean source checkout, but do not compare
 # its new SHA to the still-running old release. Check current service posture
-# separately without a candidate identity expectation.
+# separately without a candidate identity expectation. Keep the compatibility
+# switch false by default. Set ALLOW_LEGACY_MISSING_SENTINEL=true only for the
+# one-time first upgrade from the confirmed stamped pre-Sentinel image.
 python scripts/railway_preflight.py --manifest-only \
   --manifest "$MANIFEST" --url "$API_URL"
-python scripts/railway_preflight.py --live --strict --url "$API_URL"
+pre_mutation_args=(--live --strict --url "$API_URL")
+if [ "${ALLOW_LEGACY_MISSING_SENTINEL:-false}" = "true" ]; then
+  pre_mutation_args+=(--allow-legacy-missing-sentinel)
+fi
+python scripts/railway_preflight.py "${pre_mutation_args[@]}"
 control_plane="$(railway status \
   --project "$PROJECT_ID" --environment "$ENVIRONMENT" --json)"
 test "$(jq -r '.id' <<<"$control_plane")" = "$PROJECT_ID"
