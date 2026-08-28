@@ -472,7 +472,7 @@ def test_search_social_and_analytics_contracts(tmp_path) -> None:
         "<title>Agent Middleware API | MCP gateway for agent tool authorization</title>"
         in page
     )
-    assert "Governed MCP gateway for platform teams" in page
+    assert "same accepted idempotency key" in page
     assert "https://www.thisisatest.tech/social-card.png" in page
     assert '<link rel="icon" href="/favicon.svg"' in page
     assert "/_vercel/insights/script.js" not in page

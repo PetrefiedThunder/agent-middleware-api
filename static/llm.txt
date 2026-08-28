@@ -95,9 +95,11 @@ GET /v1/receipts/{receipt_id}/portable
 `ENABLE_DOGFOOD_TOOL=false`; do not use that fixture as evidence of a partner
 integration.
 
-The default governed transport is `POST /mcp/messages`. An operator may enable
-the standards-compliant Streamable HTTP transport at `POST /mcp`; do not assume
-that endpoint is available unless the deployment's discovery manifest lists it.
+The default available governed transport is `POST /mcp/messages`, a
+project-specific legacy JSON-RPC endpoint that does not implement standard MCP
+initialization. An operator may enable the standards-compliant Streamable HTTP
+transport at `POST /mcp`; do not assume that endpoint is available unless the
+deployment's discovery manifest lists it.
 
 ---
 
@@ -137,7 +139,7 @@ Wallets are auto-frozen if spending exceeds:
 Prefer the HTTP trust loop above (permits → MCP invoke → receipts). Client
 libraries are optional and not required for the wedge.
 
-### Python SDK (release artifact only)
+### Python SDK (source checkout and release artifacts)
 
 CI builds a wheel and sdist from `b2a_sdk/`. The agent manifest's
 `integrations.python_sdk` reports both the source version and the available
@@ -165,9 +167,9 @@ async with AgentMiddlewareClient(api_key="...", base_url="...") as client:
 
 ### TypeScript
 
-No published TypeScript SDK. Use HTTP (`/mcp/messages` by default,
-`/v1/permits`, `/v1/receipts`); `/mcp` is available only when the operator
-enables the standard Streamable HTTP transport.
+No published TypeScript SDK. Use `/mcp/messages` only with a project-specific
+JSON-RPC client, plus `/v1/permits` and `/v1/receipts`; standards-compliant MCP
+clients require `/mcp` after the operator enables the Streamable HTTP transport.
 
 ---
 

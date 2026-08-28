@@ -72,6 +72,7 @@ async def test_discover_pricing_and_guides_are_trust_plane(client, proof_surface
     guides = data["integration_guides"]
     assert "awi_adoption" not in guides
     assert guides["mcp_json_rpc"] == "/mcp/messages"
+    assert guides["mcp_json_rpc_status"] == "legacy_project_transport"
     assert "standard_mcp" not in guides
     assert guides["wedge"] == "/WEDGE.md"
     assert "partner.notes.write" in guides["dogfood"]
@@ -147,9 +148,10 @@ async def test_agent_json_sdk_integrations_are_honest(client):
     assert typescript_sdk["status"] == "not_published"
     assert "npm install @b2a/sdk" not in json.dumps(typescript_sdk)
 
-    assert integrations["preferred_integration"] == "mcp_json_rpc"
     assert integrations["mcp"] is True
     assert integrations["mcp_json_rpc"] == "/mcp/messages"
+    assert integrations["mcp_json_rpc_status"] == "legacy_project_transport"
+    assert "preferred_integration" not in integrations
     assert "standard_mcp_streamable_http" not in integrations
 
 
@@ -164,7 +166,12 @@ async def test_llm_txt_does_not_advertise_unpublished_sdk_installs(client):
     assert "at most one gateway dispatch and wallet debit" in text
     assert "KYC hooks" not in text
     assert "POST /mcp/messages" in text
-    assert "unless the deployment's discovery manifest lists it" in text
+    assert "legacy JSON-RPC endpoint" in text
+    assert "does not implement standard MCP initialization" in " ".join(text.split())
+    assert (
+        "unless the deployment's discovery manifest lists it"
+        in " ".join(text.split())
+    )
     assert (
         "not**" in text.lower()
         or "not\npublished" in text.lower()
@@ -204,6 +211,16 @@ def test_agentmarket_listing_is_wedge_honest():
     assert "do **not** list" in text or "do not list" in text
     # Must not pitch AWI/RAG as product capabilities section.
     assert "core capabilities (product)" in text
+
+
+def test_feature_request_preserves_customer_identity_privacy():
+    text = Path(".github/ISSUE_TEMPLATE/feature_request.yml").read_text(
+        encoding="utf-8"
+    ).lower()
+
+    assert "approved non-identifying prospect reference" in text
+    assert "do not include customer/company/person names" in text
+    assert "record named evidence in the private customer process" in text
 
 
 def test_readme_does_not_claim_deployment_ready_complete():

@@ -84,6 +84,11 @@ async def test_standard_mcp_is_advertised_only_when_enabled(client, monkeypatch)
 
         assert "mcp" not in disabled["endpoints"]
         assert disabled["integrations"]["mcp_json_rpc"] == "/mcp/messages"
+        assert (
+            disabled["integrations"]["mcp_json_rpc_status"]
+            == "legacy_project_transport"
+        )
+        assert "preferred_integration" not in disabled["integrations"]
         assert "standard_mcp_streamable_http" not in disabled["integrations"]
         assert (
             disabled_discovery["integration_guides"]["mcp_json_rpc"]

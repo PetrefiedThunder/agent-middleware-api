@@ -96,10 +96,11 @@ asyncio.run(main())
 
 Both `idempotency_key` and `permit_idempotency_key` are **required** and must be supplied by the caller. Do not auto-generate keys.
 
-An identical replay with the same keys returns the original receipt without
-recharging. A key identifies one immutable request: reusing either key with
-changed input fails closed with an idempotency conflict (HTTP 409); arguments
-are never ignored.
+An identical replay with the same invocation key returns the original receipt
+without recharging. `idempotency_key` identifies one governed invocation, and
+the gateway rejects that key reused with changed invocation input with an
+idempotency conflict (HTTP 409). `permit_idempotency_key` makes permit creation
+repeatable; it does not make a changed invocation an idempotent replay.
 
 ```python
 async def main():

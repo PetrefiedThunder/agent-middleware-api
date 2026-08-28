@@ -7,7 +7,8 @@
 
 **Audience:** Human **operators** who deploy or secure this service. Autonomous
 clients should **not** start here — use `GET /.well-known/agent.json`,
-`GET /llm.txt`, and `GET /openapi.json` first (see `agent_first` in the manifest).
+`GET /llms.txt`, and `GET /openapi.json` first (see `agent_first` in the
+manifest; `/llm.txt` remains a legacy alias).
 
 This API is **agent-first**: many endpoints look like normal SaaS, but several
 product areas **default to simulation** (synthetic data) until real
@@ -76,7 +77,7 @@ auth.
 
 ## 5. Discovery surfaces must agree
 
-**Risk:** Agents read `agent.json`, `llm.txt`, and MCP manifests and assume
+**Risk:** Agents read `agent.json`, `llms.txt`, and MCP manifests and assume
 capabilities that are simulated or undocumented.
 
 **Do this:**
@@ -85,7 +86,7 @@ capabilities that are simulated or undocumented.
       - `GET /.well-known/agent.json`
       - `GET /v1/discover` (full capability index; includes the same `agent_first`
         block as the manifest — they must stay in sync)
-      - `GET /llm.txt`
+      - `GET /llms.txt`
       - `GET /mcp/tools.json` (canonical MCP manifest from the MCP router)
 - [ ] Optionally compare with `GET /.well-known/mcp/tools.json` (separate route;
       may differ — if in doubt, treat `/mcp/tools.json` as the primary tool

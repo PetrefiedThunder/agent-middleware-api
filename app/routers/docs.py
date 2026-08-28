@@ -113,7 +113,11 @@ _TRUST_PLANE_SERVICES = [
         "id": "mcp-trust-plane",
         "name": "Governed MCP",
         "base_path": "/mcp/messages",
-        "transport": "json_rpc",
+        "transport": "legacy_project_json_rpc",
+        "transport_note": (
+            "Project-specific JSON-RPC endpoint; it does not implement the "
+            "standard MCP initialization lifecycle."
+        ),
         "surface": "product",
         "capabilities": [
             "tools-discovery",

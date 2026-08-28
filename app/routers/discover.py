@@ -455,6 +455,11 @@ def _build_integration_guides() -> dict[str, str]:
     guides = {
         "mcp_tools": "/mcp/tools.json",
         "mcp_json_rpc": "/mcp/messages",
+        "mcp_json_rpc_status": "legacy_project_transport",
+        "mcp_json_rpc_note": (
+            "Project-specific JSON-RPC endpoint; it does not implement the "
+            "standard MCP initialization lifecycle."
+        ),
         "llm_txt": "/llm.txt",
         "llms_txt": "/llms.txt",
         "wedge": "/WEDGE.md",

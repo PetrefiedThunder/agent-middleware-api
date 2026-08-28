@@ -284,18 +284,19 @@ def _integration_manifest() -> dict[str, Any]:
         "typescript_sdk": {
             "status": "not_published",
             "note": (
-                "No published TypeScript SDK. Use /mcp/messages for JSON-RPC "
-                "MCP, /v1/permits, and /v1/receipts."
+                "No published TypeScript SDK. Use /mcp/messages only with a "
+                "project-specific JSON-RPC client, plus /v1/permits and "
+                "/v1/receipts."
             ),
         },
         "mcp": True,
         "mcp_json_rpc": "/mcp/messages",
-        "mcp_tool_manifest": "/mcp/tools.json",
-        "preferred_integration": (
-            "standard_mcp_streamable_http"
-            if standard_mcp_enabled
-            else "mcp_json_rpc"
+        "mcp_json_rpc_status": "legacy_project_transport",
+        "mcp_json_rpc_note": (
+            "Project-specific JSON-RPC endpoint; it does not implement the "
+            "standard MCP initialization lifecycle."
         ),
+        "mcp_tool_manifest": "/mcp/tools.json",
         "langgraph": "in_repo_wrapper",
         "crewai": "in_repo_wrapper",
         "autogen": "in_repo_wrapper",
@@ -303,6 +304,7 @@ def _integration_manifest() -> dict[str, Any]:
     }
     if standard_mcp_enabled:
         integrations["standard_mcp_streamable_http"] = "/mcp"
+        integrations["preferred_integration"] = "standard_mcp_streamable_http"
     return integrations
 
 
