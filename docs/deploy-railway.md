@@ -155,7 +155,7 @@ in committed defaults.
 | `MCP_UPSTREAM_URL` | one public HTTPS MCP origin | The pilot supports exactly one real upstream tool server |
 | `MCP_UPSTREAM_BEARER_TOKEN` | customer-specific secret | Never put it in the manifest or committed files |
 | `SENTINEL_API_URL` / `SENTINEL_API_KEY` | Omit unless enabling Sentinel-backed human approval | Optional product integration, not an Agent Middleware release dependency. Approval-required operations fail closed unless both are configured. Send synthetic or redacted arguments only. |
-| `RUN_MIGRATIONS_ON_START` | `true` (recommended; set via `railway variables`) | Entrypoint runs `alembic upgrade head` before uvicorn. App boot then **verifies** trust tables exist and **never** calls `create_all` in production-like envs. Flag + empty `DATABASE_URL` fails closed (container exits). If the DB was previously bootstrapped with `create_all` and has no `alembic_version` row, run `alembic stamp head` once before enabling this flag. |
+| `RUN_MIGRATIONS_ON_START` | `true` (recommended; set via `railway variable set`) | Entrypoint runs `alembic upgrade head` before uvicorn. App boot then **verifies** trust tables exist and **never** calls `create_all` in production-like envs. Flag + empty `DATABASE_URL` fails closed (container exits). If the DB was previously bootstrapped with `create_all` and has no `alembic_version` row, run `alembic stamp head` once before enabling this flag. |
 
 `REDIS_URL` is required for the managed pilot's isolated Redis service. Outside
 that pilot it remains optional when Redis rate limiting is unused; a

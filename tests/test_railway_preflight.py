@@ -256,6 +256,7 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
     assert "--build-arg COMMIT_SHA" not in canonical
     assert "Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA`" in canonical
     assert "uses `Dockerfile.dev` through `docker-compose.yml`" in canonical
+    assert "railway variables" not in sop
     canonical_prepare = canonical.index(
         'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"'
     )
