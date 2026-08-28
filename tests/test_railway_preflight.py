@@ -246,6 +246,9 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
     ]
 
     assert 'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in canonical
+    assert "set -euo pipefail" in canonical
+    assert 'test -d "$RELEASE_CONTEXT"' in canonical
+    assert 'test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"' in canonical
     assert 'railway up "$RELEASE_CONTEXT" --path-as-root' in canonical
     canonical_deploy = canonical[canonical.index('railway up "$RELEASE_CONTEXT"') :]
     assert "--no-gitignore" in canonical_deploy
@@ -253,6 +256,11 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
     assert "--build-arg COMMIT_SHA" not in canonical
     assert "Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA`" in canonical
     assert "uses `Dockerfile.dev` through `docker-compose.yml`" in canonical
+    canonical_prepare = canonical.index(
+        'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"'
+    )
+    canonical_deploy = canonical.index('railway up "$RELEASE_CONTEXT"')
+    assert canonical.index("set -euo pipefail") < canonical_prepare < canonical_deploy
 
 
 def test_customer_restore_sop_does_not_misstate_volume_restore_semantics() -> None:

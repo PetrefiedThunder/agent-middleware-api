@@ -60,8 +60,11 @@ releases are operator-run from a clean exact-SHA checkout.**
 
 ```bash
 # From repository root, linked to the Railway service:
+set -euo pipefail
 DEPLOY_SHA="$(git rev-parse HEAD)"
 RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
+test -d "$RELEASE_CONTEXT"
+test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"
 railway up "$RELEASE_CONTEXT" --path-as-root --no-gitignore \
   --service api-service --environment production --ci
 ```
