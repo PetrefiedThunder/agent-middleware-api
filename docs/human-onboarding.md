@@ -1,5 +1,10 @@
 # Human onboarding — what to verify before trusting this API
 
+> **Status: legacy proof-surface operator checklist.** This page includes
+> simulated and dormant workloads that are outside the supported one-tool MCP
+> pilot. For current evaluation, integration, security, and pilot material,
+> start with the [documentation guide](README.md).
+
 **Audience:** Human **operators** who deploy or secure this service. Autonomous
 clients should **not** start here — use `GET /.well-known/agent.json`,
 `GET /llm.txt`, and `GET /openapi.json` first (see `agent_first` in the manifest).

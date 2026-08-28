@@ -28,18 +28,17 @@ def proof_surfaces_off(monkeypatch):
     import app.routers.docs as docs_mod
     import app.routers.well_known as well_known_mod
 
-    monkeypatch.setenv("ENABLE_PROOF_SURFACES", "false")
-    get_settings.cache_clear()
-    cfg = get_settings()
-    assert cfg.ENABLE_PROOF_SURFACES is False
-    for mod in (main_mod, discover_mod, docs_mod, well_known_mod):
-        monkeypatch.setattr(mod, "settings", cfg, raising=False)
-    yield
-    monkeypatch.setenv("ENABLE_PROOF_SURFACES", "true")
-    get_settings.cache_clear()
-    restored = get_settings()
-    for mod in (main_mod, discover_mod, docs_mod, well_known_mod):
-        monkeypatch.setattr(mod, "settings", restored, raising=False)
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setenv("ENABLE_PROOF_SURFACES", "false")
+            get_settings.cache_clear()
+            cfg = get_settings()
+            assert cfg.ENABLE_PROOF_SURFACES is False
+            for mod in (main_mod, discover_mod, docs_mod, well_known_mod):
+                scoped.setattr(mod, "settings", cfg, raising=False)
+            yield
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.anyio
@@ -72,7 +71,8 @@ async def test_discover_pricing_and_guides_are_trust_plane(client, proof_surface
 
     guides = data["integration_guides"]
     assert "awi_adoption" not in guides
-    assert guides["mcp_server"] == "/mcp"
+    assert guides["mcp_json_rpc"] == "/mcp/messages"
+    assert "standard_mcp" not in guides
     assert guides["wedge"] == "/WEDGE.md"
     assert "partner.notes.write" in guides["dogfood"]
 
@@ -147,8 +147,10 @@ async def test_agent_json_sdk_integrations_are_honest(client):
     assert typescript_sdk["status"] == "not_published"
     assert "npm install @b2a/sdk" not in json.dumps(typescript_sdk)
 
-    assert integrations["preferred_integration"] == "http_mcp"
+    assert integrations["preferred_integration"] == "mcp_json_rpc"
     assert integrations["mcp"] is True
+    assert integrations["mcp_json_rpc"] == "/mcp/messages"
+    assert "standard_mcp_streamable_http" not in integrations
 
 
 @pytest.mark.anyio
@@ -159,6 +161,10 @@ async def test_llm_txt_does_not_advertise_unpublished_sdk_installs(client):
     assert "pip install b2a-sdk" not in text
     assert "npm install @b2a/sdk" not in text
     assert "pip install -e ./b2a_sdk" in text
+    assert "at most one gateway dispatch and wallet debit" in text
+    assert "KYC hooks" not in text
+    assert "POST /mcp/messages" in text
+    assert "unless the deployment's discovery manifest lists it" in text
     assert (
         "not**" in text.lower()
         or "not\npublished" in text.lower()

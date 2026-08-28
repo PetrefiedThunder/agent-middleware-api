@@ -4,11 +4,44 @@ title: "[Feature] "
 labels:
   - enhancement
 body:
+  - type: markdown
+    attributes:
+      value: |
+        New core capability requires evidence from a named prospective customer.
+        Do not include confidential customer data, credentials, or payloads.
   - type: textarea
     id: problem
     attributes:
       label: Problem statement
       description: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: prospective_customer
+    attributes:
+      label: Named prospective customer or partner
+      description: For a core capability, provide a stable prospect identifier. Otherwise write N/A.
+    validations:
+      required: true
+  - type: textarea
+    id: consequential_tool
+    attributes:
+      label: Consequential tool and action
+      description: Name the one tool and action this request must govern. Otherwise write N/A.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow_blocker
+    attributes:
+      label: Current-workflow blocker
+      description: Explain the observed blocker, failure mode, or exposure this change would clear. Otherwise write N/A.
+    validations:
+      required: true
+  - type: textarea
+    id: owner_and_date
+    attributes:
+      label: Committed owner and next-action date
+      description: Identify who will validate the request and the agreed next action/date. Otherwise write N/A.
     validations:
       required: true
   - type: textarea
