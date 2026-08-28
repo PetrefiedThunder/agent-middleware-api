@@ -17,17 +17,17 @@ async def client():
 def test_dockerfile_requires_staged_commit_sha():
     """The image must fail to build when a release context lacks its stamp."""
     dockerfile = open("Dockerfile", encoding="utf-8").read()
-    assert "FROM base AS development" in dockerfile
-    assert "FROM base AS release" in dockerfile
-    assert "COPY --chown=app:app .build_commit_sha /app/.build_commit_sha" in dockerfile
+    assert "COPY .build_commit_sha /app/.build_commit_sha" in dockerfile
     assert "ARG COMMIT_SHA" not in dockerfile
     assert "BUILD_COMMIT_SHA=${COMMIT_SHA}" not in dockerfile
 
 
-def test_local_compose_uses_the_unstamped_development_target():
+def test_local_compose_uses_the_unstamped_development_dockerfile():
     compose = open("docker-compose.yml", encoding="utf-8").read()
+    development_dockerfile = open("Dockerfile.dev", encoding="utf-8").read()
 
-    assert "target: development" in compose
+    assert "dockerfile: Dockerfile.dev" in compose
+    assert ".build_commit_sha" not in development_dockerfile
 
 
 def test_docker_publish_stages_the_checked_out_commit():

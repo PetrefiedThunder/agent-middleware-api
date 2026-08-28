@@ -81,9 +81,9 @@ Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA` as Railway service variables:
 they are shared mutable configuration and can stamp a concurrent or later
 deployment with the wrong SHA.
 
-Local Docker development stays on the explicit `development` target in
-`docker-compose.yml`; only the default `release` target requires the immutable
-stamp. Do not use the development target for a production upload.
+Local Docker development uses `Dockerfile.dev` through `docker-compose.yml`;
+only the production `Dockerfile` requires the immutable stamp. Do not use the
+development Dockerfile for a production upload.
 
 Railway uses `railway.json` → `build.builder = DOCKERFILE`. That is the only
 supported production image path for this project.

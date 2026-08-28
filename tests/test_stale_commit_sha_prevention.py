@@ -263,6 +263,5 @@ def test_dockerfile_requires_staged_build_commit_sha_file():
     repo_root = Path(__file__).parent.parent
     dockerfile = (repo_root / "Dockerfile").read_text(encoding="utf-8")
     
-    assert "FROM base AS release" in dockerfile
-    assert "COPY --chown=app:app .build_commit_sha /app/.build_commit_sha" in dockerfile
+    assert "COPY .build_commit_sha /app/.build_commit_sha" in dockerfile
     assert "ARG COMMIT_SHA" not in dockerfile

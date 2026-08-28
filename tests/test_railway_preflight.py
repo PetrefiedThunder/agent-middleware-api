@@ -246,7 +246,7 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
     assert "railway variable set COMMIT_SHA" not in canonical
     assert "--build-arg COMMIT_SHA" not in canonical
     assert "Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA`" in canonical
-    assert "development` target in\n`docker-compose.yml" in canonical
+    assert "uses `Dockerfile.dev` through `docker-compose.yml`" in canonical
 
 
 def test_customer_restore_sop_does_not_misstate_volume_restore_semantics() -> None:
