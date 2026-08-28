@@ -13,6 +13,15 @@ full release gate; do not backfill a final `v1.2.0` tag.
 
 ### 🧹 One supported production configuration path
 
+- **Railway service posture now has a reviewable API-only IaC owner.** The
+  deprecated root Config as Code file is replaced by
+  `.railway/railway.ts`, pinned to Railway SDK `3.11.0`. Its stable named
+  partial owns exactly `api-service`, omits the stale GitHub source binding and
+  all data/partner resources, and preserves all 30 existing API variable names
+  without storing their values. An offline fail-closed graph check now runs in
+  the trust release gate under Node 24. Production plan/apply and source
+  disconnection remain a separately authorized maintenance operation;
+  `railway up` continues to own exact-SHA application deployment only.
 - **Retired `.env.production` and `docker-compose.prod.yml`.** The tracked
   templates were not used by Railway and no longer satisfied the production
   trust contract: they omitted signing material, migrations, exact build
@@ -20,11 +29,11 @@ full release gate; do not backfill a final `v1.2.0` tag.
   one documented source of truth: the repository Dockerfile deployed from an
   exact SHA with configuration and secrets held in Railway service variables.
 - **Regression coverage keeps production-looking secret files out of the
-  repository.** The retired paths are ignored, the onboarding contract pins
-  their absence, and committed `railway.json` variables are restricted to the
-  three non-secret defaults required by the supported deployment path. The
-  remaining Compose file is explicitly local-development-only and no longer
-  advertises a commented production stack.
+  repository.** The retired paths and legacy Railway Config as Code filenames
+  are ignored, the onboarding contract pins their absence, and focused guards
+  require every tracked IaC variable to remain `preserve()`-only. The remaining
+  Compose file is explicitly local-development-only and no longer advertises a
+  commented production stack.
 
 ### 🔎 `permit verify` names missing action context, and the live loop proves it
 

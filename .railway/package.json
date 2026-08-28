@@ -1,0 +1,11 @@
+{
+  "name": "agent-middleware-api-railway-iac",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node check.mjs"
+  },
+  "dependencies": {
+    "railway": "3.11.0"
+  }
+}
