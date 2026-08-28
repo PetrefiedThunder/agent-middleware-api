@@ -164,6 +164,9 @@ async def test_llm_txt_does_not_advertise_unpublished_sdk_installs(client):
     assert "npm install @b2a/sdk" not in text
     assert "pip install -e ./b2a_sdk" in text
     assert "at most one gateway dispatch and wallet debit" in text
+    assert "different tool input fails closed with an idempotency conflict" in " ".join(
+        text.split()
+    )
     assert "KYC hooks" not in text
     assert "POST /mcp/messages" in text
     assert "legacy JSON-RPC endpoint" in text

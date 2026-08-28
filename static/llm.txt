@@ -17,6 +17,10 @@ Signed receipts and the wallet audit chain make the terminal gateway outcome
 independently checkable. An upstream tool's own side effect is exactly once
 only when it honors the forwarded idempotency key.
 
+An accepted idempotency key binds one immutable invocation. Reusing that key
+with different tool input fails closed with an idempotency conflict; use a new
+key for each new invocation.
+
 The product loop is:
 
 ```text

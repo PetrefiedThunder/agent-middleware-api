@@ -95,6 +95,8 @@ async def test_standard_mcp_is_advertised_only_when_enabled(client, monkeypatch)
             == "/mcp/messages"
         )
         assert "standard_mcp" not in disabled_discovery["integration_guides"]
+        disabled_root = (await client.get("/")).json()
+        assert "POST /mcp" not in disabled_root["services"]["mcp_server"]["endpoints"]
 
         monkeypatch.setenv("ENABLE_STANDARD_MCP_ENDPOINT", "true")
         get_settings.cache_clear()
@@ -108,6 +110,8 @@ async def test_standard_mcp_is_advertised_only_when_enabled(client, monkeypatch)
             == "standard_mcp_streamable_http"
         )
         assert enabled_discovery["integration_guides"]["standard_mcp"] == "/mcp"
+        enabled_root = (await client.get("/")).json()
+        assert "POST /mcp" in enabled_root["services"]["mcp_server"]["endpoints"]
     finally:
         monkeypatch.setenv("ENABLE_STANDARD_MCP_ENDPOINT", "false")
         get_settings.cache_clear()

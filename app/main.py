@@ -934,6 +934,11 @@ async def root(request: Request):
                     "GET /mcp/tools.json",
                     "GET /.well-known/mcp/tools.json",
                     "POST /mcp/messages",
+                    *(
+                        ["POST /mcp"]
+                        if get_settings().ENABLE_STANDARD_MCP_ENDPOINT
+                        else []
+                    ),
                     "GET /mcp/tools",
                     "GET /mcp/tools/{service_id}",
                     "POST /mcp/tools/{service_id}/invoke",

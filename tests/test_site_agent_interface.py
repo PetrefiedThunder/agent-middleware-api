@@ -420,6 +420,22 @@ def test_public_surfaces_link_to_public_repo_without_stale_private_copy(
             f"{path} still asks for access to the public repository"
         )
 
+    source_reference_paths = (
+        output / "index.html",
+        output / "proof" / "index.html",
+        output / "compare" / "index.html",
+        output / "llm.txt",
+        output / "llms.txt",
+        output / "llms-full.txt",
+        output / ".well-known" / "agent.json",
+        ROOT / "static" / "llm.txt",
+    )
+    for path in source_reference_paths:
+        content = path.read_text(encoding="utf-8").casefold()
+        assert REPO_URL.casefold() in content, (
+            f"{path} does not link to the public source repository"
+        )
+
 
 def test_dynamic_routes_and_noncanonical_hosts_redirect_correctly() -> None:
     config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
