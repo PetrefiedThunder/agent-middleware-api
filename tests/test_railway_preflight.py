@@ -211,23 +211,23 @@ def test_private_pilot_sop_runs_schema_check_inside_api_container() -> None:
     assert 'test "$sentinel_count" -eq 1' in sop
     assert 'test "$post_ready" = "true"' in sop
     assert sop.count('--manifest "$MANIFEST" --url "$API_URL"') == 2
-    assert 'RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in private_release
+    assert 'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in private_release
     assert 'railway up "$RELEASE_CONTEXT" --path-as-root' in private_release
     assert 'test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"' in private_release
     assert "railway variable set COMMIT_SHA" not in private_release
     assert "--build-arg COMMIT_SHA" not in private_release
     source_gate = private_release.index(
-        "python scripts/railway_preflight.py --manifest-only"
+        "python3 scripts/railway_preflight.py --manifest-only"
     )
     current_gate = private_release.index(
-        'python scripts/railway_preflight.py --live --strict --url "$API_URL"'
+        'python3 scripts/railway_preflight.py --live --strict --url "$API_URL"'
     )
     release_context = private_release.index(
-        'RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"'
+        'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"'
     )
     deploy = private_release.index('railway up "$RELEASE_CONTEXT" --path-as-root')
     post_gate = private_release.rindex(
-        "python scripts/railway_preflight.py --live --strict"
+        "python3 scripts/railway_preflight.py --live --strict"
     )
     assert source_gate < current_gate < release_context < deploy < post_gate
     assert "`railway run` executes locally" in sop
@@ -241,7 +241,7 @@ def test_canonical_railway_sop_uses_immutable_release_context() -> None:
         )
     ]
 
-    assert 'RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in canonical
+    assert 'RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"' in canonical
     assert 'railway up "$RELEASE_CONTEXT" --path-as-root' in canonical
     assert "railway variable set COMMIT_SHA" not in canonical
     assert "--build-arg COMMIT_SHA" not in canonical

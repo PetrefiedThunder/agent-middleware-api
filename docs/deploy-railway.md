@@ -61,7 +61,7 @@ releases are operator-run from a clean exact-SHA checkout.**
 ```bash
 # From repository root, linked to the Railway service:
 DEPLOY_SHA="$(git rev-parse HEAD)"
-RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
+RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
 railway up "$RELEASE_CONTEXT" --path-as-root \
   --service api-service --environment production --ci
 ```
@@ -196,27 +196,27 @@ fails, so it works as a gate in a shell or in CI:
 
 ```bash
 # Both checks for a deployment whose database is reachable from this machine:
-railway run python scripts/railway_preflight.py
+railway run python3 scripts/railway_preflight.py
 
 # Schema parity only:
-DATABASE_URL=postgresql://… python scripts/railway_preflight.py --db
+DATABASE_URL=postgresql://… python3 scripts/railway_preflight.py --db
 
 # Legacy off-platform parity diagnostic. This requires a temporary public
 # database proxy and is not acceptable evidence for customer-data qualification:
 railway run --service Postgres --environment production -- \
-  python scripts/railway_preflight.py --db --public-db --strict
+  python3 scripts/railway_preflight.py --db --public-db --strict
 
 # Pre-deploy posture only, against the currently running release:
-python scripts/railway_preflight.py --live --url "$API_URL"
+python3 scripts/railway_preflight.py --live --url "$API_URL"
 
 # Post-deploy posture plus exact release identity:
-python scripts/railway_preflight.py --live --strict --url "$API_URL" \
+python3 scripts/railway_preflight.py --live --strict --url "$API_URL" \
   --expected-version "1.3.0" \
   --expected-commit-sha "$(git rev-parse HEAD)"
 
 # Managed single-tenant post-deploy gate; URL, commit, revision, and key id
 # come from the non-secret manifest:
-python scripts/railway_preflight.py --live --strict \
+python3 scripts/railway_preflight.py --live --strict \
   --manifest /path/to/example-customer.production.json
 
 # Managed single-tenant schema parity, run inside the deployed API container
@@ -276,9 +276,9 @@ test "$ci_conclusion" = "success"
 # Bind the candidate manifest to this clean source checkout, but do not compare
 # its new SHA to the still-running old release. Check current service posture
 # separately without a candidate identity expectation.
-python scripts/railway_preflight.py --manifest-only \
+python3 scripts/railway_preflight.py --manifest-only \
   --manifest "$MANIFEST" --url "$API_URL"
-python scripts/railway_preflight.py --live --strict --url "$API_URL"
+python3 scripts/railway_preflight.py --live --strict --url "$API_URL"
 control_plane="$(railway status \
   --project "$PROJECT_ID" --environment "$ENVIRONMENT" --json)"
 test "$(jq -r '.id' <<<"$control_plane")" = "$PROJECT_ID"
@@ -290,7 +290,7 @@ test "$(jq -r --arg environment "$ENVIRONMENT" \
 # lets the operator identify this deployment even if another release starts.
 RELEASE_NONCE="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 RELEASE_MARKER="manual-exact-sha-$DEPLOY_SHA-$RELEASE_NONCE"
-RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
+RELEASE_CONTEXT="$(python3 scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
 test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"
 railway up "$RELEASE_CONTEXT" --path-as-root \
   --project "$PROJECT_ID" --service "$SERVICE" \
@@ -374,7 +374,7 @@ test "$post_ready" = "true"
 
 # The public service must attest the manifest's origin, signing key, source SHA,
 # and this checkout's version.
-python scripts/railway_preflight.py --live --strict \
+python3 scripts/railway_preflight.py --live --strict \
   --manifest "$MANIFEST" --url "$API_URL" \
   --expected-version "$EXPECTED_VERSION"
 ```
