@@ -77,14 +77,14 @@ and non-global address literals, but it does not pin DNS resolution. Custom
 hostnames therefore still require trusted DNS and network-level egress policy.
 
 The full dependency report returned when `ENABLE_PROOF_SURFACES=true` includes
-a `sentinel` entry: `not_used` while simulated, `not_configured` when both
-settings are absent, `down` for partial/unsafe/unreachable configuration, and
-`up` after a sanitized live probe of Sentinel's `/health`. The supported
-production public projection (`ENABLE_PROOF_SURFACES=false`) intentionally
-omits Sentinel; it is an optional approval integration, not an Agent Middleware
-release dependency. Approval-required permits and invokes still fail closed
-when the integration is unavailable, incomplete, or configured with an unsafe
-origin.
+a `sentinel` entry: `not_used` while simulated, `not_configured` when
+simulation is disabled and both settings are absent, `down` for
+partial/unsafe/unreachable configuration, and `up` after a sanitized live probe
+of Sentinel's `/health`. The supported production public projection
+(`ENABLE_PROOF_SURFACES=false`) intentionally omits Sentinel; it is an optional
+approval integration, not an Agent Middleware release dependency.
+Approval-required permits and invokes still fail closed when the integration
+is unavailable, incomplete, or configured with an unsafe origin.
 
 ## Fail-closed rules
 

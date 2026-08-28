@@ -33,5 +33,6 @@ for tool in manifest["tools"]:
 
 When `ENABLE_PROOF_SURFACES=true`, cross-check deployment truth with
 `GET /health/dependencies` → `simulation_modes`. With proof surfaces disabled,
-use each tool's public annotations plus the operator-only startup
-`runtime_posture` log and deployed `SIMULATION_MODE_*` configuration.
+autonomous clients rely on each tool's public annotations. Operators separately
+verify those annotations against the startup `runtime_posture` log and deployed
+`SIMULATION_MODE_*` configuration.
