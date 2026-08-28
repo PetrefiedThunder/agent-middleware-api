@@ -61,9 +61,9 @@ releases are operator-run from a clean exact-SHA checkout.**
 ```bash
 # From repository root, linked to the Railway service:
 DEPLOY_SHA="$(git rev-parse HEAD)"
-railway variable set COMMIT_SHA="$DEPLOY_SHA" \
-  --service api-service --environment production --skip-deploys
-railway up --service api-service --environment production --ci
+RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
+railway up "$RELEASE_CONTEXT" --path-as-root \
+  --service api-service --environment production --ci
 ```
 
 That abbreviated command is appropriate only after the pre-deploy gates below.
@@ -72,14 +72,18 @@ For a stack that may hold customer data, follow the complete
 checklist. GitHub Actions validates the candidate release but deliberately does
 not deploy it or hold a Railway SSH key.
 
-Railway injects defined service variables at build time when the Dockerfile
-declares a matching `ARG`. The non-secret `COMMIT_SHA` variable above stamps the
-exact deployed Git SHA into `/app/.build_commit_sha`, which
-`/health/dependencies` uses to report the true source revision. Set it with
-`--skip-deploys` immediately before **every** `railway up`; omitting it leaves
-the image with no commit provenance and must fail the post-deploy parity gate.
-Do not set `BUILD_COMMIT_SHA` as a release input: the application intentionally
-does not trust that runtime variable because it can go stale.
+`scripts/prepare_railway_release.py` creates a fresh temporary context from
+`git archive` at the exact release SHA, then writes that SHA to
+`.build_commit_sha`. The Dockerfile requires the staged file, so an unstamped
+upload fails during its build rather than after it reaches production.
+`/health/dependencies` reports the baked stamp as the true source revision.
+Do not set `COMMIT_SHA` or `BUILD_COMMIT_SHA` as Railway service variables:
+they are shared mutable configuration and can stamp a concurrent or later
+deployment with the wrong SHA.
+
+Local Docker development stays on the explicit `development` target in
+`docker-compose.yml`; only the default `release` target requires the immutable
+stamp. Do not use the development target for a production upload.
 
 Railway uses `railway.json` → `build.builder = DOCKERFILE`. That is the only
 supported production image path for this project.
@@ -136,7 +140,6 @@ in committed defaults.
 | `DATABASE_URL` | from Railway Postgres plugin | App normalizes `postgresql://` ↔ `postgresql+asyncpg://` |
 | `REDIS_URL` | from the customer's private Railway Redis service | Unique per customer; do not expose Redis publicly |
 | `PUBLIC_URL` | public HTTPS API origin | Customer manifest origin; `https://api.thisisatest.tech` only for the existing first-party instance |
-| `COMMIT_SHA` | exact 40-character deployed Git SHA | Non-secret service variable. Set with `railway variable set COMMIT_SHA="$DEPLOY_SHA" --skip-deploys` immediately before `railway up`; Railway passes it to the Dockerfile's `ARG COMMIT_SHA`, which writes the attested baked stamp. |
 | `PUBLIC_CONTACT_NAME` | accountable public person or entity | Launch-gated. Do not use the product name or a placeholder as the accountable identity. |
 | `PUBLIC_CONTACT_EMAIL` | monitored public email address | Launch-gated. This becomes the API/OpenAPI contact only when all public contact fields are valid. |
 | `PUBLIC_CONTACT_URL` | working public HTTPS booking URL | Launch-gated. Verify the booking flow manually; do not point this back to the product site. |
@@ -241,10 +244,10 @@ cannot manage Railway SSH keys, while a workspace key reaches every service in
 the workspace. Keep the release operator-local and register one controlled key
 only for the maintenance window.
 
-Use Railway CLI 5.43 or newer. This version no longer accepts
-`railway up --build-arg`; set the non-secret `COMMIT_SHA` service variable
-instead. The sentinel below is mandatory even on a newer CLI: an SSH command
-that returns zero without actually running must not approve a release.
+Use Railway CLI 5.43 or newer. This version does not accept
+`railway up --build-arg`; prepare the immutable release context instead. The
+sentinel below is mandatory even on a newer CLI: an SSH command that returns
+zero without actually running must not approve a release.
 
 From a clean detached checkout of the exact commit:
 
@@ -287,10 +290,10 @@ test "$(jq -r --arg environment "$ENVIRONMENT" \
 # lets the operator identify this deployment even if another release starts.
 RELEASE_NONCE="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 RELEASE_MARKER="manual-exact-sha-$DEPLOY_SHA-$RELEASE_NONCE"
-railway variable set COMMIT_SHA="$DEPLOY_SHA" \
+RELEASE_CONTEXT="$(python scripts/prepare_railway_release.py --ref "$DEPLOY_SHA")"
+test "$(cat "$RELEASE_CONTEXT/.build_commit_sha")" = "$DEPLOY_SHA"
+railway up "$RELEASE_CONTEXT" --path-as-root \
   --project "$PROJECT_ID" --service "$SERVICE" \
-  --environment "$ENVIRONMENT" --skip-deploys
-railway up --project "$PROJECT_ID" --service "$SERVICE" \
   --environment "$ENVIRONMENT" --ci \
   --message "$RELEASE_MARKER"
 
@@ -422,8 +425,8 @@ values without Railway control-plane API access. The private operator release
 checklist therefore derives the project and environment selectors from this
 manifest and validates them through Railway before deployment. A `railway up`
 source build does not currently expose a stable runtime image
-digest to this application, so the baked `.build_commit_sha` written from
-`COMMIT_SHA` is the attested release identity and image digest is explicitly
+digest to this application, so the baked `.build_commit_sha` from the immutable
+release context is the attested release identity and image digest is explicitly
 **not verified** for this pilot. Do not invent or record a guessed digest.
 
 Store a copy of the completed manifest with the deployment record and update

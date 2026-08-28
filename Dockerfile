@@ -1,11 +1,9 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-ARG COMMIT_SHA
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    BUILD_COMMIT_SHA=${COMMIT_SHA}
+    PYTHONDONTWRITEBYTECODE=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,10 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Railway injects the non-secret COMMIT_SHA service variable into this ARG.
-RUN if [ -n "$COMMIT_SHA" ]; then \
-        echo "$COMMIT_SHA" > /app/.build_commit_sha; \
-    fi
+# Release contexts must carry a commit stamp generated from the exact Git tree.
+COPY .build_commit_sha /app/.build_commit_sha
 
 RUN chmod +x scripts/docker_entrypoint.sh \
     && groupadd --system app \
@@ -41,3 +37,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # Optional: RUN_MIGRATIONS_ON_START=true + DATABASE_URL runs Alembic before uvicorn
 # (fail-closed if the flag is set without DATABASE_URL). See docs/deploy-railway.md.
 ENTRYPOINT ["scripts/docker_entrypoint.sh"]
+
+# Local docker-compose development intentionally does not require a release stamp.
+FROM base AS development
+
+# Production uploads must carry the immutable release-context stamp.
+FROM base AS release
+COPY --chown=app:app .build_commit_sha /app/.build_commit_sha
