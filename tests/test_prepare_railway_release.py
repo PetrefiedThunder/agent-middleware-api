@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -57,6 +58,20 @@ def test_prepares_archive_context_with_exact_immutable_stamp(
     assert (context / ".build_commit_sha").read_text(encoding="utf-8") == f"{commit_sha}\n"
     assert (context / ".build_commit_sha").stat().st_mode & 0o777 == 0o444
     assert not (context / ".git").exists()
+
+
+def test_prepares_archive_context_in_the_system_temp_directory(
+    detached_release_repo: tuple[Path, str],
+) -> None:
+    repo, commit_sha = detached_release_repo
+    context = release.prepare_release_context(ref=commit_sha, repo_root=repo)
+
+    try:
+        assert (context / ".build_commit_sha").read_text(encoding="utf-8") == (
+            f"{commit_sha}\n"
+        )
+    finally:
+        shutil.rmtree(context)
 
 
 def test_rejects_branch_checkout(

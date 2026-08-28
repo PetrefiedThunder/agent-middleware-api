@@ -90,6 +90,7 @@ def _require_clean_checkout(*, repo_root: Path) -> None:
 
 
 def _extract_archive(archive: bytes, destination: Path) -> None:
+    destination = destination.resolve()
     try:
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
             for member in bundle:
