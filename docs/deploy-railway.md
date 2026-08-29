@@ -139,7 +139,7 @@ After a successful disposable rehearsal, a later production activation still
 requires an approved maintenance window. Record the current legacy config-file
 path plus the previous green application SHA, clear the legacy config-file
 setting, and immediately run the production read-only plan above. Abort on any
-variable/resource deletion, service create or rename, unexpected
+variable/resource deletion, service creation or service rename, unexpected
 domain/placement/restart/build change, unexpected source change, or change to
 an unrelated resource. The separately reviewed removal of the stale GitHub
 source binding is the only expected production source delta. Before apply,

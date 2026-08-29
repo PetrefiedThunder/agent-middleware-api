@@ -1,5 +1,3 @@
-import { createRailwayContext, project } from "railway/iac";
-
 const EXPECTED_VARIABLES = [
   "ALLOW_LEGACY_UNPERMITTED_MCP",
   "CORS_ORIGINS",
@@ -32,6 +30,8 @@ const EXPECTED_VARIABLES = [
   "VALID_API_KEYS",
   "WEBAUTHN_ALLOW_MOCK",
 ];
+
+const MINIMUM_NODE_MAJOR = 24;
 
 class CheckFailure extends Error {}
 
@@ -69,6 +69,13 @@ function requireEqual(actual, expected, label) {
   }
 }
 
+function requireSupportedNodeRuntime(version) {
+  const major = Number.parseInt(version.split(".", 1)[0], 10);
+  if (!Number.isInteger(major) || major < MINIMUM_NODE_MAJOR) {
+    fail(`Node.js 24 or newer is required; found ${version}`);
+  }
+}
+
 function requireNoSource(value, path = "project") {
   if (Array.isArray(value)) {
     value.forEach((child, index) => requireNoSource(child, `${path}[${index}]`));
@@ -86,7 +93,11 @@ function requireNoSource(value, path = "project") {
 }
 
 async function main() {
-  const config = await import("./railway.ts");
+  requireSupportedNodeRuntime(process.versions.node);
+  const [{ createRailwayContext, project }, config] = await Promise.all([
+    import("railway/iac"),
+    import("./railway.ts"),
+  ]);
   requireEqual(config.partial, "api-service", "partial name");
   if (typeof config.default !== "function") {
     fail("default export must be a Railway program");

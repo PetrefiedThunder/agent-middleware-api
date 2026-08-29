@@ -5,8 +5,10 @@ existing `api-service` only. The stable `partial = "api-service"` export keeps
 PostgreSQL, Redis, the partner MCP service, volumes, and the PITR bucket outside
 this repository's IaC ownership.
 
-Install the pinned SDK without running package lifecycle scripts, then evaluate
-the desired graph entirely offline:
+Use Node.js 24 or newer. The package declares that minimum and the checker
+fails before importing the TypeScript graph on an unsupported runtime. Install
+the pinned SDK without running package lifecycle scripts, then evaluate the
+desired graph entirely offline:
 
 ```bash
 npm ci --prefix .railway --ignore-scripts

@@ -128,8 +128,8 @@ required to pin ownership, compatibility, activation, and rollback boundaries.
 - Higher-level simplification: evaluate the typed graph once in a small local
   check and include that check in the existing trust release gate.
 - Retirement / falsifier: retire `railway.json`; reject activation if a
-  read-only plan proposes any variable/resource deletion, service create or
-  rename, unrelated resource change, or stale source binding.
+  read-only plan proposes any variable/resource deletion, service creation or
+  service rename, unrelated resource change, or stale source binding.
 - Verdict: proceed.
 
 ## Files
@@ -345,9 +345,9 @@ Delete:
   capture the existing config-file path and previous green SHA, clear the
   legacy setting during a maintenance window, and immediately run a read-only
   `railway config plan` without `--show-values`.
-- Abort/rollback trigger: any resource/variable deletion, service create or
-  rename, unexpected domain/source/placement change, or unrelated resource
-  delta. Restore the legacy config path and stop without deploying.
+- Abort/rollback trigger: any resource/variable deletion, service creation or
+  service rename, unexpected domain/source/placement change, or unrelated
+  resource delta. Restore the legacy config path and stop without deploying.
 - After a clean apply, deploy the exact integrated SHA through the existing
   immutable `railway up` checklist and repeat stamped provenance, health,
   dependency, discovery, public-claim, and proof checks.
