@@ -7,9 +7,10 @@ Baseline: `origin/main` at `2880ca706d2f4779876097e9414b6f1fab691a3e`
 ## Aegis Visibility
 
 This migration changes the owner of production service configuration from
-deprecated per-deploy Config as Code to Railway's beta project-level IaC, where
-an incomplete desired graph can delete variables or resources. Planning is
-required to pin ownership, compatibility, activation, and rollback boundaries.
+deprecated per-deploy Config as Code to Railway's generally available
+TypeScript project-level IaC, where an incomplete desired graph can delete
+variables or resources. Planning is required to pin ownership, compatibility,
+activation, and rollback boundaries.
 
 ## Plan Basis
 
@@ -325,7 +326,8 @@ Delete:
 
 ## Risks
 
-- Railway IaC is beta and its automatic migrator is incomplete.
+- Railway TypeScript IaC is generally available, but its automatic migrator is
+  incomplete.
 - A future live variable added outside IaC must also be added as `preserve()` or
   a plan may delete it; every apply requires deletion review.
 - Full production plan validation is blocked while the service remains managed
