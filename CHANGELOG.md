@@ -18,10 +18,11 @@ full release gate; do not backfill a final `v1.2.0` tag.
   `.railway/railway.ts`, pinned to Railway SDK `3.11.0`. Its stable named
   partial owns exactly `api-service`, omits the stale GitHub source binding and
   all data/partner resources, and preserves all 30 existing API variable names
-  without storing their values. An offline fail-closed graph check now runs in
-  the trust release gate under Node 24. Production plan/apply and source
-  disconnection remain a separately authorized maintenance operation;
-  `railway up` continues to own exact-SHA application deployment only.
+  plus the optional `SENTINEL_API_KEY` name without storing or creating their
+  values. An offline fail-closed graph check now runs in the trust release gate
+  under Node 24. Production plan/apply and source disconnection remain a
+  separately authorized maintenance operation; `railway up` continues to own
+  exact-SHA application deployment only.
 - **Retired `.env.production` and `docker-compose.prod.yml`.** The tracked
   templates were not used by Railway and no longer satisfied the production
   trust contract: they omitted signing material, migrations, exact build

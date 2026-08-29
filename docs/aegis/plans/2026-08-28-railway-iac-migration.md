@@ -27,8 +27,10 @@ activation, and rollback boundaries.
 - Read-only production evidence captured on 2026-08-28: project
   `agent-middleware-api`; API service `api-service`; one `us-west2` replica;
   custom domain `api.thisisatest.tech`; PostgreSQL, Redis, partner MCP, volumes,
-  and PITR bucket are separate resources; the API service has 30 variable names
-  whose values remained redacted and imported as `preserve()`.
+  and PITR bucket are separate resources; the live API service had 30 variable
+  names whose values remained redacted and imported as `preserve()`. The final
+  graph also preserves the optional, then-absent `SENTINEL_API_KEY` name without
+  creating a value.
 
 ## BaselineUsageDraft
 
