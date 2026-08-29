@@ -43,6 +43,7 @@ export default defineRailway(() =>
           PUBLIC_URL: preserve(),
           REDIS_URL: preserve(),
           RUN_MIGRATIONS_ON_START: preserve(),
+          SENTINEL_API_KEY: preserve(),
           SENTINEL_API_URL: preserve(),
           SIMULATION_MODE_HUMAN_APPROVAL: preserve(),
           STATE_BACKEND: preserve(),
