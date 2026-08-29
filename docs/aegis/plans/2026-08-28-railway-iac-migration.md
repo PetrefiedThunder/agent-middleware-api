@@ -378,9 +378,10 @@ Delete:
   legacy setting during a maintenance window, and immediately run a read-only
   `railway config plan` without `--show-values`.
 - Abort/rollback trigger: any resource/variable deletion, service creation or
-  service rename, unexpected domain/source/placement/restart change, or
-  unrelated resource delta. Restore the legacy config path and stop without
-  deploying.
+  rename, unexpected change to the Dockerfile builder/path, health-check
+  path/timeout, domain/source, region/replica count, or restart behavior, or
+  any unrelated resource delta. Restore the legacy config path and stop
+  without deploying.
 - After a clean apply, deploy the exact integrated SHA through the existing
   immutable `railway up` checklist and repeat stamped provenance, health,
   dependency, discovery, public-claim, and proof checks.
