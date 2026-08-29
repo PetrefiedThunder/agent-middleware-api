@@ -4,6 +4,24 @@ Date: 2026-08-28
 Branch: `codex/railway-iac-migration`
 Baseline: `origin/main` at `2880ca706d2f4779876097e9414b6f1fab691a3e`
 
+## 2026-08-28 execution addendum — restart defaults
+
+This addendum supersedes the original references below to explicit restart
+parity. One authorized disposable apply confirmed the effective Railway
+defaults as `ON_FAILURE` with 10 retries, but Railway CLI `5.43.3` immediately
+re-proposed both explicit fields because it builds the current graph from
+sparse environment configuration and does not normalize those defaults.
+
+The approved compatibility repair therefore leaves restart behavior
+provider-owned and enforces that both restart properties are absent from the
+tracked graph. Omission removes the known explicit-field false drift and is the
+candidate convergent representation, but it accepts provider-default risk: any
+actual restart delta is still an abort, and CLI or SDK upgrades require fresh
+disposable validation before either field is reintroduced. Local regression
+can validate the omission, not convergence; a new disposable
+plan/apply/second-plan proof with the repaired graph is still required before
+production activation.
+
 ## Aegis Visibility
 
 This migration changes the owner of production service configuration from
@@ -82,9 +100,11 @@ activation, and rollback boundaries.
   remain foreign resources.
 - Preserve all live variable names with `preserve()`; never decrypt or print
   values. A missing variable is a destructive deletion in Railway IaC.
-- Encode the existing deploy contract explicitly: root Dockerfile,
-  `/health`, 300-second Railway health timeout, `ON_FAILURE`/10 restarts, one
-  `us-west2` replica, and `api.thisisatest.tech`.
+- Encode the repository-owned deploy contract explicitly: root Dockerfile,
+  `/health`, 300-second Railway health timeout, one `us-west2` replica, and
+  `api.thisisatest.tech`. Omitting the provider-owned restart defaults removes
+  the known explicit-field false drift and is the candidate convergent
+  representation; fresh disposable proof remains required.
 - Do not carry the live stale GitHub commit binding into IaC. The documented
   release owner remains manual exact-SHA `railway up`; production activation
   must explicitly review the source-disconnect change before applying it.
@@ -110,8 +130,9 @@ activation, and rollback boundaries.
 - Proposed new surface: `.railway/railway.ts` and its local validation package.
 - Existing owner / reuse candidate: `railway.json` and the existing trust
   release gate.
-- Why existing surface is insufficient: `railway.json` is deprecated and the
-  CLI's automatic migration drops variables and restart fields.
+- Why existing surface is insufficient: `railway.json` is deprecated, the
+  CLI's automatic migration drops variables, and CLI `5.43.3` does not
+  normalize explicit restart defaults into a convergent current graph.
 - Creation proof: Railway documents `.railway/railway.ts` as the replacement;
   the local `railway` SDK is required because CLI `5.43.3` cannot evaluate the
   official `railway/iac` import without a project-local module.
@@ -214,10 +235,12 @@ Delete:
 - Scope Fence: no production config apply/deploy/state write; no proof-router
   work; no owner-key retirement.
 - Baseline Lock: exact `2880ca7...` tree and sanitized 2026-08-28 live pull.
-- Approved Behavior: API-only IaC partial with explicit deploy posture and
-  preserve-complete variables.
-- Owner / Contract Constraints: `.railway/railway.ts` owns API settings;
-  operator vault/Railway variables own values; exact-SHA SOP remains canonical.
+- Approved Behavior: API-only IaC partial with explicit repository-owned
+  deploy posture, provider-owned restart defaults, and preserve-complete
+  variables.
+- Owner / Contract Constraints: `.railway/railway.ts` owns selected
+  repository-controlled API settings; Railway owns restart defaults and
+  variable values; the exact-SHA SOP remains canonical.
 - Compatibility Boundary: no application/runtime/API/schema change.
 - Retirement Boundary: remove root CaC; source disconnect occurs only during a
   later reviewed activation.
@@ -239,7 +262,8 @@ Delete:
 
 1. Add the pinned `.railway` package and lock file.
 2. Add `.railway/railway.ts` with exact project/service/partial names.
-3. Declare Dockerfile build, health/restart/placement/domain parity.
+3. Declare Dockerfile build, health, placement, and domain parity; enforce
+   omission of the provider-owned restart defaults.
 4. List each sanitized live API variable name as `preserve()`; do not add
    values or `--show-values` output.
 5. Omit `source` and explain the intentional later source-disconnect gate.
@@ -338,8 +362,12 @@ Delete:
 - Removing the stale GitHub source binding is desirable for the documented
   manual deploy path but is still a production configuration change; require an
   explicit maintenance-window decision.
+- Effective restart behavior relies on Railway's documented provider defaults;
+  a new disposable plan/apply/second-plan proof of the repaired graph remains
+  required before production activation.
 - The IaC check depends on pinned Node 24 and `railway` SDK `3.11.0`; Renovate or
-  Dependabot-style upgrades require re-running graph and live plan checks.
+  Dependabot-style upgrades require re-running graph checks and disposable
+  plan/apply/plan validation before changing restart-field ownership.
 
 ## Retirement and rollback
 
@@ -350,8 +378,9 @@ Delete:
   legacy setting during a maintenance window, and immediately run a read-only
   `railway config plan` without `--show-values`.
 - Abort/rollback trigger: any resource/variable deletion, service creation or
-  service rename, unexpected domain/source/placement change, or unrelated
-  resource delta. Restore the legacy config path and stop without deploying.
+  service rename, unexpected domain/source/placement/restart change, or
+  unrelated resource delta. Restore the legacy config path and stop without
+  deploying.
 - After a clean apply, deploy the exact integrated SHA through the existing
   immutable `railway up` checklist and repeat stamped provenance, health,
   dependency, discovery, public-claim, and proof checks.

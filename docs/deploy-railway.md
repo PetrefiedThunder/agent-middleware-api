@@ -59,7 +59,8 @@ Railway configuration and application code have separate owners and separate
 commands:
 
 - [`.railway/railway.ts`](../.railway/railway.ts) is the project-level IaC
-  owner for the existing `api-service` settings only. Its stable
+  owner for selected repository-controlled settings on the existing
+  `api-service`. Its stable
   `partial = "api-service"` export deliberately excludes PostgreSQL, Redis,
   `partner-mcp-pilot`, volumes, and the PITR bucket.
 - `railway config plan` previews the IaC difference. `railway config apply`
@@ -82,6 +83,16 @@ services; the repository owns only the key's continued presence. Add a new live
 API key to the IaC file before any plan/apply review. Omitting a live key can
 propose its deletion. Never replace `preserve()` with a committed value, and
 never use `--show-values` in a plan, terminal capture, CI job, or support log.
+
+Restart policy is deliberately provider-owned: Railway's documented effective
+defaults are `ON_FAILURE` with 10 retries. Railway CLI `5.43.3` does not
+converge when those defaults are explicit because its current graph omits the
+fields. Omitting them removes that known explicit-field false drift and is the
+candidate convergent representation. The repaired graph still requires a fresh
+disposable plan/apply/second-plan proof before activation; repeat that
+validation after any CLI or SDK upgrade before reintroducing either field.
+This omission does not authorize an effective restart change; any such plan
+delta remains an abort.
 
 ### Read-only plan and later activation
 
@@ -134,6 +145,17 @@ synthetic:
 ```bash
 railway config apply --file .railway/rehearsal.ts
 ```
+
+Immediately run the second plan against the same scratch graph:
+
+```bash
+railway config plan --file .railway/rehearsal.ts --detailed-exit-code
+```
+
+Only exit `0` with zero proposed changes counts as a successful rehearsal.
+Any proposed change, including any restart-field delta, or any nonzero exit
+means the rehearsal failed and blocks production activation. Do not apply
+again to accommodate drift.
 
 After a successful disposable rehearsal, a later production activation still
 requires an approved maintenance window. Record the current legacy config-file

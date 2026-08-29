@@ -13,16 +13,23 @@ full release gate; do not backfill a final `v1.2.0` tag.
 
 ### 🧹 One supported production configuration path
 
-- **Railway service posture now has a reviewable API-only IaC owner.** The
+- **Selected Railway API settings now have a reviewable IaC owner.** The
   deprecated root Config as Code file is replaced by
   `.railway/railway.ts`, pinned to Railway SDK `3.11.0`. Its stable named
-  partial owns exactly `api-service`, omits the stale GitHub source binding and
-  all data/partner resources, and preserves all 30 existing API variable names
-  plus the optional `SENTINEL_API_KEY` name without storing or creating their
-  values. An offline fail-closed graph check now runs in the trust release gate
-  under Node 24. Production plan/apply and source disconnection remain a
-  separately authorized maintenance operation; `railway up` continues to own
-  exact-SHA application deployment only.
+  partial owns the API build, health check, placement, domain, and variable-key
+  presence; it omits the stale GitHub source binding and all data/partner
+  resources, and preserves all 30 existing API variable names plus the
+  optional `SENTINEL_API_KEY` name without storing or creating their values.
+  Restart fields deliberately remain provider-owned: Railway CLI `5.43.3`
+  re-proposes the documented `ON_FAILURE`/10 defaults when they are explicit.
+  Omitting them removes that known explicit-field false drift and is the
+  candidate convergent representation, but it accepts provider-default risk.
+  A fresh disposable plan/apply/second-plan proof remains required before
+  activation; CLI/SDK upgrades require repeat validation, and any actual
+  restart delta remains an abort. An offline fail-closed graph check now runs
+  in the trust release gate under Node 24. Production plan/apply and source
+  disconnection remain a separately authorized maintenance operation;
+  `railway up` continues to own exact-SHA application deployment only.
 - **Retired `.env.production` and `docker-compose.prod.yml`.** The tracked
   templates were not used by Railway and no longer satisfied the production
   trust contract: they omitted signing material, migrations, exact build

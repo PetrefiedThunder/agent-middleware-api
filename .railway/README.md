@@ -16,8 +16,9 @@ npm test --prefix .railway
 ```
 
 The check fails closed unless the graph contains exactly the intended API
-service, deploy posture, region, domain, and complete variable-name set. It
-does not contact Railway or print variable values.
+service, selected repository-owned deploy settings, region, domain, and
+complete variable-name set. It does not contact Railway or print variable
+values.
 
 ## Read-only plan
 
@@ -41,6 +42,15 @@ Every API environment key is represented by `preserve()`. Railway remains the
 owner of each value, including secrets and service references; this repository
 owns only the key's continued presence. Add a newly introduced live key here
 before any later plan/apply review or IaC may propose deleting it.
+
+Restart policy is deliberately omitted from the tracked graph. Railway owns
+the documented effective defaults, `ON_FAILURE` with 10 retries. Railway CLI
+`5.43.3` re-proposes both fields when those defaults are explicit, even after
+an apply. Omitting them removes that known explicit-field false drift and is
+the candidate convergent representation. A fresh disposable
+plan/apply/second-plan proof remains required before activation. After a CLI
+or SDK upgrade, repeat that validation before reintroducing either field. Any
+plan that would actually change restart behavior remains an abort condition.
 
 ## Activation is a separate operation
 

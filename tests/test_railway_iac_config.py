@@ -77,10 +77,11 @@ def test_iac_source_pins_the_exact_non_secret_api_posture() -> None:
     )
     assert re.search(
         r'deploy:\s*{\s*healthcheckPath:\s*"/health",\s*'
-        r'healthcheckTimeout:\s*300,\s*restartPolicyType:\s*"ON_FAILURE",\s*'
-        r"restartPolicyMaxRetries:\s*10,\s*}",
+        r"healthcheckTimeout:\s*300,\s*}",
         source,
     )
+    assert "restartPolicyType" not in source
+    assert "restartPolicyMaxRetries" not in source
     assert re.search(r'replicas:\s*{\s*"us-west2":\s*1,?\s*}', source)
     assert re.search(r'domains:\s*\[\s*"api\.thisisatest\.tech"\s*\]', source)
 
@@ -106,7 +107,6 @@ def test_iac_source_contains_no_source_binding_or_unapproved_string_literal() ->
         "/health",
         "DOCKERFILE",
         "Dockerfile",
-        "ON_FAILURE",
         "agent-middleware-api",
         "api-service",
         "api.thisisatest.tech",

@@ -155,15 +155,11 @@ async function main() {
       "healthcheckPath",
       "healthcheckTimeout",
       "multiRegionConfig",
-      "restartPolicyMaxRetries",
-      "restartPolicyType",
     ],
     "API deploy config",
   );
   requireEqual(deploy.healthcheckPath, "/health", "API health path");
   requireEqual(deploy.healthcheckTimeout, 300, "API health timeout");
-  requireEqual(deploy.restartPolicyType, "ON_FAILURE", "API restart policy");
-  requireEqual(deploy.restartPolicyMaxRetries, 10, "API restart retries");
   const regions = requireExactKeys(
     deploy.multiRegionConfig,
     ["us-west2"],
