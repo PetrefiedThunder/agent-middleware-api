@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from decimal import Decimal
 
@@ -16,6 +17,7 @@ from app.db.models import (
     IdempotencyRecordModel,
     LedgerEntryModel,
     McpDispatchAttemptModel,
+    PermitModel,
     ReceiptModel,
     WalletModel,
 )
@@ -1026,6 +1028,76 @@ async def test_remote_prepare_recovers_lost_commit_ack_without_double_reserving(
             .where(McpDispatchAttemptModel.idempotency_record_id == begun.record_id)
         )
     assert int(attempt_count or 0) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "constraint_name",
+    ["max_calls_per_tool", "aggregate_value_cap"],
+)
+async def test_remote_prepare_recovery_refuses_legacy_constrained_attempt(
+    client: AsyncClient,
+    clean_database,
+    monkeypatch: pytest.MonkeyPatch,
+    constraint_name: str,
+) -> None:
+    suffix = f"recovery-constrained-{constraint_name}"
+    tool_name = f"partner-tool-{suffix}"
+    provisioned, permit, _request_payload, begun = await _seed_governed_identity(
+        client,
+        suffix=suffix,
+    )
+    service = get_mcp_dispatch_attempt_service()
+    kwargs = {
+        "idempotency_record_id": begun.record_id,
+        "wallet_id": provisioned["agent_wallet_id"],
+        "permit_id": permit["permit_id"],
+        "key_id": provisioned["key_id"],
+        "public_tool_id": tool_name,
+        "upstream_tool_name": "remote_tool",
+        "upstream_origin": "https://partner.example",
+        "request_hash": begun.request_hash,
+        "credits_authorized": Decimal("1.5"),
+    }
+    validation, prepared = await service.authorize_reserve_and_prepare(**kwargs)
+    assert validation.allowed is True
+    assert prepared is not None
+
+    factory = get_session_factory()
+    async with factory() as session:
+        async with session.begin():
+            stored_permit = await session.get(PermitModel, permit["permit_id"])
+            assert stored_permit is not None
+            if constraint_name == "max_calls_per_tool":
+                stored_permit.max_calls_per_tool_json = json.dumps({tool_name: 1})
+            else:
+                stored_permit.aggregate_value_cap = Decimal("2")
+            session.add(stored_permit)
+
+    original_lookup = service._get_by_idempotency_record
+    lookup_count = 0
+
+    async def fail_initial_lookup(session, record_id):  # noqa: ANN001
+        nonlocal lookup_count
+        lookup_count += 1
+        if lookup_count == 1:
+            raise RuntimeError("simulated_initial_recovery_trigger")
+        return await original_lookup(session, record_id)
+
+    monkeypatch.setattr(service, "_get_by_idempotency_record", fail_initial_lookup)
+
+    with pytest.raises(
+        DispatchPrepareCommitUncertainError,
+        match="dispatch_prepare_constraint_unsupported",
+    ):
+        await service.authorize_reserve_and_prepare(**kwargs)
+
+    assert lookup_count == 2
+    context = await service.get_context(prepared.attempt_id)
+    assert context is not None and context.attempt.state == "prepared"
+    stored_permit = await get_permit_service().get_permit(permit["permit_id"])
+    assert stored_permit is not None
+    assert stored_permit.spent_credits == Decimal("1.5")
 
 
 @pytest.mark.anyio

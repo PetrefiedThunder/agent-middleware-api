@@ -332,6 +332,27 @@ class SigningKeyService:
         key = await self.ensure_active_key()
         return self.sign_payload_with_key_id(payload, key.key_id)
 
+    async def validate_prepared_signing_key(
+        self,
+        key_id: str,
+        *,
+        session: AsyncSession,
+    ) -> SigningKeyModel:
+        """Lock and revalidate a pre-provisioned key before caller-owned signing."""
+        key = await session.get(
+            SigningKeyModel,
+            key_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if key is None:
+            raise SigningKeyError("signing_key_not_found")
+        self._assert_public_key_mapping(key, self._public_key_b64())
+        self._assert_key_not_disabled(key)
+        if key.status != "active" or key.retired_at is not None:
+            raise SigningKeyError("signing_key_not_active")
+        return key
+
     def sign_payload_with_key_id(
         self,
         payload: dict[str, Any],
