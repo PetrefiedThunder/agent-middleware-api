@@ -890,7 +890,9 @@ main,
 }
 
 /* Cell grids: a hairline frame with hairline dividers, made by letting the
-   frame color show through a 1px gap between panel-colored cells. */
+   frame color show through a 1px gap between panel-colored cells. The
+   overflow clip is what rounds the corner cells, so anything focusable
+   inside a cell has to draw its ring inward (see .machine-links a below). */
 .thesis-signals,
 .loop-track,
 .machine-links {
@@ -968,18 +970,12 @@ main,
 }
 
 /* The track sits inside the page gutter like a .section, minus its vertical
-   padding: the heading above already carries that. */
-@media (min-width: 1200px) {
-  .loop-track {
-    width: calc(var(--page-max) - 2 * var(--pad-x));
-  }
-}
-
-@media (max-width: 1199px) {
-  .loop-track {
-    margin-left: var(--pad-x);
-    margin-right: var(--pad-x);
-  }
+   padding: the heading above already carries that. .section is --page-max
+   wide with --pad-x inside it, so its content is 100% or --page-max minus
+   two gutters, whichever is smaller; this is the same formula. */
+.loop-track {
+  width: calc(100% - 2 * var(--pad-x));
+  max-width: calc(var(--page-max) - 2 * var(--pad-x));
 }
 
 @media (max-width: 820px) {
@@ -1218,6 +1214,12 @@ main,
 .machine-links a:hover {
   background: var(--rule-soft);
   text-decoration: none;
+}
+
+/* The grid clips its corners, and an outset ring would be clipped with them:
+   draw the ring just inside the tile instead, where nothing can cut it. */
+.machine-links a:focus-visible {
+  outline-offset: -3px;
 }
 
 .machine-links a > span {
@@ -1917,6 +1919,13 @@ html[data-a11y-motion="reduce"] .arcade-launch:active {
   .button-wave-face,
   .button-primary:hover {
     border: 1px solid #999;
+    box-shadow: none;
+  }
+
+  /* On paper an offset of ink behind a stamp is a smudge, not depth. */
+  .receipt-seal,
+  .amw-a11y-toggle,
+  .amw-a11y-panel {
     box-shadow: none;
   }
 
