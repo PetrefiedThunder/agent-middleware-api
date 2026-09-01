@@ -21,6 +21,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
+from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.db.database import get_session_factory
@@ -35,6 +36,7 @@ from app.services.upstream_mcp import (
     UpstreamMcpConfiguration,
     UpstreamMcpConfigurationError,
     UpstreamMcpDeliveryUncertainError,
+    UpstreamMcpDispatchClaimUnavailableError,
     UpstreamMcpPreDispatchError,
     UpstreamMcpResponseRejectedError,
     UpstreamMcpReturnedError,
@@ -65,6 +67,14 @@ def _settings(**overrides: Any) -> Settings:
 
 def _configuration(**overrides: Any) -> UpstreamMcpConfiguration:
     return UpstreamMcpConfiguration.from_settings(_settings(**overrides))
+
+
+def _cleanup_validation_error() -> ValidationError:
+    try:
+        _settings(MCP_UPSTREAM_CONNECT_TIMEOUT_SECONDS="not-a-number")
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("invalid timeout unexpectedly passed validation")
 
 
 class FakeSession:
@@ -236,9 +246,11 @@ def _bind_session(
 ) -> None:
     @asynccontextmanager
     async def session_context(**_kwargs: Any) -> AsyncIterator[FakeSession]:
-        yield session
-        if cleanup_error:
-            raise cleanup_error
+        try:
+            yield session
+        finally:
+            if cleanup_error:
+                raise cleanup_error
 
     adapter._session = session_context  # type: ignore[method-assign]
 
@@ -316,6 +328,35 @@ def test_configuration_accepts_credits_representable_as_numeric_20_8(
     assert _configuration(
         MCP_UPSTREAM_CREDITS_PER_CALL=credits
     ).credits_per_call == Decimal(credits)
+
+
+@pytest.mark.parametrize(
+    ("setting_name", "attribute_name", "maximum"),
+    [
+        (
+            "MCP_UPSTREAM_CONNECT_TIMEOUT_SECONDS",
+            "connect_timeout_seconds",
+            600.0,
+        ),
+        (
+            "MCP_UPSTREAM_CALL_TIMEOUT_SECONDS",
+            "call_timeout_seconds",
+            3600.0,
+        ),
+    ],
+)
+def test_configuration_enforces_exact_timeout_safety_bound(
+    setting_name: str,
+    attribute_name: str,
+    maximum: float,
+) -> None:
+    configuration = _configuration(**{setting_name: maximum})
+
+    assert getattr(configuration, attribute_name) == maximum
+    with pytest.raises(UpstreamMcpConfigurationError) as exc_info:
+        _configuration(**{setting_name: maximum + 0.001})
+
+    assert setting_name in exc_info.value.detail
 
 
 @pytest.mark.parametrize(
@@ -1045,6 +1086,52 @@ async def test_initialize_and_checkpoint_failures_are_pre_dispatch() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "cleanup_error",
+    [
+        RuntimeError("secret-partner-token"),
+        UpstreamMcpPreDispatchError("secret-partner-token"),
+        _cleanup_validation_error(),
+        json.JSONDecodeError("malformed cleanup payload", "{", 1),
+    ],
+    ids=[
+        "generic-cleanup-error",
+        "typed-cleanup-error",
+        "validation-cleanup-error",
+        "json-cleanup-error",
+    ],
+)
+async def test_dispatch_claim_contention_is_preserved_without_calling_upstream(
+    caplog: pytest.LogCaptureFixture,
+    cleanup_error: Exception,
+) -> None:
+    adapter = UpstreamMcpAdapter(_configuration())
+    _mark_discovered(adapter)
+    session = FakeSession()
+    _bind_session(
+        adapter,
+        session,
+        cleanup_error=cleanup_error,
+    )
+
+    async def claim_already_owned() -> None:
+        raise UpstreamMcpDispatchClaimUnavailableError()
+
+    with pytest.raises(UpstreamMcpDispatchClaimUnavailableError) as exc_info:
+        await adapter.call_tool(
+            {},
+            invocation_id="inv",
+            idempotency_key="idem",
+            before_dispatch=claim_already_owned,
+        )
+
+    assert exc_info.value.code == "idempotency_in_progress"
+    assert exc_info.value.dispatch_started is False
+    assert session.events == ["initialize"]
+    assert "secret-partner-token" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_transport_failure_after_callback_is_delivery_uncertain() -> None:
     adapter = UpstreamMcpAdapter(_configuration())
     _mark_discovered(adapter)
@@ -1167,13 +1254,64 @@ async def test_oversized_or_invalid_response_is_rejected_after_dispatch() -> Non
 
 
 @pytest.mark.anyio
-async def test_cleanup_failure_does_not_replace_confirmed_response() -> None:
+@pytest.mark.parametrize(
+    "cleanup_error",
+    [
+        UpstreamMcpPreDispatchError("secret-partner-token"),
+        UpstreamMcpDeliveryUncertainError(),
+    ],
+    ids=["typed-pre-dispatch", "typed-delivery-uncertain"],
+)
+async def test_typed_cleanup_failure_does_not_replace_known_response_rejection(
+    cleanup_error: Exception,
+) -> None:
+    oversized = CallToolResult(
+        content=[TextContent(type="text", text="x" * 200)],
+        isError=False,
+    )
+    adapter = UpstreamMcpAdapter(_configuration(MCP_UPSTREAM_MAX_RESPONSE_BYTES=80))
+    _mark_discovered(adapter)
+    _bind_session(
+        adapter,
+        FakeSession(result=oversized),
+        cleanup_error=cleanup_error,
+    )
+
+    async def before_dispatch() -> None:
+        return None
+
+    with pytest.raises(UpstreamMcpResponseRejectedError) as exc_info:
+        await adapter.call_tool(
+            {},
+            invocation_id="inv",
+            idempotency_key="idem",
+            before_dispatch=before_dispatch,
+        )
+
+    assert exc_info.value.code == "upstream_response_too_large"
+    assert exc_info.value.dispatch_started is True
+    assert "secret-partner-token" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "cleanup_error",
+    [
+        RuntimeError("secret-partner-token"),
+        UpstreamMcpPreDispatchError("secret-partner-token"),
+        UpstreamMcpDeliveryUncertainError(),
+    ],
+    ids=["untyped", "typed-pre-dispatch", "typed-delivery-uncertain"],
+)
+async def test_cleanup_failure_does_not_replace_confirmed_response(
+    cleanup_error: Exception,
+) -> None:
     adapter = UpstreamMcpAdapter(_configuration())
     _mark_discovered(adapter)
     _bind_session(
         adapter,
         FakeSession(),
-        cleanup_error=RuntimeError("secret-partner-token"),
+        cleanup_error=cleanup_error,
     )
 
     async def before_dispatch() -> None:

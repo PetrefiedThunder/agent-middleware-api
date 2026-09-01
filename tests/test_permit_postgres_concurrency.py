@@ -24,7 +24,7 @@ import pytest_asyncio
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.time import utc_now
@@ -47,7 +47,11 @@ from app.services.idempotency import (
     GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
     get_idempotency_service,
 )
-from app.services.mcp_dispatch_attempts import get_mcp_dispatch_attempt_service
+from app.services.mcp_dispatch_attempts import (
+    DispatchClaimUnavailableError,
+    McpDispatchAttemptService,
+    get_mcp_dispatch_attempt_service,
+)
 from app.services.mcp_dispatch_reconciliation import (
     McpDispatchReconciliationService,
 )
@@ -1110,6 +1114,43 @@ async def _load_governed_operation_rows(
     return record, list(debits), list(attempts), list(receipts)
 
 
+async def _wait_for_blocked_dispatch_attempt_update(
+    *,
+    blocker_pid: int,
+) -> int:
+    """Return the backend whose attempt UPDATE is waiting on ``blocker_pid``."""
+    factory = get_session_factory()
+    deadline = asyncio.get_running_loop().time() + 5
+    while True:
+        async with factory() as session:
+            blocked_pid = await session.scalar(
+                text(
+                    """
+                    SELECT activity.pid
+                    FROM pg_stat_activity AS activity
+                    WHERE activity.datname = current_database()
+                      AND activity.pid <> pg_backend_pid()
+                      AND CAST(:blocker_pid AS INTEGER)
+                          = ANY(pg_blocking_pids(activity.pid))
+                      AND activity.wait_event_type = 'Lock'
+                      AND POSITION(
+                          'UPDATE mcp_dispatch_attempts' IN activity.query
+                      ) > 0
+                    ORDER BY activity.pid
+                    LIMIT 1
+                    """
+                ),
+                {"blocker_pid": blocker_pid},
+            )
+        if blocked_pid is not None:
+            return int(blocked_pid)
+        if asyncio.get_running_loop().time() >= deadline:
+            pytest.fail(
+                "cleanup never entered a PostgreSQL lock wait behind the debit fence"
+            )
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio(loop_scope="session")
 async def test_concurrent_identical_upstream_requests_share_one_result_in_postgres() -> (
     None
@@ -1194,6 +1235,631 @@ async def test_concurrent_identical_upstream_requests_share_one_result_in_postgr
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_inflight_governed_debit_blocks_cleanup_then_refunds_once_in_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cleanup waits on the real attempt lock, then adopts the committed debit."""
+    _require_opted_in_postgres()
+    suffix = uuid.uuid4().hex[:12]
+    tool_name = f"partner-debit-cleanup-pg-{suffix}"
+    idempotency_key = f"partner-debit-cleanup-pg-{suffix}"
+    credits = Decimal("1.5")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        provisioned = await provision_agent_wallet(client)
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name=tool_name,
+            idem_key=f"permit-debit-cleanup-{suffix}",
+        )
+
+    request_payload = {
+        "tool_name": tool_name,
+        "arguments": {"message": suffix},
+        "wallet_id": provisioned["agent_wallet_id"],
+        "permit_id": permit["permit_id"],
+    }
+    begun = await get_idempotency_service().begin_with_record(
+        wallet_id=provisioned["agent_wallet_id"],
+        endpoint=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        operation_kind="upstream_mcp",
+    )
+    dispatch = get_mcp_dispatch_attempt_service()
+    validation, attempt = await dispatch.authorize_reserve_and_prepare(
+        idempotency_record_id=begun.record_id,
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        key_id=provisioned["key_id"],
+        public_tool_id=tool_name,
+        upstream_tool_name="partner.echo",
+        upstream_origin="https://partner.example",
+        request_hash=begun.request_hash,
+        credits_authorized=credits,
+    )
+    assert validation.allowed is True
+    assert attempt is not None
+
+    factory = get_session_factory()
+    async with factory() as session:
+        before_wallet = await session.get(
+            WalletModel,
+            provisioned["agent_wallet_id"],
+        )
+    assert before_wallet is not None
+    before_accounting = (
+        before_wallet.balance,
+        before_wallet.lifetime_debits,
+        before_wallet.hourly_spent,
+        before_wallet.daily_spent,
+    )
+
+    money = get_agent_money()
+    real_apply_charge = money._billing_engine._apply_charge_to_locked_wallet
+    debit_fence_acquired = asyncio.Event()
+    release_debit = asyncio.Event()
+    debit_backend_pid: int | None = None
+
+    async def hold_debit_after_attempt_fence(session, **kwargs):  # noqa: ANN001
+        nonlocal debit_backend_pid
+        pid = await session.scalar(text("SELECT pg_backend_pid()"))
+        assert pid is not None
+        debit_backend_pid = int(pid)
+        debit_fence_acquired.set()
+        await release_debit.wait()
+        return await real_apply_charge(session, **kwargs)
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_apply_charge_to_locked_wallet",
+        hold_debit_after_attempt_fence,
+    )
+    debit_task: asyncio.Task[Any] | None = None
+    cleanup_task: asyncio.Task[Any] | None = None
+    try:
+        debit_task = asyncio.create_task(
+            money.charge(
+                wallet_id=provisioned["agent_wallet_id"],
+                service_category=ServiceCategory.AGENT_COMMS,
+                units=Decimal("1"),
+                request_path=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+                operation_key=begun.record_id,
+            )
+        )
+        await asyncio.wait_for(debit_fence_acquired.wait(), timeout=5)
+        assert debit_backend_pid is not None
+
+        cleanup_task = asyncio.create_task(
+            McpDispatchReconciliationService(
+                dispatch_service=dispatch
+            ).reconcile_attempt(
+                attempt.attempt_id,
+                prepared_error_code="reconciled_stale_prepared",
+            )
+        )
+        blocked_pid = await _wait_for_blocked_dispatch_attempt_update(
+            blocker_pid=debit_backend_pid
+        )
+
+        assert blocked_pid != debit_backend_pid
+        assert cleanup_task.done() is False
+
+        release_debit.set()
+        charge_result, reconciliation_result = await asyncio.wait_for(
+            asyncio.gather(debit_task, cleanup_task),
+            timeout=15,
+        )
+    finally:
+        release_debit.set()
+        pending = [
+            task
+            for task in (debit_task, cleanup_task)
+            if task is not None and not task.done()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    assert hasattr(charge_result, "entry_id")
+    assert reconciliation_result is None
+    async with factory() as session:
+        stored_attempt = await session.get(
+            McpDispatchAttemptModel,
+            attempt.attempt_id,
+        )
+        stored_record = await session.get(IdempotencyRecordModel, begun.record_id)
+        stored_wallet = await session.get(
+            WalletModel,
+            provisioned["agent_wallet_id"],
+        )
+        stored_permit = await session.get(PermitModel, permit["permit_id"])
+        debits = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.wallet_id == provisioned["agent_wallet_id"],
+                        LedgerEntryModel.operation_key == begun.record_id,
+                        LedgerEntryModel.action == "debit",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        refunds = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.wallet_id == provisioned["agent_wallet_id"],
+                        LedgerEntryModel.correlation_id == charge_result.entry_id,
+                        LedgerEntryModel.action == "refund",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        receipts = list(
+            (
+                await session.execute(
+                    select(ReceiptModel).where(
+                        ReceiptModel.idempotency_record_id == begun.record_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert stored_attempt is not None
+    assert stored_attempt.state == "returned_error"
+    assert stored_attempt.error_code == "reconciled_stale_prepared"
+    assert stored_attempt.ledger_entry_id == charge_result.entry_id
+    assert stored_attempt.credits_charged == credits
+    assert stored_attempt.dispatched_at is None
+    assert stored_attempt.debit_refunded_at is not None
+    assert stored_attempt.budget_released_at is not None
+    assert stored_record is not None
+    assert stored_record.ledger_entry_id == charge_result.entry_id
+    assert stored_record.status_code == 502
+    assert stored_record.response_json is not None
+    assert stored_wallet is not None
+    assert (
+        stored_wallet.balance,
+        stored_wallet.lifetime_debits,
+        stored_wallet.hourly_spent,
+        stored_wallet.daily_spent,
+    ) == before_accounting
+    assert stored_permit is not None
+    assert stored_permit.spent_credits == Decimal("0")
+    assert len(debits) == 1
+    assert debits[0].entry_id == charge_result.entry_id
+    assert debits[0].amount == -credits
+    assert len(refunds) == 1
+    assert refunds[0].entry_id == f"refund-{charge_result.entry_id}"
+    assert refunds[0].amount == credits
+    assert len(receipts) == 1
+    assert receipts[0].outcome == "failed_refunded"
+    assert receipts[0].ledger_entry_id == charge_result.entry_id
+    assert receipts[0].credits_charged == Decimal("0")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_inflight_governed_debit_blocks_effect_free_abandon_in_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Abandon waits on the debit fence and refuses the advanced attempt."""
+    _require_opted_in_postgres()
+    suffix = uuid.uuid4().hex[:12]
+    tool_name = f"partner-debit-abandon-pg-{suffix}"
+    idempotency_key = f"partner-debit-abandon-pg-{suffix}"
+    credits = Decimal("1.5")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        provisioned = await provision_agent_wallet(client)
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name=tool_name,
+            idem_key=f"permit-debit-abandon-{suffix}",
+        )
+
+    request_payload = {
+        "tool_name": tool_name,
+        "arguments": {"message": suffix},
+        "wallet_id": provisioned["agent_wallet_id"],
+        "permit_id": permit["permit_id"],
+    }
+    begun = await get_idempotency_service().begin_with_record(
+        wallet_id=provisioned["agent_wallet_id"],
+        endpoint=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        operation_kind="upstream_mcp",
+    )
+    dispatch = get_mcp_dispatch_attempt_service()
+    validation, attempt = await dispatch.authorize_reserve_and_prepare(
+        idempotency_record_id=begun.record_id,
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        key_id=provisioned["key_id"],
+        public_tool_id=tool_name,
+        upstream_tool_name="partner.echo",
+        upstream_origin="https://partner.example",
+        request_hash=begun.request_hash,
+        credits_authorized=credits,
+    )
+    assert validation.allowed is True
+    assert attempt is not None
+
+    money = get_agent_money()
+    real_apply_charge = money._billing_engine._apply_charge_to_locked_wallet
+    debit_fence_acquired = asyncio.Event()
+    release_debit = asyncio.Event()
+    debit_backend_pid: int | None = None
+
+    async def hold_debit_after_attempt_fence(session, **kwargs):  # noqa: ANN001
+        nonlocal debit_backend_pid
+        pid = await session.scalar(text("SELECT pg_backend_pid()"))
+        assert pid is not None
+        debit_backend_pid = int(pid)
+        debit_fence_acquired.set()
+        await release_debit.wait()
+        return await real_apply_charge(session, **kwargs)
+
+    monkeypatch.setattr(
+        money._billing_engine,
+        "_apply_charge_to_locked_wallet",
+        hold_debit_after_attempt_fence,
+    )
+    debit_task: asyncio.Task[Any] | None = None
+    abandon_task: asyncio.Task[Any] | None = None
+    try:
+        debit_task = asyncio.create_task(
+            money.charge(
+                wallet_id=provisioned["agent_wallet_id"],
+                service_category=ServiceCategory.AGENT_COMMS,
+                units=Decimal("1"),
+                request_path=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+                operation_key=begun.record_id,
+            )
+        )
+        await asyncio.wait_for(debit_fence_acquired.wait(), timeout=5)
+        assert debit_backend_pid is not None
+
+        abandon_task = asyncio.create_task(
+            McpDispatchAttemptService().abandon_effect_free_prepared_attempt(
+                attempt_id=attempt.attempt_id,
+                expected_updated_at=attempt.updated_at,
+            )
+        )
+        blocked_pid = await _wait_for_blocked_dispatch_attempt_update(
+            blocker_pid=debit_backend_pid
+        )
+        assert blocked_pid != debit_backend_pid
+        assert abandon_task.done() is False
+
+        release_debit.set()
+        charge_result, abandon_result = await asyncio.wait_for(
+            asyncio.gather(debit_task, abandon_task, return_exceptions=True),
+            timeout=15,
+        )
+    finally:
+        release_debit.set()
+        pending = [
+            task
+            for task in (debit_task, abandon_task)
+            if task is not None and not task.done()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    assert hasattr(charge_result, "entry_id")
+    assert isinstance(abandon_result, DispatchClaimUnavailableError)
+    assert str(abandon_result) == "dispatch_attempt_advanced"
+
+    factory = get_session_factory()
+    async with factory() as session:
+        stored_attempt = await session.get(
+            McpDispatchAttemptModel,
+            attempt.attempt_id,
+        )
+        stored_record = await session.get(IdempotencyRecordModel, begun.record_id)
+        stored_permit = await session.get(PermitModel, permit["permit_id"])
+        ledger_rows = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.wallet_id == provisioned["agent_wallet_id"],
+                        LedgerEntryModel.operation_key == begun.record_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        receipts = list(
+            (
+                await session.execute(
+                    select(ReceiptModel).where(
+                        ReceiptModel.idempotency_record_id == begun.record_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert stored_attempt is not None
+    assert stored_attempt.state == "prepared"
+    assert stored_attempt.ledger_entry_id is None
+    assert stored_attempt.credits_charged == Decimal("0")
+    assert stored_attempt.dispatch_claim_hash is None
+    assert stored_attempt.dispatched_at is None
+    assert stored_attempt.budget_released_at is None
+    assert stored_attempt.debit_refunded_at is None
+    assert stored_record is not None
+    assert stored_record.ledger_entry_id == charge_result.entry_id
+    assert stored_permit is not None
+    assert stored_permit.spent_credits == credits
+    assert len(ledger_rows) == 1
+    assert ledger_rows[0].entry_id == charge_result.entry_id
+    assert ledger_rows[0].action == "debit"
+    assert ledger_rows[0].amount == -credits
+    assert receipts == []
+
+    await McpDispatchReconciliationService(
+        dispatch_service=dispatch
+    ).reconcile_attempt(
+        attempt.attempt_id,
+        prepared_error_code="reconciled_stale_prepared",
+    )
+
+    async with factory() as session:
+        reconciled_attempt = await session.get(
+            McpDispatchAttemptModel,
+            attempt.attempt_id,
+        )
+        reconciled_permit = await session.get(PermitModel, permit["permit_id"])
+        refunds = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.wallet_id == provisioned["agent_wallet_id"],
+                        LedgerEntryModel.correlation_id == charge_result.entry_id,
+                        LedgerEntryModel.action == "refund",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        reconciled_receipts = list(
+            (
+                await session.execute(
+                    select(ReceiptModel).where(
+                        ReceiptModel.idempotency_record_id == begun.record_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert reconciled_attempt is not None
+    assert reconciled_attempt.state == "returned_error"
+    assert reconciled_attempt.ledger_entry_id == charge_result.entry_id
+    assert reconciled_attempt.credits_charged == credits
+    assert reconciled_attempt.budget_released_at is not None
+    assert reconciled_attempt.debit_refunded_at is not None
+    assert reconciled_permit is not None
+    assert reconciled_permit.spent_credits == Decimal("0")
+    assert len(refunds) == 1
+    assert refunds[0].amount == credits
+    assert len(reconciled_receipts) == 1
+    assert reconciled_receipts[0].outcome == "failed_refunded"
+    assert reconciled_receipts[0].ledger_entry_id == charge_result.entry_id
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_dispatch_claim_cas_is_exclusive_in_postgres() -> None:
+    _require_opted_in_postgres()
+    suffix = uuid.uuid4().hex[:12]
+    tool_name = f"partner-dispatch-claim-pg-{suffix}"
+    idempotency_key = f"partner-dispatch-claim-pg-{suffix}"
+    credits = Decimal("1.5")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        provisioned = await provision_agent_wallet(client)
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name=tool_name,
+            idem_key=f"permit-dispatch-claim-{suffix}",
+        )
+
+    request_payload = {
+        "tool_name": tool_name,
+        "arguments": {"message": suffix},
+        "wallet_id": provisioned["agent_wallet_id"],
+        "permit_id": permit["permit_id"],
+    }
+    begun = await get_idempotency_service().begin_with_record(
+        wallet_id=provisioned["agent_wallet_id"],
+        endpoint=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        idempotency_key=idempotency_key,
+        request_payload=request_payload,
+        operation_kind="upstream_mcp",
+    )
+    dispatch = get_mcp_dispatch_attempt_service()
+    validation, attempt = await dispatch.authorize_reserve_and_prepare(
+        idempotency_record_id=begun.record_id,
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        key_id=provisioned["key_id"],
+        public_tool_id=tool_name,
+        upstream_tool_name="partner.echo",
+        upstream_origin="https://partner.example",
+        request_hash=begun.request_hash,
+        credits_authorized=credits,
+    )
+    assert validation.allowed is True
+    assert attempt is not None
+    charge = await get_agent_money().charge(
+        wallet_id=provisioned["agent_wallet_id"],
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        operation_key=begun.record_id,
+    )
+    assert hasattr(charge, "entry_id")
+    await dispatch.attach_charge(
+        attempt_id=attempt.attempt_id,
+        ledger_entry_id=charge.entry_id,
+        credits_charged=credits,
+    )
+
+    first, second = await asyncio.gather(
+        McpDispatchAttemptService().claim_dispatch(attempt.attempt_id),
+        McpDispatchAttemptService().claim_dispatch(attempt.attempt_id),
+        return_exceptions=True,
+    )
+
+    outcomes = (first, second)
+    winners = [row for row in outcomes if isinstance(row, McpDispatchAttemptModel)]
+    losers = [row for row in outcomes if isinstance(row, Exception)]
+    assert len(winners) == 1
+    assert len(losers) == 1
+    assert isinstance(losers[0], DispatchClaimUnavailableError)
+    assert str(losers[0]) == "dispatch_claim_unavailable"
+
+    factory = get_session_factory()
+    async with factory() as session:
+        stored = await session.get(McpDispatchAttemptModel, attempt.attempt_id)
+        permit_model = await session.get(PermitModel, permit["permit_id"])
+        ledger_rows = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.wallet_id == provisioned["agent_wallet_id"],
+                        LedgerEntryModel.operation_key == begun.record_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        receipt_rows = list(
+            (
+                await session.execute(
+                    select(ReceiptModel).where(
+                        ReceiptModel.idempotency_record_id == begun.record_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert stored is not None
+    assert stored.state == "dispatch_claimed"
+    assert stored.dispatch_claim_hash is not None
+    assert stored.debit_refunded_at is None
+    assert stored.budget_released_at is None
+    assert permit_model is not None and permit_model.spent_credits == credits
+    assert [row.action for row in ledger_rows] == ["debit"]
+    assert receipt_rows == []
+
+    race_key = f"partner-dispatch-compensation-pg-{suffix}"
+    race_payload = {**request_payload, "arguments": {"message": f"race-{suffix}"}}
+    race_begun = await get_idempotency_service().begin_with_record(
+        wallet_id=provisioned["agent_wallet_id"],
+        endpoint=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        idempotency_key=race_key,
+        request_payload=race_payload,
+        operation_kind="upstream_mcp",
+    )
+    race_validation, race_attempt = await dispatch.authorize_reserve_and_prepare(
+        idempotency_record_id=race_begun.record_id,
+        wallet_id=provisioned["agent_wallet_id"],
+        permit_id=permit["permit_id"],
+        key_id=provisioned["key_id"],
+        public_tool_id=tool_name,
+        upstream_tool_name="partner.echo",
+        upstream_origin="https://partner.example",
+        request_hash=race_begun.request_hash,
+        credits_authorized=credits,
+    )
+    assert race_validation.allowed is True
+    assert race_attempt is not None
+    race_charge = await get_agent_money().charge(
+        wallet_id=provisioned["agent_wallet_id"],
+        service_category=ServiceCategory.AGENT_COMMS,
+        units=Decimal("1"),
+        request_path=GOVERNED_MCP_IDEMPOTENCY_ENDPOINT,
+        operation_key=race_begun.record_id,
+    )
+    assert hasattr(race_charge, "entry_id")
+    race_attempt = await dispatch.attach_charge(
+        attempt_id=race_attempt.attempt_id,
+        ledger_entry_id=race_charge.entry_id,
+        credits_charged=credits,
+    )
+
+    claim_result, compensation_result = await asyncio.gather(
+        McpDispatchAttemptService().claim_dispatch(race_attempt.attempt_id),
+        McpDispatchAttemptService().complete_pre_dispatch_failure(
+            attempt_id=race_attempt.attempt_id,
+            expected_updated_at=race_attempt.updated_at,
+            ledger_entry_id=race_charge.entry_id,
+            credits_charged=credits,
+            result_payload={"error": "failed_refunded"},
+            error_code="reconciled_stale_prepared",
+            max_result_bytes=4096,
+        ),
+        return_exceptions=True,
+    )
+
+    race_outcomes = (claim_result, compensation_result)
+    race_winners = [
+        row for row in race_outcomes if isinstance(row, McpDispatchAttemptModel)
+    ]
+    race_losers = [row for row in race_outcomes if isinstance(row, Exception)]
+    assert len(race_winners) == 1
+    assert len(race_losers) == 1
+    assert isinstance(race_losers[0], DispatchClaimUnavailableError)
+
+    async with factory() as session:
+        raced = await session.get(McpDispatchAttemptModel, race_attempt.attempt_id)
+        raced_ledger = list(
+            (
+                await session.execute(
+                    select(LedgerEntryModel).where(
+                        LedgerEntryModel.operation_key == race_begun.record_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert raced is not None
+    assert raced.state in {"dispatch_claimed", "returned_error"}
+    assert raced.debit_refunded_at is None
+    assert raced.budget_released_at is None
+    assert [row.action for row in raced_ledger] == ["debit"]
+    if raced.state == "dispatch_claimed":
+        assert raced.dispatch_claim_hash is not None
+        assert raced.completed_at is None
+    else:
+        assert raced.dispatch_claim_hash is None
+        assert raced.dispatched_at is None
+        assert raced.completed_at is not None
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_concurrent_dispatch_reconcilers_create_one_signed_audit_in_postgres(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1254,7 +1920,7 @@ async def test_concurrent_dispatch_reconcilers_create_one_signed_audit_in_postgr
         ledger_entry_id=charge.entry_id,
         credits_charged=credits,
     )
-    await dispatch.mark_dispatched(attempt.attempt_id)
+    await dispatch.claim_dispatch(attempt.attempt_id)
     terminal = await dispatch.complete(
         attempt_id=attempt.attempt_id,
         state="succeeded",

@@ -407,6 +407,8 @@ async def _governed_tools_call(
                 },
             )
         raise _mcp_error(e.jsonrpc_code, reason, pending_data or None) from e
+    except IdempotencyInProgressError as e:
+        raise _mcp_error(-32003, "idempotency_in_progress") from e
     except ToolPermissionDenied as e:
         denial_data: dict[str, Any] = {}
         if e.receipt:

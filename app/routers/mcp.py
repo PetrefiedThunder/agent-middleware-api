@@ -44,6 +44,8 @@ from ..services.mcp_generator import get_mcp_generator
 from ..services.dogfood_tool import sync_dogfood_tool_registration
 from ..services.mcp_phase9_tools import sync_proof_surface_mcp_registration
 from ..services.mcp_dispatch_attempts import (
+    DispatchClaimUnavailableError,
+    DispatchPrepareCommitUncertainError,
     DispatchResultRejectedError,
     DispatchResultTooLargeError,
     McpDispatchAttemptService,
@@ -54,6 +56,7 @@ from ..services.mcp_dispatch_reconciliation import (
 )
 from ..services.upstream_mcp import (
     UpstreamMcpDeliveryUncertainError,
+    UpstreamMcpDispatchClaimUnavailableError,
     UpstreamMcpPreDispatchError,
     UpstreamMcpResponseRejectedError,
     UpstreamMcpReturnedError,
@@ -319,6 +322,17 @@ async def handle_messages(
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": error_payload,
+                }
+            )
+        except IdempotencyInProgressError as e:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32003,
+                        "message": str(e),
+                    },
                 }
             )
         except ToolPermissionDenied as e:
@@ -659,7 +673,9 @@ async def _execute_registered_tool(
                 )
                 replay = idem_begin.replay
                 idem_started = True
-            except (IdempotencyConflictError, IdempotencyInProgressError) as exc:
+            except IdempotencyInProgressError:
+                raise
+            except IdempotencyConflictError as exc:
                 raise ValueError(str(exc)) from exc
             if replay and replay.response_json:
                 if permit_id:
@@ -862,6 +878,8 @@ async def _execute_registered_tool(
                     "request_hash": effective_request_hash,
                 },
             )
+            if isinstance(exc, IdempotencyInProgressError):
+                raise
             raise ValueError(str(exc))
         if replay and replay.response_json:
             await _assert_governed_replay_access(
@@ -1048,7 +1066,8 @@ async def _execute_registered_tool(
         # below satisfies a policy's human_approval_required demand; the
         # policy's other constraints are still enforced.
         approval_gate_active=bool(
-            governed_call and permit_model is not None
+            governed_call
+            and permit_model is not None
             and permit_model.requires_human_approval
         ),
     )
@@ -1210,6 +1229,11 @@ async def _execute_registered_tool(
                     credits_authorized=registered_cost,
                     arguments=arguments,
                 )
+            except DispatchPrepareCommitUncertainError:
+                # A durable attempt may already exist or have advanced. Only
+                # its owner/reconciler may classify it; this activation must
+                # not write a competing receipt or complete idempotency.
+                raise IdempotencyInProgressError("idempotency_in_progress") from None
             except Exception as exc:
                 reason = "upstream_prepare_failed"
                 audit_event = await _audit_mcp_invocation(
@@ -1332,6 +1356,25 @@ async def _execute_registered_tool(
             quote_id, idempotency_key=idempotency_key
         ):
             reason = QUOTE_REASON_CONSUMED
+            if dispatch_service is not None and dispatch_attempt is not None:
+                try:
+                    await dispatch_service.abandon_effect_free_prepared_attempt(
+                        attempt_id=dispatch_attempt.attempt_id,
+                        expected_updated_at=dispatch_attempt.updated_at,
+                    )
+                except DispatchClaimUnavailableError:
+                    # Cleanup cannot prove the attempt remained effect-free. Do
+                    # not publish the legacy denial over a potentially advanced
+                    # durable owner; reconciliation now owns classification.
+                    raise IdempotencyInProgressError(
+                        "idempotency_in_progress"
+                    ) from None
+                dispatch_attempt = None
+            elif governed_call and permit_model:
+                await get_permit_service().release_budget(
+                    permit_model.permit_id,
+                    registered_cost,
+                )
             await _audit_mcp_invocation(
                 decision=decision,
                 endpoint=endpoint,
@@ -1345,11 +1388,6 @@ async def _execute_registered_tool(
                     "request_hash": effective_request_hash,
                 },
             )
-            if governed_call and permit_model:
-                await get_permit_service().release_budget(
-                    permit_model.permit_id,
-                    registered_cost,
-                )
             await _complete_governed_denial_idempotency(
                 idem=idem,
                 idem_started=idem_started,
@@ -1435,13 +1473,16 @@ async def _execute_registered_tool(
         denial_reason = charge_result.error
         denial_status = 402 if denial_reason == "insufficient_funds" else 403
         if dispatch_service is not None and dispatch_attempt is not None:
-            dispatch_attempt = await dispatch_service.complete(
-                attempt_id=dispatch_attempt.attempt_id,
-                state="returned_error",
-                result_payload={"error": denial_reason},
-                error_code=denial_reason,
-                max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
-            )
+            try:
+                dispatch_attempt = await dispatch_service.complete_pre_dispatch_failure(
+                    attempt_id=dispatch_attempt.attempt_id,
+                    expected_updated_at=dispatch_attempt.updated_at,
+                    result_payload={"error": denial_reason},
+                    error_code=denial_reason,
+                    max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
+                )
+            except DispatchClaimUnavailableError:
+                raise IdempotencyInProgressError("idempotency_in_progress") from None
             await get_permit_service().release_dispatch_budget_once(
                 dispatch_attempt.attempt_id
             )
@@ -1919,8 +1960,11 @@ async def _execute_upstream_after_charge(
 ) -> dict[str, Any]:
     """Dispatch once and durably classify every post-charge remote outcome."""
 
-    async def mark_dispatched() -> None:
-        await dispatch_service.mark_dispatched(dispatch_attempt.attempt_id)
+    async def claim_dispatch() -> None:
+        try:
+            await dispatch_service.claim_dispatch(dispatch_attempt.attempt_id)
+        except DispatchClaimUnavailableError as exc:
+            raise UpstreamMcpDispatchClaimUnavailableError() from exc
 
     async def raise_response_rejected(
         error_code: str,
@@ -1975,7 +2019,7 @@ async def _execute_upstream_after_charge(
             arguments,
             invocation_id=idempotency_record_id,
             idempotency_key=idempotency_key,
-            before_dispatch=mark_dispatched,
+            before_dispatch=claim_dispatch,
         )
     except UpstreamMcpReturnedError as exc:
         try:
@@ -2018,18 +2062,28 @@ async def _execute_upstream_after_charge(
             approval_check=approval_check,
         )
         raise AssertionError("unreachable")
+    except UpstreamMcpDispatchClaimUnavailableError:
+        # Another activation owns this invocation's one-shot send authority.
+        # It must finish (or be reconciled) without this loser mutating the
+        # shared charge, budget, attempt, receipt, or idempotency record.
+        raise IdempotencyInProgressError("idempotency_in_progress") from None
     except UpstreamMcpPreDispatchError as exc:
         terminal_payload = {
             "error": "failed_refunded",
             "error_code": exc.code,
         }
-        terminal = await dispatch_service.complete(
-            attempt_id=dispatch_attempt.attempt_id,
-            state="returned_error",
-            result_payload=terminal_payload,
-            error_code=exc.code,
-            max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
-        )
+        try:
+            terminal = await dispatch_service.complete_pre_dispatch_failure(
+                attempt_id=dispatch_attempt.attempt_id,
+                expected_updated_at=dispatch_attempt.updated_at,
+                ledger_entry_id=ledger_entry_id,
+                credits_charged=credits_charged,
+                result_payload=terminal_payload,
+                error_code=exc.code,
+                max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
+            )
+        except DispatchClaimUnavailableError:
+            raise IdempotencyInProgressError("idempotency_in_progress") from None
         await _raise_refunded_upstream_failure(
             reason="upstream_pre_dispatch_failed",
             terminal_payload=terminal_payload,
@@ -2998,6 +3052,11 @@ async def invoke_tool(
         if exc.data:
             detail["approval"] = exc.data
         raise HTTPException(status_code=exc.status_code, detail=detail)
+    except IdempotencyInProgressError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc)},
+        ) from exc
     except ToolPermissionDenied as exc:
         detail = {"error": str(exc)}
         if exc.receipt:

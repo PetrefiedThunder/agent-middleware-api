@@ -139,6 +139,41 @@ async def test_init_db_production_like_accepts_legacy_create_all_tables(
     get_settings.cache_clear()
 
 
+@pytest.mark.asyncio
+async def test_init_db_rejects_unstamped_legacy_dispatch_table_missing_claim_column(
+    tmp_path, monkeypatch
+):
+    db_path = tmp_path / "legacy_missing_claim.db"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    get_settings.cache_clear()
+    await close_db()
+    await init_db()
+    await close_db()
+
+    sync = create_engine(f"sqlite:///{db_path}")
+    with sync.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE mcp_dispatch_attempts DROP COLUMN dispatch_claim_hash"
+        )
+    assert "dispatch_claim_hash" not in {
+        column["name"] for column in inspect(sync).get_columns("mcp_dispatch_attempts")
+    }
+    sync.dispose()
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEBUG", "false")
+    monkeypatch.setenv("ENABLE_PROOF_SURFACES", "false")
+    monkeypatch.setenv("ALLOW_METADATA_CREATE_ALL", "false")
+    get_settings.cache_clear()
+
+    with pytest.raises(SchemaInitError, match="dispatch_claim_hash") as exc_info:
+        await init_db()
+    assert "alembic upgrade head" in str(exc_info.value)
+    await close_db()
+    get_settings.cache_clear()
+
+
 def test_init_db_production_like_ok_after_alembic(tmp_path, monkeypatch):
     """Alembic must run outside an active event loop (env.py uses asyncio.run)."""
     import asyncio

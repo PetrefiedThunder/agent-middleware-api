@@ -27,6 +27,9 @@ from app.services.idempotency import IdempotencyBegin, get_idempotency_service
 from app.services.mcp_dispatch_attempts import (
     DispatchAttemptConflictError,
     DispatchAttemptError,
+    DispatchClaimUnavailableError,
+    DispatchPrepareCommitUncertainError,
+    DispatchPrepareRolledBackError,
     DispatchResultTooLargeError,
     get_mcp_dispatch_attempt_service,
 )
@@ -629,8 +632,15 @@ async def test_dispatch_attempt_state_machine_and_bounded_result(
         credits_charged=Decimal("1.5"),
     )
     assert attached.ledger_entry_id == charge.entry_id  # type: ignore[union-attr]
-    dispatched = await service.mark_dispatched(prepared.attempt_id)
-    assert dispatched.state == "dispatched"
+    dispatched = await service.claim_dispatch(prepared.attempt_id)
+    assert dispatched.state == "dispatch_claimed"
+    assert dispatched.dispatch_claim_hash is not None
+    assert len(dispatched.dispatch_claim_hash) == 64
+    with pytest.raises(
+        DispatchClaimUnavailableError,
+        match="dispatch_claim_unavailable",
+    ):
+        await service.claim_dispatch(prepared.attempt_id)
 
     with pytest.raises(DispatchResultTooLargeError):
         await service.complete(
@@ -642,7 +652,7 @@ async def test_dispatch_attempt_state_machine_and_bounded_result(
         )
     context = await service.get_context(prepared.attempt_id)
     assert context is not None
-    assert context.attempt.state == "dispatched"
+    assert context.attempt.state == "dispatch_claimed"
     assert context.endpoint == "/mcp/messages"
     assert context.idempotency_key == "invoke-dispatch-state"
 
@@ -659,7 +669,7 @@ async def test_dispatch_attempt_state_machine_and_bounded_result(
         DispatchAttemptConflictError,
         match="dispatch_transition_terminal",
     ):
-        await service.mark_dispatched(prepared.attempt_id)
+        await service.claim_dispatch(prepared.attempt_id)
     with pytest.raises(DispatchAttemptConflictError):
         await service.complete(
             attempt_id=prepared.attempt_id,
@@ -876,7 +886,10 @@ async def test_remote_prepare_failure_rolls_back_budget_and_attempt(
 
     monkeypatch.setattr(AsyncSession, "flush", fail_attempt_flush)
     service = get_mcp_dispatch_attempt_service()
-    with pytest.raises(RuntimeError, match="simulated_prepare_write_failure"):
+    with pytest.raises(
+        DispatchPrepareRolledBackError,
+        match="dispatch_prepare_rolled_back",
+    ):
         await service.authorize_reserve_and_prepare(
             idempotency_record_id=begun.record_id,
             wallet_id=provisioned["agent_wallet_id"],
@@ -889,6 +902,66 @@ async def test_remote_prepare_failure_rolls_back_budget_and_attempt(
             credits_authorized=Decimal("1.5"),
         )
 
+    stored_permit = await get_permit_service().get_permit(permit["permit_id"])
+    assert stored_permit is not None
+    assert stored_permit.spent_credits == Decimal("0")
+    factory = get_session_factory()
+    async with factory() as session:
+        attempt_count = await session.scalar(
+            select(func.count())
+            .select_from(McpDispatchAttemptModel)
+            .where(McpDispatchAttemptModel.idempotency_record_id == begun.record_id)
+        )
+    assert int(attempt_count or 0) == 0
+
+
+@pytest.mark.anyio
+async def test_remote_prepare_recovery_read_failure_is_commit_uncertain(
+    client: AsyncClient,
+    clean_database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provisioned, permit, _request_payload, begun = await _seed_governed_identity(
+        client,
+        suffix="atomic-prepare-recovery-unavailable",
+    )
+    original_flush = AsyncSession.flush
+    service = get_mcp_dispatch_attempt_service()
+    original_lookup = service._get_by_idempotency_record
+    lookup_count = 0
+
+    async def fail_attempt_flush(self, objects=None):  # noqa: ANN001
+        if any(isinstance(row, McpDispatchAttemptModel) for row in self.new):
+            raise RuntimeError("simulated_prepare_write_failure")
+        return await original_flush(self, objects)
+
+    async def fail_recovery_lookup(session, record_id):  # noqa: ANN001
+        nonlocal lookup_count
+        lookup_count += 1
+        if lookup_count == 1:
+            return await original_lookup(session, record_id)
+        raise RuntimeError("simulated_recovery_read_failure")
+
+    monkeypatch.setattr(AsyncSession, "flush", fail_attempt_flush)
+    monkeypatch.setattr(service, "_get_by_idempotency_record", fail_recovery_lookup)
+
+    with pytest.raises(
+        DispatchPrepareCommitUncertainError,
+        match="dispatch_prepare_commit_uncertain",
+    ):
+        await service.authorize_reserve_and_prepare(
+            idempotency_record_id=begun.record_id,
+            wallet_id=provisioned["agent_wallet_id"],
+            permit_id=permit["permit_id"],
+            key_id=provisioned["key_id"],
+            public_tool_id="partner-tool-atomic-prepare-recovery-unavailable",
+            upstream_tool_name="remote_tool",
+            upstream_origin="https://partner.example",
+            request_hash=begun.request_hash,
+            credits_authorized=Decimal("1.5"),
+        )
+
+    assert lookup_count == 2
     stored_permit = await get_permit_service().get_permit(permit["permit_id"])
     assert stored_permit is not None
     assert stored_permit.spent_credits == Decimal("0")
@@ -985,8 +1058,14 @@ async def test_dispatch_attempt_rejects_unsafe_origin_and_invalid_transition(
         **kwargs,
         upstream_origin="https://partner.example",
     )
-    with pytest.raises(DispatchAttemptConflictError):
-        await service.mark_dispatched(prepared.attempt_id)
+    with pytest.raises(
+        DispatchAttemptConflictError,
+        match="dispatch_claim_evidence_invalid",
+    ):
+        await service.claim_dispatch(prepared.attempt_id)
+    unclaimed = await service.get_context(prepared.attempt_id)
+    assert unclaimed is not None
+    assert unclaimed.attempt.dispatch_claim_hash is None
     with pytest.raises(DispatchAttemptConflictError):
         await service.complete(
             attempt_id=prepared.attempt_id,
@@ -996,9 +1075,9 @@ async def test_dispatch_attempt_rejects_unsafe_origin_and_invalid_transition(
             max_result_bytes=1024,
         )
 
-    failed = await service.complete(
+    failed = await service.complete_pre_dispatch_failure(
         attempt_id=prepared.attempt_id,
-        state="returned_error",
+        expected_updated_at=unclaimed.attempt.updated_at,
         result_payload=None,
         error_code="connect_failed",
         max_result_bytes=1024,
@@ -1038,9 +1117,9 @@ async def test_dispatch_reconciliation_queries_active_and_unfinalized_terminal(
     stale = await service.list_stale_contexts(idle_seconds=300)
     assert [item.attempt.attempt_id for item in stale] == [prepared.attempt_id]
 
-    terminal = await service.complete(
+    terminal = await service.complete_pre_dispatch_failure(
         attempt_id=prepared.attempt_id,
-        state="returned_error",
+        expected_updated_at=stale[0].attempt.updated_at,
         result_payload=None,
         error_code="connect_failed",
         max_result_bytes=1024,

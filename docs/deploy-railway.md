@@ -105,9 +105,11 @@ railway config plan
 ```
 
 Do not automate `railway config apply` or `railway config migrate --apply`.
-The current production service is still owned by legacy Config as Code, so a
-complete production IaC plan remains blocked until an operator clears that
-setting. The live service's stale GitHub source metadata is intentionally not
+As last operator-verified on 2026-08-29, the first-party production service was
+still owned by legacy Config as Code, so a complete production IaC plan remained
+blocked until an operator clears that setting. Re-check the linked target and
+redacted plan at activation time; do not treat that dated observation as current
+state. The live service's stale GitHub source metadata is intentionally not
 copied into IaC; disconnecting it is an expected but separately reviewed
 activation change, not an incidental migration side effect.
 
@@ -176,6 +178,66 @@ reviewed inverse IaC plan; application rollback deploys the previous green SHA
 through the same immutable `railway up` sequence. Do not reattach automatic
 GitHub deployment as a shortcut, regenerate IaC from live state, or reverse
 database migrations as an IaC rollback.
+
+### Dispatch-claim migration and rollback
+
+Migration `037_mcp_dispatch_claim_hash` adds exactly one nullable column,
+`mcp_dispatch_attempts.dispatch_claim_hash`. Apply it before application code
+that writes the new `dispatch_claimed` state. The nullable shape lets an older
+worker continue creating its legacy rows, and the new worker treats a legacy
+`dispatched` row as already sent rather than claimable.
+
+Migration 037 **requires a maintenance window**. Process lifetime overlap is
+acceptable only while old workers cannot receive new requests and have no
+in-flight work:
+
+1. Pause ingress.
+2. Fully drain every old worker and in-flight request.
+3. Apply migration 037.
+4. Deploy the new exact application SHA.
+5. Resume traffic only after the new deployment passes its release gates.
+
+An old worker may fail closed if it reads the unknown `dispatch_claimed` state,
+but that is not enough for rolling compatibility. Its debit path does not hold
+the dispatch-attempt write fence introduced with this migration. An old request
+that started from `prepared` can therefore commit a late debit after a new
+reconciler has terminalized the attempt as having no debit. The terminal attempt
+then rejects attaching that debit, leaving accounting that contradicts the
+zero-charge failure evidence. Fully draining old workers is the compatibility
+boundary. Do not infer rolling safety from the column being nullable or from an
+old worker refusing an unknown state.
+
+An application rollback after the database upgrade must leave migration 037 in
+place. Before deploying the previous green application SHA:
+
+1. Pause ingress and drain in-flight requests on the current application.
+2. Through the private PostgreSQL connection, require this query to return
+   zero:
+
+   ```sql
+   SELECT COUNT(*)
+   FROM mcp_dispatch_attempts
+   WHERE state = 'dispatch_claimed';
+   ```
+
+3. If any `dispatch_claimed` row remains, abort the rollback. Keep the current
+   code available to reconcile or complete it; do not clear its hash, rewrite
+   its state, refund it, or redispatch it manually.
+4. Only after the count is zero, deploy the previous green exact SHA through
+   the same immutable release sequence. Do not run `alembic downgrade` and do
+   not drop the nullable column.
+
+Migration 037's downgrade converts any surviving `dispatch_claimed` row to the
+older runtime's already-sent `dispatched` state before dropping the hash. That
+is a last-resort schema safety property, not the application rollback runbook:
+the supported rollback keeps migration 037 in place and drains claims first.
+
+The claim fence is limited to configured remote upstream dispatch. This
+migration does not alter local-tool reservations, per-tool call slots, quotes,
+human approvals, API-key/JWT authentication, or rate limiting. Its integrated
+migration and downgrade paths are covered by focused tests. A production
+mixed-worker overlap or rollback drill remains unverified for this release
+slice.
 
 ## Canonical deploy path
 
@@ -281,7 +343,7 @@ in committed defaults.
 | `MCP_UPSTREAM_URL` | one public HTTPS MCP origin | The pilot supports exactly one real upstream tool server |
 | `MCP_UPSTREAM_BEARER_TOKEN` | customer-specific secret | Never put it in the manifest or committed files |
 | `SENTINEL_API_URL` / `SENTINEL_API_KEY` | Omit unless enabling Sentinel-backed human approval | Optional product integration, not an Agent Middleware release dependency. Approval-required operations fail closed unless both are configured. Send synthetic or redacted arguments only. |
-| `RUN_MIGRATIONS_ON_START` | `true` (recommended; set via `railway variable set`) | Entrypoint runs `alembic upgrade head` before uvicorn. App boot then **verifies** trust tables exist and **never** calls `create_all` in production-like envs. Flag + empty `DATABASE_URL` fails closed (container exits). If the DB was previously bootstrapped with `create_all` and has no `alembic_version` row, run `alembic stamp head` once before enabling this flag. |
+| `RUN_MIGRATIONS_ON_START` | `true` for routine forward-compatible migrations; **not a substitute for migration 037's first-activation maintenance gate** | Entrypoint runs `alembic upgrade head` before uvicorn. App boot then **verifies** trust tables exist and **never** calls `create_all` in production-like envs. Flag + empty `DATABASE_URL` fails closed (container exits). If the DB was previously bootstrapped with `create_all` and has no `alembic_version` row, run `alembic stamp head` once before enabling this flag. Migration 037 must be applied through the paused-ingress, drained-worker sequence above before any new reconciler can receive traffic. |
 
 `REDIS_URL` is required for the managed pilot's isolated Redis service. Outside
 that pilot it remains optional when Redis rate limiting is unused; a
@@ -386,6 +448,15 @@ zero without actually running must not approve a release.
 
 From a clean detached checkout of the exact commit:
 
+The generic sequence below is deliberately blocked for the **first activation**
+of migration 037. This repository does not yet name a proven Railway
+ingress-block/private-verification mechanism. Before removing the stop, a
+customer-specific runbook must identify the actual ingress block and controlled
+bypass, prove every old request drained, apply 037 out of band, start the exact
+SHA as the sole traffic-eligible release, run private schema and health checks
+while public traffic remains blocked, and only then resume ingress.
+`RUN_MIGRATIONS_ON_START` does not pause or drain the old release.
+
 ```bash
 set -euo pipefail
 
@@ -420,6 +491,11 @@ test "$(jq -r '.id' <<<"$control_plane")" = "$PROJECT_ID"
 test "$(jq -r --arg environment "$ENVIRONMENT" \
   '[.environments.edges[].node | select(.name == $environment)] | length' \
   <<<"$control_plane")" -eq 1
+
+# Migration 037 first-activation stop gate. Remove this hard stop only in the
+# separately reviewed customer-specific maintenance runbook described above.
+echo "blocked: migration 037 requires a proven ingress block and full old-worker drain" >&2
+exit 1
 
 # Refresh provenance, then deploy only this clean checkout. A unique marker
 # lets the operator identify this deployment even if another release starts.
@@ -519,8 +595,10 @@ Afterward, inspect application and HTTP logs for tracebacks, dependency
 degradation, or unexpected 5xx responses. A failed private sentinel, schema
 check, exact-SHA check, health check, or critical user flow is a rollback
 trigger. Roll back by deploying the previously green exact SHA through this
-same sequence; never reverse database migrations. Migrations used for a
-rolling release must remain compatible with that rollback release.
+same sequence; never reverse database migrations. For migration 037, first
+follow the [dispatch-claim rollback gate](#dispatch-claim-migration-and-rollback).
+Migrations used for a rolling release must remain compatible with that rollback
+release.
 
 ### Customer operations manifest
 

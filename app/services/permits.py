@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from sqlalchemy import case, func, or_, select, update as sa_update
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.time import to_naive_utc, utc_now
@@ -127,7 +128,9 @@ def permit_constraints_snapshot(permit_model: Any) -> dict[str, Any]:
     if max_calls:
         ce["max_calls_per_tool"] = max_calls
     if permit_model.aggregate_value_cap is not None:
-        ce["aggregate_value_cap"] = format(permit_model.aggregate_value_cap.normalize(), "f")
+        ce["aggregate_value_cap"] = format(
+            permit_model.aggregate_value_cap.normalize(), "f"
+        )
     forbidden = _loads_list(permit_model.forbidden_fields_json or "[]")
     if forbidden:
         ce["forbidden_fields"] = forbidden
@@ -365,9 +368,13 @@ class PermitService:
             signature=signature,
             key_id=key_id,
             issued_at=now,
-            max_calls_per_tool_json=json.dumps(request.max_calls_per_tool) if request.max_calls_per_tool else None,
+            max_calls_per_tool_json=json.dumps(request.max_calls_per_tool)
+            if request.max_calls_per_tool
+            else None,
             aggregate_value_cap=request.aggregate_value_cap,
-            forbidden_fields_json=json.dumps(request.forbidden_fields) if request.forbidden_fields else None,
+            forbidden_fields_json=json.dumps(request.forbidden_fields)
+            if request.forbidden_fields
+            else None,
             recipient_domain=request.recipient_domain,
         )
         async with factory() as session:
@@ -405,6 +412,7 @@ class PermitService:
             if not model:
                 return PermitValidation(False, "permit_not_found", None)
             return await self._validate_model_for_action(
+                session=session,
                 model=model,
                 wallet_id=wallet_id,
                 tool_name=tool_name,
@@ -420,6 +428,7 @@ class PermitService:
         wallet_id: str,
         tool_name: str,
         key_id: str | None = None,
+        session: AsyncSession | None = None,
     ) -> PermitValidation:
         """Authorize access to an already-finalized governed invocation.
 
@@ -431,18 +440,24 @@ class PermitService:
         a key-bound permit. Tool scope is intentionally not re-evaluated: a
         signed denial for an out-of-scope tool must itself remain replayable.
         """
-        factory = get_session_factory()
-        async with factory() as session:
-            model = await session.get(PermitModel, permit_id)
+
+        async def validate(current_session: AsyncSession) -> PermitValidation:
+            model = await current_session.get(PermitModel, permit_id)
             if model is None:
                 return PermitValidation(False, "permit_not_found", None)
             if model.subject_wallet_id != wallet_id:
                 return PermitValidation(False, "permit_wallet_mismatch", model)
             if model.subject_key_id and model.subject_key_id != key_id:
                 return PermitValidation(False, "permit_key_mismatch", model)
-            if not await self.verify_signature(model):
+            if not await self.verify_signature(model, session=current_session):
                 return PermitValidation(False, "permit_signature_invalid", model)
             return PermitValidation(True, None, model)
+
+        if session is not None:
+            return await validate(session)
+        factory = get_session_factory()
+        async with factory() as owned_session:
+            return await validate(owned_session)
 
     async def authorize_and_reserve(
         self,
@@ -472,6 +487,7 @@ class PermitService:
                     if not model:
                         return PermitValidation(False, "permit_not_found", None)
                     validation = await self._validate_model_for_action(
+                        session=session,
                         model=model,
                         wallet_id=wallet_id,
                         tool_name=tool_name,
@@ -502,11 +518,13 @@ class PermitService:
                     # A concurrent call that committed between our read and write
                     # causes the UPDATE to match zero rows, and we retry.
                     now = utc_now()
-                    
+
                     # Compute the updated call counter. If max_calls_per_tool is
                     # set for this tool, the UPDATE will atomically increment it
                     # via optimistic concurrency control (CAS on the JSON column).
-                    max_calls_config = _loads_dict(model.max_calls_per_tool_json or "{}")
+                    max_calls_config = _loads_dict(
+                        model.max_calls_per_tool_json or "{}"
+                    )
                     call_limit = max_calls_config.get(tool_name)
                     original_counts_json = model.tool_call_counts_json
                     updated_counts_json = None
@@ -532,7 +550,7 @@ class PermitService:
                         updated_counts = dict(current_counts)
                         updated_counts[tool_name] = new_tool_count
                         updated_counts_json = json.dumps(updated_counts)
-                    
+
                     # Build the UPDATE values and WHERE predicates.
                     update_values: dict[str, Any] = {
                         "spent_credits": PermitModel.spent_credits + estimated_credits,
@@ -548,7 +566,7 @@ class PermitService:
                             <= PermitModel.max_credits,
                         ),
                     ]
-                    
+
                     if updated_counts_json is not None:
                         # Optimistic lock: only UPDATE if tool_call_counts_json
                         # still equals the value we read. If another transaction
@@ -559,17 +577,20 @@ class PermitService:
                             where_conditions.append(
                                 cast(
                                     ColumnElement[bool],
-                                    cast(Any, PermitModel.tool_call_counts_json).is_(None),
+                                    cast(Any, PermitModel.tool_call_counts_json).is_(
+                                        None
+                                    ),
                                 )
                             )
                         else:
                             where_conditions.append(
                                 cast(
                                     ColumnElement[bool],
-                                    PermitModel.tool_call_counts_json == original_counts_json,
+                                    PermitModel.tool_call_counts_json
+                                    == original_counts_json,
                                 )
                             )
-                    
+
                     reserved = await session.execute(
                         sa_update(PermitModel)
                         .where(*where_conditions)
@@ -610,7 +631,9 @@ class PermitService:
                         # incremented the counter between our pre-check and the
                         # failed optimistic UPDATE.
                         if call_limit is not None and type(call_limit) is int:
-                            refreshed_counts = _loads_dict(model.tool_call_counts_json or "{}")
+                            refreshed_counts = _loads_dict(
+                                model.tool_call_counts_json or "{}"
+                            )
                             refreshed_count = refreshed_counts.get(tool_name, 0)
                             if not isinstance(refreshed_count, int):
                                 refreshed_count = 0
@@ -663,6 +686,7 @@ class PermitService:
     async def _validate_model_for_action(
         self,
         *,
+        session: AsyncSession | None = None,
         model: PermitModel,
         wallet_id: str,
         tool_name: str,
@@ -697,7 +721,10 @@ class PermitService:
         # would answer a question it has not earned.
         if model.subject_wallet_id != wallet_id:
             return PermitValidation(
-                False, "permit_wallet_mismatch", model, {"bound_to": "subject_wallet_id"}
+                False,
+                "permit_wallet_mismatch",
+                model,
+                {"bound_to": "subject_wallet_id"},
             )
         if model.subject_key_id and model.subject_key_id != key_id:
             return PermitValidation(
@@ -768,7 +795,10 @@ class PermitService:
 
         # 2. aggregate_value_cap
         if model.aggregate_value_cap is not None:
-            total_charged = await self._sum_permit_charges(model.permit_id)
+            total_charged = await self._sum_permit_charges(
+                model.permit_id,
+                session=session,
+            )
             if total_charged + estimated_credits > model.aggregate_value_cap:
                 return PermitValidation(
                     False,
@@ -795,7 +825,7 @@ class PermitService:
                     {"field": hit, "forbidden_fields": forbidden},
                 )
 
-        if not await self.verify_signature(model):
+        if not await self.verify_signature(model, session=session):
             return PermitValidation(
                 False,
                 "permit_signature_invalid",
@@ -811,24 +841,15 @@ class PermitService:
         session: Any | None = None,
     ) -> int:
         """Count successful receipts for (permit_id, tool_name).
-        
+
         When called with an existing session, reads within that transaction's
         isolation level (e.g., to re-check a constraint before commit).
         """
         if session:
             result = await session.execute(
-                select(func.count()).select_from(ReceiptModel).where(
-                    cast(ColumnElement[bool], ReceiptModel.permit_id == permit_id),
-                    cast(ColumnElement[bool], ReceiptModel.tool == tool_name),
-                    cast(ColumnElement[bool], ReceiptModel.outcome == "success"),
-                )
-            )
-            return int(result.scalar() or 0)
-        
-        factory = get_session_factory()
-        async with factory() as session:
-            result = await session.execute(
-                select(func.count()).select_from(ReceiptModel).where(
+                select(func.count())
+                .select_from(ReceiptModel)
+                .where(
                     cast(ColumnElement[bool], ReceiptModel.permit_id == permit_id),
                     cast(ColumnElement[bool], ReceiptModel.tool == tool_name),
                     cast(ColumnElement[bool], ReceiptModel.outcome == "success"),
@@ -836,11 +857,37 @@ class PermitService:
             )
             return int(result.scalar() or 0)
 
-    async def _sum_permit_charges(self, permit_id: str) -> Decimal:
-        """Sum credits_charged across all receipts for this permit."""
         factory = get_session_factory()
         async with factory() as session:
             result = await session.execute(
+                select(func.count())
+                .select_from(ReceiptModel)
+                .where(
+                    cast(ColumnElement[bool], ReceiptModel.permit_id == permit_id),
+                    cast(ColumnElement[bool], ReceiptModel.tool == tool_name),
+                    cast(ColumnElement[bool], ReceiptModel.outcome == "success"),
+                )
+            )
+            return int(result.scalar() or 0)
+
+    async def _sum_permit_charges(
+        self,
+        permit_id: str,
+        *,
+        session: AsyncSession | None = None,
+    ) -> Decimal:
+        """Sum credits_charged across all receipts for this permit."""
+        if session is not None:
+            result = await session.execute(
+                select(func.sum(ReceiptModel.credits_charged)).where(
+                    cast(ColumnElement[bool], ReceiptModel.permit_id == permit_id),
+                )
+            )
+            total = result.scalar()
+            return Decimal(str(total)) if total is not None else Decimal("0")
+        factory = get_session_factory()
+        async with factory() as owned_session:
+            result = await owned_session.execute(
                 select(func.sum(ReceiptModel.credits_charged)).where(
                     cast(ColumnElement[bool], ReceiptModel.permit_id == permit_id),
                 )
@@ -1423,7 +1470,12 @@ class PermitService:
             )
         return corrected
 
-    async def verify_signature(self, model: PermitModel) -> bool:
+    async def verify_signature(
+        self,
+        model: PermitModel,
+        *,
+        session: AsyncSession | None = None,
+    ) -> bool:
         payload: dict[str, Any] = {
             "permit_id": model.permit_id,
             "issuer_wallet_id": model.issuer_wallet_id,
@@ -1462,6 +1514,7 @@ class PermitService:
             payload,
             signature=model.signature,
             key_id=model.key_id,
+            session=session,
         )
 
 
