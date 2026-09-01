@@ -105,7 +105,7 @@ it and `test_pages_carry_no_inline_scripts` will fail. Put the code in a
 same-origin file instead.
 
 CSS and JS are served with `max-age=604800`, so cache busting is a **manual
-query token**: every reference looks like `/styles.css?v=gateway-14`. When you
+query token**: every reference looks like `/styles.css?v=gateway-15`. When you
 change any of those files (including `/wave.js`, `/arcade.js`, and
 `/arcade.css`), bump the token in
 `index.html`, `proof/index.html`, `compare/index.html`, `concept/index.html`,
@@ -358,15 +358,16 @@ also means preloads cannot be hand-written: `vendor_fonts.py` emits
 page from it. Edit `PRELOAD` in `vendor_fonts.py` to change which faces are
 preloaded.
 
-Preloads cover every face in the first viewport. Libre Franklin is the
-display face (headings) and Public Sans the body face; both are variable, so
-one file each is enough. IBM Plex Mono carries every label, kicker, badge,
-code span and receipt row; it is static, so weights 400, 500 and 600 are
-three separate files and all three are preloaded. Press Start 2P is
-deliberately not preloaded: the page wears it only on the footer's
-`HUMANS: PRESS START` control and inside the arcade overlay, both far below
-the fold. Instrument Serif is used only by `concept/`, which keeps its own
-stylesheet. A preload must carry `crossorigin` even
+Preloads cover every face in the first viewport. Instrument Serif is the
+display face (the `h1` and every `h2`), so its single 400 face is preloaded
+first: a fallback flash there is a layout change, not a font swap, since no
+system serif shares its metrics. Libre Franklin carries card and tile
+titles and Public Sans the body; both are variable, so one file each is
+enough. IBM Plex Mono carries every label, kicker, badge, code span and
+receipt row; it is static, so weights 400, 500 and 600 are three separate
+files and all three are preloaded. Press Start 2P is deliberately not
+preloaded: the page wears it only on the footer's `HUMANS: PRESS START`
+control and inside the arcade overlay, both far below the fold. A preload must carry `crossorigin` even
 same-origin, or the browser discards it and fetches the file twice. The `404`
 page preloads nothing on purpose — it is `noindex` and mostly serves scanners.
 
@@ -382,7 +383,7 @@ the launch gate rather than deploying a stylesheet whose every `src` 404s.
 text-light letterform and headline, gold seal marks (the same mark the nav
 brand carries). The favicon is a 16×16 pixel letterform, because a favicon
 is a pixel grid whatever the page looks like; the social card is set in the
-page's own Libre Franklin and IBM Plex Mono on soft corners, matching the
+page's own Instrument Serif and IBM Plex Mono on soft corners, matching the
 pages it previews.
 `test_brand_graphics_use_the_design_system_palette` fails if either file
 reintroduces an off-system color; that is exactly how the original graphics
@@ -400,7 +401,7 @@ python3 render_social_card.py    # rasterize social-card.svg → social-card.png
 
 The script (stdlib-only, like `vendor_fonts.py`) inlines the SVG into a shim
 page, loads the vendored woff2 faces from `fonts/`, and screenshots it with
-headless Chromium, so the card's Libre Franklin headline and IBM Plex Mono
+headless Chromium, so the card's Instrument Serif headline and IBM Plex Mono
 labels are the site's own typography rather than an exporting machine's
 substitutes. It prefers a Playwright `headless_shell` build (found under
 `$PLAYWRIGHT_BROWSERS_PATH`; or point `$CHROMIUM` at any binary), whose

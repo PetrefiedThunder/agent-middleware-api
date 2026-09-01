@@ -62,8 +62,8 @@ ALLOWED_FONT_HOSTS = frozenset({"fonts.gstatic.com"})
 #: deliberately absent: it dresses only the footer's PRESS START control and
 #: the arcade overlay, both far below the fold.
 PRELOAD = (
-    ("Libre Franklin", 800, "latin"),
     ("Instrument Serif", 400, "latin"),
+    ("Libre Franklin", 800, "latin"),
     ("Public Sans", 400, "latin"),
     ("IBM Plex Mono", 400, "latin"),
     ("IBM Plex Mono", 500, "latin"),

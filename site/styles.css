@@ -1,10 +1,16 @@
 /* ==========================================================================
-   Agent Middleware API — "quiet console" design system
-   Ground: deep night ink. Light surfaces are reserved for paper artifacts
-   (the pilot ticket and the live receipt) — a receipt has to read as a
-   document, not as a panel. Gold marks authority; green is spent only on
+   Agent Middleware API — "ledger night" design system
+   Ground: deep navy ink, the colour of a ledger's cloth binding. Light
+   surfaces are reserved for paper artifacts (the pilot ticket and the live
+   receipt) — a receipt has to read as a document, not as a panel. Gold marks
+   authority (the seal, the primary action); green is spent only on
    verification status; cyan and magenta are the arcade's trim and never
    carry meaning on a page.
+
+   Type is a three-role system: a serif display face for the headlines,
+   because this product's promise is a signed document; a workhorse sans for
+   card titles and controls; a mono for everything that is data — kickers,
+   badges, receipt rows, code.
 
    This system replaced the full arcade-cabinet treatment. The 8-bit idea was
    fun, and it survives in exactly two places: the footer's PRESS START
@@ -14,20 +20,20 @@
    ========================================================================== */
 
 :root {
-  --ink: #0d0b1f;
-  --panel: #1b1640;
-  --rule: #4a3d8f;
-  --rule-soft: #2e2663;
-  --paper: #f4f1e0;
-  --paper-shade: #e4dfc8;
-  --paper-ink: #14122b;
-  --paper-dim: #4a4670;
-  --text: #eceafd;
-  --text-dim: #a49ddb;
-  --brass: #ffc233;
-  --brass-bright: #ffe066;
-  --verify: #4cf08a;
-  --danger: #ff6b5e;
+  --ink: #0b1020;
+  --panel: #121a30;
+  --rule: #34457a;
+  --rule-soft: #1f2b4a;
+  --paper: #f6f3e9;
+  --paper-shade: #e8e3d2;
+  --paper-ink: #121629;
+  --paper-dim: #4c526b;
+  --text: #e9edf8;
+  --text-dim: #9ca8cb;
+  --brass: #f0b43c;
+  --brass-bright: #ffd166;
+  --verify: #4ade80;
+  --danger: #ff7b6b;
   /* --danger holds 4.5:1 only on the dark grounds; this is its resolution
      for paper surfaces (the approval card resolves it as a literal because
      mail clients cannot read var()). */
@@ -37,24 +43,25 @@
   --arcade-magenta: #ff5cc8;
   /* One step below --ink. The arcade drops its hard shadows onto it; the
      page uses it as the darkest end of a soft shadow. */
-  --shadow-ink: #05040f;
+  --shadow-ink: #05070f;
 
   /* Hairlines are the text-dim hue at low alpha, so they sit inside the
      palette on every ground rather than reading as a third purple. */
-  --line: rgba(164, 157, 219, 0.18);
-  --line-strong: rgba(164, 157, 219, 0.34);
-  --paper-line: rgba(20, 18, 43, 0.17);
+  --line: rgba(156, 168, 203, 0.18);
+  --line-strong: rgba(156, 168, 203, 0.34);
+  --paper-line: rgba(18, 22, 41, 0.17);
 
-  --font-display: "Libre Franklin", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-title: "Libre Franklin", "Helvetica Neue", Arial, sans-serif;
   --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   /* The pixel face. Spent on the footer's PRESS START control and inside
      the arcade, and nowhere else on the page. */
   --font-pixel: "Press Start 2P", "Courier New", ui-monospace, monospace;
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-xs: 4px;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-xs: 3px;
   --shadow-soft: 0 24px 48px -24px rgba(0, 0, 0, 0.7);
   --shadow-lift: 0 12px 32px -16px rgba(0, 0, 0, 0.8);
 
@@ -152,29 +159,35 @@ body {
   color: var(--ink);
 }
 
+/* Headlines are the serif, set large and tight: a high-contrast face at
+   display size, one weight, no faux-bold. Third-level titles are the sans,
+   so a card's title reads as a label rather than a second headline. */
 h1,
-h2,
-h3 {
+h2 {
   font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  line-height: 1.06;
   margin: 0 0 1.25rem;
   text-wrap: balance;
 }
 
 h1 {
-  font-size: clamp(2rem, 4.4vw, 3.2rem);
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: clamp(2.5rem, 5.2vw, 3.9rem);
 }
 
 h2 {
-  font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+  font-size: clamp(1.9rem, 3.2vw, 2.7rem);
 }
 
 h3 {
+  font-family: var(--font-title);
+  font-weight: 700;
   font-size: clamp(1.05rem, 1.5vw, 1.2rem);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin: 0 0 1rem;
+  text-wrap: balance;
 }
 
 p {
@@ -273,7 +286,7 @@ p a {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.85rem var(--pad-x);
-  background: rgba(13, 11, 31, 0.86);
+  background: rgba(11, 16, 32, 0.86);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
@@ -460,8 +473,11 @@ main,
 
 .hero {
   position: relative;
-  min-height: calc(100vh - 4.5rem);
-  min-height: calc(100dvh - 4.5rem);
+  /* Sized to what it holds, with the field showing around it: the page's
+     first frame should carry the headline and the start of the offer, not a
+     viewport of empty ground. */
+  min-height: min(82vh, 48rem);
+  min-height: min(82dvh, 48rem);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -507,11 +523,12 @@ main,
 }
 
 .hero h1 {
-  font-size: clamp(2.3rem, 5.6vw, 4.2rem);
-  line-height: 1.08;
-  max-width: 17ch;
-  margin-bottom: 1.5rem;
-  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+  font-size: clamp(3rem, 7vw, 5.4rem);
+  line-height: 1.0;
+  letter-spacing: -0.015em;
+  max-width: 15ch;
+  margin-bottom: 1.6rem;
+  text-shadow: 0 2px 28px rgba(0, 0, 0, 0.65);
 }
 
 .eyebrow {
@@ -521,6 +538,9 @@ main,
   gap: 0.75rem;
   color: var(--text-dim);
   margin-bottom: 1.75rem;
+  /* Wider than the running measure: a tracked mono line wraps to three
+     lines inside 62ch, and an eyebrow should be one line, two at most. */
+  max-width: 46rem;
 }
 
 .eyebrow-mark {
@@ -602,13 +622,16 @@ main,
 .button-primary {
   background: var(--brass);
   color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .button-primary:hover {
   background: var(--brass-bright);
   color: var(--ink);
   transform: translateY(-1px);
-  box-shadow: 0 10px 24px -12px rgba(255, 194, 51, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 10px 24px -12px rgba(240, 180, 60, 0.6);
 }
 
 .button-secondary {
@@ -642,10 +665,12 @@ main,
   line-height: 1.3;
   padding: 0.95rem 1.6rem;
   min-height: 48px;
-  color: #0d0b1f;
+  color: #0b1020;
   background: var(--brass);
   border-radius: var(--radius-sm);
-  box-shadow: 0 12px 32px -14px rgba(255, 194, 51, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 12px 32px -14px rgba(240, 180, 60, 0.7);
   transition: background 140ms ease, box-shadow 140ms ease;
 }
 
@@ -656,7 +681,9 @@ main,
 
 .button-wave:hover .button-wave-face {
   background: var(--brass-bright);
-  box-shadow: 0 16px 36px -14px rgba(255, 194, 51, 0.8);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 16px 36px -14px rgba(240, 180, 60, 0.8);
 }
 
 .button-wave:active {
@@ -710,7 +737,7 @@ main,
 
 .boundary-scroll {
   overflow-x: auto;
-  background: rgba(13, 11, 31, 0.7);
+  background: rgba(11, 16, 32, 0.7);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 0.5rem;
@@ -745,6 +772,12 @@ main,
   padding: 1.75rem 1.75rem 2.25rem;
   border-radius: var(--radius);
   box-shadow: var(--shadow-soft);
+}
+
+/* The pilot ticket wears a gold band on its top edge — the one place the
+   accent touches paper — so the offer reads as a ticket, not a note. */
+.pilot-card {
+  border-top: 4px solid var(--brass);
 }
 
 /* torn / scalloped receipt bottom edge — a receipt metaphor, so it belongs
@@ -798,7 +831,7 @@ main,
 }
 
 .agent-entry-head h2 {
-  font-size: 1.5rem;
+  font-size: clamp(1.7rem, 2.4vw, 2.1rem);
   margin: 0;
 }
 
@@ -929,8 +962,8 @@ main,
 }
 
 .thesis-signals strong {
-  font-family: var(--font-display);
-  font-size: 1.25rem;
+  font-family: var(--font-title);
+  font-size: 1.2rem;
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -949,7 +982,7 @@ main,
 .protocol-section {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  background: rgba(27, 22, 64, 0.35);
+  background: rgba(18, 26, 48, 0.35);
 }
 
 .protocol-heading {
@@ -961,6 +994,7 @@ main,
 }
 
 .loop-track {
+  border-top: 3px solid var(--brass);
   max-width: var(--page-max);
   margin: 0 auto clamp(3.5rem, 8vw, 5rem);
   /* Four columns, not eight: each step carries a sentence of explanation, and
@@ -1003,7 +1037,7 @@ main,
 }
 
 .loop-track li strong {
-  font-family: var(--font-display);
+  font-family: var(--font-title);
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -1223,7 +1257,7 @@ main,
 }
 
 .machine-links a > span {
-  font-family: var(--font-display);
+  font-family: var(--font-title);
   font-weight: 700;
   font-size: 1.1rem;
   letter-spacing: -0.01em;
@@ -1330,7 +1364,7 @@ main,
 }
 
 .closing-cta h2 {
-  font-size: clamp(1.5rem, 2.6vw, 2rem);
+  font-size: clamp(1.9rem, 3vw, 2.5rem);
   margin: 0;
 }
 
@@ -1551,7 +1585,7 @@ html[data-a11y-motion="reduce"].arcade-open .site-footer {
 }
 
 .verify-section pre {
-  background: rgba(13, 11, 31, 0.7);
+  background: rgba(11, 16, 32, 0.7);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 1.5rem;
@@ -1583,7 +1617,7 @@ html[data-a11y-motion="reduce"].arcade-open .site-footer {
   margin-top: 2rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(27, 22, 64, 0.35);
+  background: rgba(18, 26, 48, 0.35);
 }
 
 .compare-scroll:focus-visible {
@@ -1629,6 +1663,11 @@ html[data-a11y-motion="reduce"].arcade-open .site-footer {
 
 .compare-table tbody td {
   color: var(--text-dim);
+}
+
+.compare-table tbody tr:nth-child(even) th,
+.compare-table tbody tr:nth-child(even) td {
+  background: rgba(11, 16, 32, 0.35);
 }
 
 .compare-table tbody tr:last-child th,
