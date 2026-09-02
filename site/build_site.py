@@ -444,12 +444,14 @@ def load_transcript() -> dict:
             raise LaunchConfigurationError(
                 "every transcript step needs id, loop, title, request and note"
             )
-        if not (
-            isinstance(step.get("response"), list)
-            or isinstance(step.get("output"), str)
-        ):
+        response = step.get("response")
+        rows_ok = isinstance(response, list) and all(
+            isinstance(row, list) and len(row) == 2 for row in response
+        )
+        if not (rows_ok or isinstance(step.get("output"), str)):
             raise LaunchConfigurationError(
-                f"transcript step {step.get('id')!r} has neither a response nor an output"
+                f"transcript step {step.get('id')!r} needs a response of "
+                "[key, value] rows or an output string"
             )
     ids = [step["id"] for step in steps]
     for step in steps:

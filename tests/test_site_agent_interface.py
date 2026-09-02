@@ -2912,7 +2912,8 @@ def test_landing_console_renders_the_recorded_transcript_verbatim(tmp_path) -> N
     but the recording lacks — or a value edited in the HTML — cannot ship.
     """
     output = tmp_path / "site"
-    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+    result = _render_site(output, VALID_TEST_CONTACTS)
+    assert result.returncode == 0, result.stderr
 
     page = (output / "index.html").read_text(encoding="utf-8")
     transcript = _transcript()
@@ -3013,7 +3014,8 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     cannot ship a stale verdict.
     """
     output = tmp_path / "site"
-    assert _render_site(output, VALID_TEST_CONTACTS).returncode == 0
+    result = _render_site(output, VALID_TEST_CONTACTS)
+    assert result.returncode == 0, result.stderr
 
     page = (output / "index.html").read_text(encoding="utf-8")
     transcript = _transcript()
@@ -3032,65 +3034,78 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     assert page.index('id="live-verify-title"') > page.index('id="proof"')
 
     # Now the guard: a transcript for another receipt must fail the build.
+    # load_transcript resolves TRANSCRIPT from its own globals (runpy hands
+    # back a copy of the namespace, so the function's __globals__ is the one
+    # to rebind). It is pointed at a copy under tmp_path: the committed file
+    # is never written, and this test can run beside the others that read it.
     build_module = runpy.run_path(str(SITE / "build_site.py"))
     launch_error = build_module["LaunchConfigurationError"]
     load_transcript = build_module["load_transcript"]
-    path = SITE / "proof" / "transcript.json"
-    original = path.read_text(encoding="utf-8")
-    try:
-        stale = json.loads(original)
-        stale["live_receipt_verification"]["receipt_id"] = "rcpt-0000000000000000"
-        stale["live_receipt_verification"]["output"] = "VERIFIED  rcpt-0000000000000000"
-        path.write_text(json.dumps(stale), encoding="utf-8")
-        with pytest.raises(
-            launch_error, match="re-run python scripts/record_site_transcript.py"
-        ):
+    path = tmp_path / "transcript.json"
+    load_transcript.__globals__["TRANSCRIPT"] = path
+    original = (SITE / "proof" / "transcript.json").read_text(encoding="utf-8")
+
+    path.write_text(original, encoding="utf-8")
+    load_transcript()  # the real recording loads through the rebound path
+
+    stale = json.loads(original)
+    stale["live_receipt_verification"]["receipt_id"] = "rcpt-0000000000000000"
+    stale["live_receipt_verification"]["output"] = "VERIFIED  rcpt-0000000000000000"
+    path.write_text(json.dumps(stale), encoding="utf-8")
+    with pytest.raises(
+        launch_error, match="re-run python scripts/record_site_transcript.py"
+    ):
+        load_transcript()
+
+    failing = json.loads(original)
+    failing["live_receipt_verification"]["exit_code"] = 1
+    failing["live_receipt_verification"]["output"] = "MISMATCH  " + published_id
+    path.write_text(json.dumps(failing), encoding="utf-8")
+    with pytest.raises(launch_error, match="will not publish a failing verdict"):
+        load_transcript()
+
+    unverified = json.loads(original)
+    for step in unverified["steps"]:
+        if step["id"] == "verify":
+            step["output"] = "INVALID  receipt_signature_invalid"
+    path.write_text(json.dumps(unverified), encoding="utf-8")
+    with pytest.raises(launch_error, match="offline verify step did not verify"):
+        load_transcript()
+
+    malformed_rows = json.loads(original)
+    malformed_rows["steps"][0]["response"] = [["only-a-key"], "not-a-row"]
+    path.write_text(json.dumps(malformed_rows), encoding="utf-8")
+    with pytest.raises(launch_error, match=r"\[key, value\] rows"):
+        load_transcript()
+
+    for label, payload in {
+        "not json": "{",
+        "a list": "[]",
+        "no steps": '{"steps": []}',
+        "a step missing its note": json.dumps(
+            {
+                "steps": [
+                    {
+                        "id": "x",
+                        "loop": "l",
+                        "title": "t",
+                        "request": "r",
+                        "response": [],
+                    }
+                ],
+                "source": {"label": "s"},
+            }
+        ),
+    }.items():
+        path.write_text(payload, encoding="utf-8")
+        with pytest.raises(launch_error):
             load_transcript()
-
-        failing = json.loads(original)
-        failing["live_receipt_verification"]["exit_code"] = 1
-        failing["live_receipt_verification"]["output"] = "MISMATCH  " + published_id
-        path.write_text(json.dumps(failing), encoding="utf-8")
-        with pytest.raises(launch_error, match="will not publish a failing verdict"):
-            load_transcript()
-
-        unverified = json.loads(original)
-        for step in unverified["steps"]:
-            if step["id"] == "verify":
-                step["output"] = "INVALID  receipt_signature_invalid"
-        path.write_text(json.dumps(unverified), encoding="utf-8")
-        with pytest.raises(launch_error, match="offline verify step did not verify"):
-            load_transcript()
-
-        for label, payload in {
-            "not json": "{",
-            "a list": "[]",
-            "no steps": '{"steps": []}',
-            "a step missing its note": json.dumps(
-                {
-                    "steps": [
-                        {
-                            "id": "x",
-                            "loop": "l",
-                            "title": "t",
-                            "request": "r",
-                            "response": [],
-                        }
-                    ],
-                    "source": {"label": "s"},
-                }
-            ),
-        }.items():
-            path.write_text(payload, encoding="utf-8")
-            with pytest.raises(launch_error):
-                load_transcript()
-        path.unlink()
-        with pytest.raises(launch_error, match="missing"):
-            load_transcript()
-    finally:
-        path.write_text(original, encoding="utf-8")
+    path.unlink()
+    with pytest.raises(launch_error, match="missing"):
+        load_transcript()
 
 
+@pytest.mark.proof
 def test_recorded_transcript_is_reproducible_from_the_demo() -> None:
     """``record_site_transcript.py --check`` must agree with the committed file.
 
@@ -3099,7 +3114,8 @@ def test_recorded_transcript_is_reproducible_from_the_demo() -> None:
     hand-edited transcript — or a demo whose behaviour has drifted from what
     the page shows — fails here. It takes the demo's ~30 seconds on purpose:
     the page's claim is that the transcript is real, and only running it
-    proves that.
+    proves that. Marked ``proof`` so the fast product loop skips it; CI's
+    test job and ``make test-all`` still run it.
     """
     result = subprocess.run(
         [

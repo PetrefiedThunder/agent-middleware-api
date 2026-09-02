@@ -101,6 +101,7 @@ class Recording:
         status: int,
         response: Any,
     ) -> None:
+        """Append one exchange, and remember any API key the response minted."""
         if isinstance(response, dict) and isinstance(response.get("api_key"), str):
             self.secrets.append(response["api_key"])
         self.exchanges.append(
@@ -115,6 +116,7 @@ class Recording:
         )
 
     def find(self, method: str, path: str, *, nth: int = 0, body_id: str | None = None):
+        """Return the nth exchange matching method, path (sans query) and JSON-RPC id."""
         matches = [
             exchange
             for exchange in self.exchanges
@@ -134,6 +136,7 @@ def _record(recording: Recording) -> None:
     """Wrap the demo's HTTP helpers so every exchange lands in the recording."""
 
     async def post_json(client, path, *, headers, json_body, expected_status):
+        """The demo's POST helper, with the exchange recorded."""
         response = await client.post(path, headers=headers, json=json_body)
         demo.require(
             response.status_code == expected_status,
@@ -144,6 +147,7 @@ def _record(recording: Recording) -> None:
         return payload
 
     async def get_json(client, path, *, headers, expected_status):
+        """The demo's GET helper, with the exchange recorded."""
         response = await client.get(path, headers=headers)
         demo.require(
             response.status_code == expected_status,
@@ -158,6 +162,7 @@ def _record(recording: Recording) -> None:
 
 
 def _redact(value: Any, secrets: list[str]) -> Any:
+    """Replace every recorded secret, wherever it appears in string values."""
     if isinstance(value, str):
         for secret in secrets:
             if secret == demo.ADMIN_KEY:
@@ -212,6 +217,7 @@ def _verify_cli(
 
 
 def _pick(mapping: dict[str, Any], keys: list[str]) -> list[list[str]]:
+    """The named keys of a response as display rows, in the order given."""
     lines = []
     for key in keys:
         if key in mapping:
@@ -255,8 +261,15 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
     )
 
     allowed = next(
-        tool for tool in tools["response"]["tools"] if tool["name"] == demo.ALLOWED_TOOL
+        (
+            tool
+            for tool in tools["response"]["tools"]
+            if tool["name"] == demo.ALLOWED_TOOL
+        ),
+        None,
     )
+    if allowed is None:
+        raise SystemExit(f"/mcp/tools.json does not list {demo.ALLOWED_TOOL}")
     # The manifest carries cost and permit metadata under MCP-style
     # annotations, not at the top level of the tool entry.
     allowed_annotations = allowed.get("annotations") or {}
@@ -399,14 +412,19 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
     }
 
 
-async def record() -> dict[str, Any]:
+async def record() -> tuple[dict[str, Any], list[str]]:
+    """Run the demo, project it, redact it; return the transcript and its secrets.
+
+    The secrets come back alongside so the caller can prove none survived
+    redaction before anything is written.
+    """
     recording = Recording()
     _record(recording)
     silent = io.StringIO()
     with contextlib.redirect_stdout(silent):
         summary = await demo.run_demo(json_output=True)
     transcript = build_transcript(recording, summary)
-    return _redact(transcript, recording.secrets)
+    return _redact(transcript, recording.secrets), list(recording.secrets)
 
 
 def _stable(value: Any) -> Any:
@@ -435,16 +453,19 @@ def _stable(value: Any) -> Any:
 
 
 def main() -> int:
+    """Record the transcript, or with --check compare a fresh recording to it."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check", action="store_true", help="fail if the committed transcript is stale"
     )
     args = parser.parse_args()
 
-    transcript = asyncio.run(record())
+    transcript, secrets = asyncio.run(record())
     rendered = json.dumps(transcript, indent=2, sort_keys=True) + "\n"
-    for secret in (demo.ADMIN_KEY, demo.DEMO_PRIVATE_KEY_B64):
-        if secret in rendered:
+    # Every value redaction targeted, plus the demo signing key, which the
+    # demo never sends over HTTP but which must never leak either.
+    for secret in (*secrets, demo.DEMO_PRIVATE_KEY_B64):
+        if secret and secret in rendered:
             raise SystemExit("refusing to write a transcript that contains a secret")
 
     if args.check:
