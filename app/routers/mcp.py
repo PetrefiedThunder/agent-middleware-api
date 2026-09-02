@@ -44,6 +44,7 @@ from ..services.mcp_generator import get_mcp_generator
 from ..services.dogfood_tool import sync_dogfood_tool_registration
 from ..services.mcp_phase9_tools import sync_proof_surface_mcp_registration
 from ..services.mcp_dispatch_attempts import (
+    DispatchAttemptConflictError,
     DispatchClaimUnavailableError,
     DispatchPrepareCommitUncertainError,
     DispatchResultRejectedError,
@@ -1362,10 +1363,12 @@ async def _execute_registered_tool(
                         attempt_id=dispatch_attempt.attempt_id,
                         expected_updated_at=dispatch_attempt.updated_at,
                     )
-                except DispatchClaimUnavailableError:
-                    # Cleanup cannot prove the attempt remained effect-free. Do
-                    # not publish the legacy denial over a potentially advanced
-                    # durable owner; reconciliation now owns classification.
+                except DispatchAttemptConflictError:
+                    # Cleanup cannot prove the attempt remained effect-free. Any
+                    # dispatch conflict (claim unavailable, terminal conflict,
+                    # commit-uncertain, ...) means a durable owner may have
+                    # advanced it, so do not publish the legacy denial over it;
+                    # reconciliation now owns classification.
                     raise IdempotencyInProgressError(
                         "idempotency_in_progress"
                     ) from None
@@ -1481,7 +1484,10 @@ async def _execute_registered_tool(
                     error_code=denial_reason,
                     max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
                 )
-            except DispatchClaimUnavailableError:
+            except DispatchAttemptConflictError:
+                # Any dispatch conflict here means the durable row may have been
+                # advanced by its owner/reconciler; surface the retryable
+                # in-progress envelope instead of a generic internal error.
                 raise IdempotencyInProgressError("idempotency_in_progress") from None
             await get_permit_service().release_dispatch_budget_once(
                 dispatch_attempt.attempt_id
@@ -2082,7 +2088,10 @@ async def _execute_upstream_after_charge(
                 error_code=exc.code,
                 max_result_bytes=settings.MCP_UPSTREAM_MAX_RESPONSE_BYTES,
             )
-        except DispatchClaimUnavailableError:
+        except DispatchAttemptConflictError:
+            # Any dispatch conflict here means the durable row may have been
+            # advanced by its owner/reconciler; surface the retryable
+            # in-progress envelope instead of a generic internal error.
             raise IdempotencyInProgressError("idempotency_in_progress") from None
         await _raise_refunded_upstream_failure(
             reason="upstream_pre_dispatch_failed",
