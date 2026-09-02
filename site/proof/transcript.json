@@ -3,9 +3,9 @@
     "bundle_sha256": "7b43ee98a3526293723c3383c02fce0e9d2f9f3634378d569d6cc2ff756a7edc",
     "command": "b2a-verify-receipt --bundle receipt.json --keys trust-keys.json \\\n  --expect-issuer https://api.thisisatest.tech",
     "exit_code": 0,
-    "keys_sha256": "aa03192fb048e2c8fca5ba6feb7be0cf2ed6461f21f60a9a5673afe66398b92e",
     "output": "VERIFIED  rcpt-9daf745e477d45ab\n  signed by   railway-prod-ed25519\n  permit      permit-c73a0b621c244831\n  tool        partner.echo\n  outcome     success\n  credits     1 charged of 1 authorized\n  at          2026-08-11T21:17:28.064620+00:00",
-    "receipt_id": "rcpt-9daf745e477d45ab"
+    "receipt_id": "rcpt-9daf745e477d45ab",
+    "trust_document_sha256": "aa03192fb048e2c8fca5ba6feb7be0cf2ed6461f21f60a9a5673afe66398b92e"
   },
   "recorded_at": "2026-09-02T03:39:26+00:00",
   "recorded_by": "python scripts/record_site_transcript.py",

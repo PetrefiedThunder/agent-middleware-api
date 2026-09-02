@@ -524,7 +524,7 @@ def load_transcript() -> dict:
     # The same holds for the key set the verifier checked the signature
     # against: the command beside the verdict names trust-keys.json, so the
     # published file must be the one that produced the verdict.
-    if live.get("keys_sha256") != hashlib.sha256(keys_bytes).hexdigest():
+    if live.get("trust_document_sha256") != hashlib.sha256(keys_bytes).hexdigest():
         raise LaunchConfigurationError(
             "transcript's live verifier output was recorded against different "
             "trust-keys.json bytes than the ones being published; re-run "

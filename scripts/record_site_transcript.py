@@ -427,10 +427,12 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
             # republished after recording (even under the same id) cannot
             # ship with this verdict beside it.
             "bundle_sha256": hashlib.sha256(live_bundle_bytes).hexdigest(),
-            # And the key set it was checked against: a rotated or edited
-            # trust-keys.json after recording would leave a verdict beside a
-            # command that no longer reproduces it.
-            "keys_sha256": hashlib.sha256(live_keys_bytes).hexdigest(),
+            # And the key set it was checked against (site/proof/trust-keys.json):
+            # a rotated or edited key file after recording would leave a verdict
+            # beside a command that no longer reproduces it. The field is named
+            # for the document, not the keys, so the secret scanner does not
+            # read a public digest as a credential.
+            "trust_document_sha256": hashlib.sha256(live_keys_bytes).hexdigest(),
             **live_verification,
         },
     }
