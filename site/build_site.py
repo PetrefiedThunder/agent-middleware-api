@@ -488,10 +488,21 @@ def load_transcript() -> dict:
         raise LaunchConfigurationError(
             f"site/proof/receipt.json is unreadable: {exc}"
         ) from exc
-    if live["receipt_id"] != published_id or published_id not in live["output"]:
+    if live.get("exit_code") != 0 or not live["output"].startswith("VERIFIED"):
+        raise LaunchConfigurationError(
+            "the live receipt did not verify when the transcript was recorded; "
+            "the site will not publish a failing verdict as proof"
+        )
+    # The verdict line is the first line of verify_cli output, so the id
+    # must appear there: matching it anywhere in the output would accept a
+    # verdict for a different receipt that merely mentions this one.
+    if live["receipt_id"] != published_id or not live["output"].startswith(
+        f"VERIFIED  {published_id}"
+    ):
         raise LaunchConfigurationError(
             "transcript's live verifier output is for "
-            f"{live['receipt_id']}, but receipt.json publishes {published_id}; "
+            f"{live['output'].splitlines()[0]!r} (recorded as "
+            f"{live['receipt_id']}), but receipt.json publishes {published_id}; "
             "re-run python scripts/record_site_transcript.py"
         )
     # Same id is not enough: the verdict must have been produced from the
@@ -502,11 +513,6 @@ def load_transcript() -> dict:
             "transcript's live verifier output was recorded against different "
             "receipt.json bytes than the ones being published; re-run "
             "python scripts/record_site_transcript.py"
-        )
-    if live.get("exit_code") != 0 or not live["output"].startswith("VERIFIED"):
-        raise LaunchConfigurationError(
-            "the live receipt did not verify when the transcript was recorded; "
-            "the site will not publish a failing verdict as proof"
         )
     return transcript
 

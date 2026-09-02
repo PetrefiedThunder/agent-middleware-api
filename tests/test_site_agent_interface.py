@@ -3091,6 +3091,19 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     ):
         load_transcript()
 
+    # The id has to be on the verdict line itself. A verdict for another
+    # receipt that merely mentions the published id further down (in a
+    # field, a hint, an error) is not a verdict for the published receipt.
+    misbound = json.loads(original)
+    misbound["live_receipt_verification"]["output"] = (
+        "VERIFIED  rcpt-0000000000000000\n  supersedes  " + published_id
+    )
+    path.write_text(json.dumps(misbound), encoding="utf-8")
+    with pytest.raises(
+        launch_error, match="re-run python scripts/record_site_transcript.py"
+    ):
+        load_transcript()
+
     resigned = json.loads(original)
     resigned["live_receipt_verification"]["bundle_sha256"] = "0" * 64
     path.write_text(json.dumps(resigned), encoding="utf-8")
