@@ -2977,6 +2977,11 @@ def test_landing_console_renders_the_recorded_transcript_verbatim(tmp_path) -> N
     replay = dict(steps["replay"]["response"])
     assert replay["receipt_id"] == invoke["receipt_id"]
     assert replay["ledger debits for this tool"] == "1"
+    discover = dict(steps["discover"]["response"])
+    assert discover["name"] == "trust-plane-echo"
+    assert discover["creditsPerCall"] == "2" and discover["requirePermit"] == "true", (
+        "discovery must show what the call costs and that it needs a permit"
+    )
     deny = dict(steps["deny"]["response"])
     assert deny["error"] == "permit_tool_not_allowed"
     assert deny["ledger_entry_id"] == "null"
@@ -3047,6 +3052,14 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
         failing["live_receipt_verification"]["output"] = "MISMATCH  " + published_id
         path.write_text(json.dumps(failing), encoding="utf-8")
         with pytest.raises(launch_error, match="will not publish a failing verdict"):
+            load_transcript()
+
+        unverified = json.loads(original)
+        for step in unverified["steps"]:
+            if step["id"] == "verify":
+                step["output"] = "INVALID  receipt_signature_invalid"
+        path.write_text(json.dumps(unverified), encoding="utf-8")
+        with pytest.raises(launch_error, match="offline verify step did not verify"):
             load_transcript()
 
         for label, payload in {

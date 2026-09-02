@@ -452,6 +452,16 @@ def load_transcript() -> dict:
                 f"transcript step {step.get('id')!r} has neither a response nor an output"
             )
     ids = [step["id"] for step in steps]
+    for step in steps:
+        # A verifier step is only evidence if it verified. The recorder
+        # refuses to write a failed one; the build refuses to render it.
+        if step["id"] == "verify" and not str(step.get("output", "")).startswith(
+            "VERIFIED"
+        ):
+            raise LaunchConfigurationError(
+                "the transcript's offline verify step did not verify; the site "
+                "will not publish a failing verdict as proof"
+            )
     missing = [name for name in HERO_CONSOLE_STEPS if name not in ids]
     if missing:
         raise LaunchConfigurationError(

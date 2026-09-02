@@ -195,34 +195,20 @@ def _verify_cli(
     """
     from b2a_sdk import verify_cli
 
-    argv = [
-        "b2a-verify-receipt",
-        "--bundle",
-        str(bundle_path),
-        "--keys",
-        str(keys_path),
-    ]
+    args = ["--bundle", str(bundle_path), "--keys", str(keys_path)]
     if issuer:
-        argv += ["--expect-issuer", issuer]
-    stdout = io.StringIO()
-    exit_code = 0
-    with contextlib.redirect_stdout(stdout):
-        old_argv = sys.argv
-        sys.argv = argv
-        try:
-            verify_cli.main()
-        except SystemExit as exc:  # the CLI exits non-zero on a failed verification
-            exit_code = int(exc.code or 0)
-        finally:
-            sys.argv = old_argv
+        args += ["--expect-issuer", issuer]
+    # main() returns the exit code (0 verified, 1 invalid, 2 undetermined)
+    # and prints a failed verdict to stderr, so both streams are kept: the
+    # recorded output is whatever a visitor would have seen on their screen.
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        exit_code = int(verify_cli.main(args))
+    output = (stdout.getvalue() + stderr.getvalue()).rstrip("\n")
     command = f"b2a-verify-receipt --bundle {bundle_path.name} --keys {keys_path.name}"
     if issuer:
         command += f" \\\n  --expect-issuer {issuer}"
-    return {
-        "command": command,
-        "output": stdout.getvalue().rstrip("\n"),
-        "exit_code": exit_code,
-    }
+    return {"command": command, "output": output, "exit_code": exit_code}
 
 
 def _pick(mapping: dict[str, Any], keys: list[str]) -> list[list[str]]:
@@ -271,6 +257,16 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
     allowed = next(
         tool for tool in tools["response"]["tools"] if tool["name"] == demo.ALLOWED_TOOL
     )
+    # The manifest carries cost and permit metadata under MCP-style
+    # annotations, not at the top level of the tool entry.
+    allowed_annotations = allowed.get("annotations") or {}
+    if (
+        not isinstance(allowed_annotations, dict)
+        or "creditsPerCall" not in allowed_annotations
+    ):
+        raise SystemExit(
+            f"/mcp/tools.json entry for {demo.ALLOWED_TOOL} carries no cost annotation"
+        )
     receipt = invoke["response"]["result"]["receipt"]
     replay_receipt = replay["response"]["result"]["receipt"]
     denial_error = denial["response"]["error"]
@@ -289,6 +285,13 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
         key_document = recording.find("GET", "/.well-known/trust-keys.json")["response"]
         keys_path.write_text(json.dumps(key_document, indent=2))
         local_verification = _verify_cli(bundle_path, keys_path, None)
+    if local_verification["exit_code"] != 0 or not local_verification[
+        "output"
+    ].startswith("VERIFIED"):
+        raise SystemExit(
+            "the demo's receipt did not verify offline; refusing to record a "
+            f"transcript that would show it:\n{local_verification['output']}"
+        )
 
     steps = [
         {
@@ -296,8 +299,9 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
             "loop": "01 · Discover",
             "title": "The agent reads the manifest.",
             "request": _request_line(tools),
-            "response": _pick(
-                allowed, ["name", "credits_per_unit", "unit_name", "require_permit"]
+            "response": _pick(allowed, ["name"])
+            + _pick(
+                allowed_annotations, ["creditsPerCall", "unitName", "requirePermit"]
             ),
             "note": "Which tools exist and what each call costs. Discovery is public; nothing here can be invoked yet.",
         },
