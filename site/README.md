@@ -38,16 +38,19 @@ Open `http://127.0.0.1:8765/`.
   with `data-wave="preset"` and scrolling lerps between them — sea →
   condense → order → stream → crystal → quiet → gridquiet → dark →
   ember — while the
-  composite's ground color lerps from pure black into the cabinet ink.
-  The field is rendered into a 320px-wide framebuffer (`CONFIG.pixelWidth`)
-  and upscaled by the compositor with `image-rendering: pixelated`, so it
-  arrives as part of the pixel grid rather than as a photograph behind it.
+  composite's ground color lerps from pure black into the page ink.
+  The field is rendered into a capped framebuffer (`data-pixel-width` on
+  the canvas, 960 device pixels wide) and scaled up smoothly by the
+  compositor; the cap is a GPU budget for large high-density screens, not
+  a pixel-art treatment.
   Hovering a governed-loop card or the booking CTA fires a pulse through
   the field. Reduced motion renders one still frame per field state;
   high contrast hides the field entirely. The footer opens
   [the waiting room](#the-waiting-room), a hundred-cabinet arcade
   (`/arcade.js`, `/arcade.css`)
 - `/proof/` — portable receipt, matching key snapshot, and offline command
+- `/proof/transcript.json` — the recorded governed-loop transcript the
+  homepage renders (see "The governed loop as evidence" below)
 - `/compare/` — named competitor comparison, build-vs-buy, and fit/compliance FAQ
 - `/concept/` — unlisted landing-page design study (noindex, absent from the
   sitemap, never linked from the funnel): the single-fold treatment the
@@ -68,6 +71,40 @@ Open `http://127.0.0.1:8765/`.
 `@@SECURITY_TXT_EXPIRES@@` becomes one year past the build, so a deployed
 `security.txt` never serves a lapsed `Expires`. Plain-text targets take the raw
 contact value; HTML and XML targets take the entity-escaped one.
+
+## The governed loop as evidence
+
+The homepage shows the governed loop as a terminal: real requests, real
+responses, and the offline verifier's real stdout. Nothing in those panels is
+typed into the HTML. `build_site.py` expands three tokens from
+`proof/transcript.json`:
+
+- `@@HERO_CONSOLE@@` — the loop's spine (permit → invoke → replay → verify)
+  beside the headline
+- `@@LOOP_TRANSCRIPT@@` — every recorded step with its loop label, title and
+  annotation, in the "Governed path" section
+- `@@LIVE_VERIFICATION@@` — `b2a-verify-receipt` run against the published
+  `receipt.json` and `trust-keys.json`, in the proof section
+
+`transcript.json` is **generated**. `scripts/record_site_transcript.py` runs
+the same proof as `make prove-trust-plane` against a throwaway local SQLite
+gateway, records every HTTP exchange the demo makes, keeps the ones the page
+shows, and runs the SDK verifier twice — on the demo's portable receipt and on
+the live one. The operator key and the minted agent key are replaced with
+`$OPERATOR_API_KEY` and `$AGENT_API_KEY` before anything is written.
+
+```bash
+make site-transcript          # re-record (≈30s; needs the app's requirements)
+make site-transcript-check    # fail if the committed file is stale or hand-edited
+```
+
+Re-record whenever the demo, a router's response shape, or `receipt.json`
+changes. The build refuses a transcript whose live verification names a
+different receipt than the one published, so republishing the receipt without
+re-recording cannot ship a verdict for the wrong artifact. The panels say in
+their own footer that the loop was recorded from a local gateway run, not the
+live API; the live receipt's verdict is the only line on the page that comes
+from production.
 
 ## Structured data
 
@@ -104,9 +141,9 @@ it and `test_pages_carry_no_inline_scripts` will fail. Put the code in a
 same-origin file instead.
 
 CSS and JS are served with `max-age=604800`, so cache busting is a **manual
-query token**: every reference looks like `/styles.css?v=gateway-13`. When you
-change any of those files (including `/wave.js`, `/arcade.js`, and
-`/arcade.css`), bump the token in
+query token**: every reference looks like `/styles.css?v=gateway-16`. When you
+change any of those files (including `/wave.js`, `/arcade-boot.js`,
+`/arcade.js`, and `/arcade.css`), bump the token in
 `index.html`, `proof/index.html`, `compare/index.html`, `concept/index.html`,
 `404.html`, and `build_site.py`'s `ANALYTICS_SCRIPTS`, or
 returning visitors
@@ -133,8 +170,16 @@ the offline verifier.
 This product is built for agents. During the governed loop the human has
 nothing to do, so the landing page's footer offers a way to spend that time:
 `HUMANS: PRESS START` fades the page and opens a full-screen arcade with one
-hundred cabinets. The whole feature lives in `/arcade.js` and `/arcade.css`, loaded on
-`/` only.
+hundred cabinets. The whole feature lives in `/arcade.js` and `/arcade.css`,
+and neither loads with the page: `/arcade-boot.js` (a few hundred bytes,
+landing page only) reveals the launcher and fetches both the first time
+someone presses START, hovers or focuses the control, or arrives on a
+`?arcade=` deep link. The arcade is by far the heaviest asset on the site
+(~145 KB gzipped), and nobody needs it until they ask for it. Once loaded,
+`arcade.js` owns the launcher exactly as it did when it loaded eagerly; the
+bootstrap steps aside. The asset URLs live on the launcher's `data-arcade-script`
+and `data-arcade-style` attributes so they carry the page's cache token like
+every other reference.
 
 The cabinets are declared in one `CABINETS` table, each with an `id`, a `name`,
 a `genre`, a `family`, a tagline, a controls line and a `pad` layout. Every one
@@ -357,15 +402,16 @@ also means preloads cannot be hand-written: `vendor_fonts.py` emits
 page from it. Edit `PRELOAD` in `vendor_fonts.py` to change which faces are
 preloaded.
 
-Preloads cover every face in the first viewport. Press Start 2P is the display
-face — every heading, kicker, badge and button — so its single 400 face is
-preloaded first; a fallback flash there is not a font swap but a layout
-change, since no fallback is anywhere near its metrics. Public Sans and Libre
-Franklin are variable, so one file each is enough; IBM Plex Mono is static, so
-weights 400 (body and nav links), 500 (section kickers) and 600 are three
-separate files and all three are preloaded. Instrument Serif and the two sans
-families are no longer used by `styles.css` — they still dress `concept/`,
-which keeps its own stylesheet. A preload must carry `crossorigin` even
+Preloads cover every face in the first viewport. Instrument Serif is the
+display face (the `h1` and every `h2`), so its single 400 face is preloaded
+first: a fallback flash there is a layout change, not a font swap, since no
+system serif shares its metrics. Libre Franklin carries card and tile
+titles and Public Sans the body; both are variable, so one file each is
+enough. IBM Plex Mono carries every label, kicker, badge, code span and
+receipt row; it is static, so weights 400, 500 and 600 are three separate
+files and all three are preloaded. Press Start 2P is deliberately not
+preloaded: the page wears it only on the footer's `HUMANS: PRESS START`
+control and inside the arcade overlay, both far below the fold. A preload must carry `crossorigin` even
 same-origin, or the browser discards it and fetches the file twice. The `404`
 page preloads nothing on purpose — it is `noindex` and mostly serves scanners.
 
@@ -379,10 +425,10 @@ the launch gate rather than deploying a stylesheet whose every `src` 404s.
 `styles.css` is the palette's source of truth. `favicon.svg` and
 `social-card.svg` draw exclusively from its `:root` tokens — ink ground,
 text-light letterform and headline, gold seal marks (the same mark the nav
-brand carries). Both are drawn on the design system's pixel grid: whole-pixel
-edges, `shape-rendering="crispEdges"`, and no rotated square — a 45° square is
-the one shape a pixel grid cannot render without antialiasing, which is why
-the seal is now an axis-aligned block.
+brand carries). The favicon is a 16×16 pixel letterform, because a favicon
+is a pixel grid whatever the page looks like; the social card is set in the
+page's own Instrument Serif and IBM Plex Mono on soft corners, matching the
+pages it previews.
 `test_brand_graphics_use_the_design_system_palette` fails if either file
 reintroduces an off-system color; that is exactly how the original graphics
 drifted, keeping a retired charcoal-and-ember palette long after the pages
@@ -399,7 +445,7 @@ python3 render_social_card.py    # rasterize social-card.svg → social-card.png
 
 The script (stdlib-only, like `vendor_fonts.py`) inlines the SVG into a shim
 page, loads the vendored woff2 faces from `fonts/`, and screenshots it with
-headless Chromium, so the card's Press Start 2P headline and IBM Plex Mono
+headless Chromium, so the card's Instrument Serif headline and IBM Plex Mono
 labels are the site's own typography rather than an exporting machine's
 substitutes. It prefers a Playwright `headless_shell` build (found under
 `$PLAYWRIGHT_BROWSERS_PATH`; or point `$CHROMIUM` at any binary), whose
