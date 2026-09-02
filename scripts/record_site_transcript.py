@@ -385,15 +385,19 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
         },
     ]
 
-    # One read of the published receipt feeds the verifier, the claims, and
-    # the digest, so the three cannot describe different versions of the file
-    # if it is replaced while this runs. The verifier sees a snapshot of those
-    # bytes under the same file name, so the recorded command reads the same.
+    # One read each of the published receipt and key set feeds the verifier,
+    # the claims, and the digests, so none of them can describe a different
+    # version of either file if one is replaced while this runs. The verifier
+    # sees snapshots of those bytes under the same file names, so the
+    # recorded command reads the same.
     live_bundle_bytes = LIVE_RECEIPT.read_bytes()
+    live_keys_bytes = LIVE_KEYS.read_bytes()
     with tempfile.TemporaryDirectory() as tmp:
         snapshot = Path(tmp) / LIVE_RECEIPT.name
         snapshot.write_bytes(live_bundle_bytes)
-        live_verification = _verify_cli(snapshot, LIVE_KEYS, LIVE_ISSUER)
+        keys_snapshot = Path(tmp) / LIVE_KEYS.name
+        keys_snapshot.write_bytes(live_keys_bytes)
+        live_verification = _verify_cli(snapshot, keys_snapshot, LIVE_ISSUER)
     live_claims = json.loads(
         json.loads(live_bundle_bytes.decode("utf-8"))["signing_input"]
     )
@@ -423,6 +427,10 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
             # republished after recording (even under the same id) cannot
             # ship with this verdict beside it.
             "bundle_sha256": hashlib.sha256(live_bundle_bytes).hexdigest(),
+            # And the key set it was checked against: a rotated or edited
+            # trust-keys.json after recording would leave a verdict beside a
+            # command that no longer reproduces it.
+            "keys_sha256": hashlib.sha256(live_keys_bytes).hexdigest(),
             **live_verification,
         },
     }

@@ -3,10 +3,11 @@
     "bundle_sha256": "7b43ee98a3526293723c3383c02fce0e9d2f9f3634378d569d6cc2ff756a7edc",
     "command": "b2a-verify-receipt --bundle receipt.json --keys trust-keys.json \\\n  --expect-issuer https://api.thisisatest.tech",
     "exit_code": 0,
+    "keys_sha256": "aa03192fb048e2c8fca5ba6feb7be0cf2ed6461f21f60a9a5673afe66398b92e",
     "output": "VERIFIED  rcpt-9daf745e477d45ab\n  signed by   railway-prod-ed25519\n  permit      permit-c73a0b621c244831\n  tool        partner.echo\n  outcome     success\n  credits     1 charged of 1 authorized\n  at          2026-08-11T21:17:28.064620+00:00",
     "receipt_id": "rcpt-9daf745e477d45ab"
   },
-  "recorded_at": "2026-09-02T03:27:34+00:00",
+  "recorded_at": "2026-09-02T03:39:26+00:00",
   "recorded_by": "python scripts/record_site_transcript.py",
   "schema_version": "1.0",
   "source": {
@@ -49,7 +50,7 @@
       "response": [
         [
           "permit_id",
-          "permit-20ed336d1da54405"
+          "permit-eadc63d9d5dd44ff"
         ],
         [
           "allowed_tools",
@@ -61,7 +62,7 @@
         ],
         [
           "expires_at",
-          "2026-09-02T03:57:34"
+          "2026-09-02T04:09:25"
         ],
         [
           "key_id",
@@ -78,7 +79,7 @@
       "response": [
         [
           "receipt_id",
-          "rcpt-8ffff9d8e13d4321"
+          "rcpt-164b0b659bd44d2b"
         ],
         [
           "outcome",
@@ -90,11 +91,11 @@
         ],
         [
           "ledger_entry_id",
-          "b8b14d1e-d61b-4f1a-8e33-9c76b478899c"
+          "ccb413e9-d78e-40e4-b59a-a7e304001dd1"
         ],
         [
           "permit_id",
-          "permit-20ed336d1da54405"
+          "permit-eadc63d9d5dd44ff"
         ]
       ],
       "title": "The call executes and is charged once."
@@ -107,7 +108,7 @@
       "response": [
         [
           "receipt_id",
-          "rcpt-8ffff9d8e13d4321"
+          "rcpt-164b0b659bd44d2b"
         ],
         [
           "outcome",
@@ -136,7 +137,7 @@
         ],
         [
           "receipt_id",
-          "rcpt-c895ac99b3834843"
+          "rcpt-32c68d2ca5c24b2f"
         ],
         [
           "outcome",
@@ -170,7 +171,7 @@
       "id": "verify",
       "loop": "06 \u00b7 Receipt, offline",
       "note": "The SDK verifier checks the Ed25519 signature against the published key set. It never imports the gateway.",
-      "output": "VERIFIED  rcpt-8ffff9d8e13d4321\n  signed by   demo-ed25519\n  permit      permit-20ed336d1da54405\n  tool        trust-plane-echo\n  outcome     success\n  credits     2 charged of 2 authorized\n  at          2026-09-02T03:27:34.568789+00:00",
+      "output": "VERIFIED  rcpt-164b0b659bd44d2b\n  signed by   demo-ed25519\n  permit      permit-eadc63d9d5dd44ff\n  tool        trust-plane-echo\n  outcome     success\n  credits     2 charged of 2 authorized\n  at          2026-09-02T03:39:25.849139+00:00",
       "request": "b2a-verify-receipt --bundle receipt.json --keys trust-keys.json",
       "title": "The receipt verifies with no credential and no callback."
     }
@@ -178,8 +179,8 @@
   "summary": {
     "denial_reason": "permit_tool_not_allowed",
     "offline_verified": true,
-    "permit_id": "permit-20ed336d1da54405",
-    "receipt_id": "rcpt-8ffff9d8e13d4321",
-    "replay_receipt_id": "rcpt-8ffff9d8e13d4321"
+    "permit_id": "permit-eadc63d9d5dd44ff",
+    "receipt_id": "rcpt-164b0b659bd44d2b",
+    "replay_receipt_id": "rcpt-164b0b659bd44d2b"
   }
 }

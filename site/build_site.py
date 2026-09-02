@@ -53,6 +53,7 @@ LOOP_TRANSCRIPT_TOKEN = "@@LOOP_TRANSCRIPT@@"
 LIVE_VERIFICATION_TOKEN = "@@LIVE_VERIFICATION@@"
 TRANSCRIPT = SITE_ROOT / "proof" / "transcript.json"
 LIVE_RECEIPT = SITE_ROOT / "proof" / "receipt.json"
+LIVE_KEYS = SITE_ROOT / "proof" / "trust-keys.json"
 #: The hero shows the loop's spine; the governed-path section shows all of it.
 HERO_CONSOLE_STEPS = ("authorize", "invoke", "replay", "verify")
 SECURITY_TXT_EXPIRES_TOKEN = "@@SECURITY_TXT_EXPIRES@@"
@@ -488,6 +489,12 @@ def load_transcript() -> dict:
         raise LaunchConfigurationError(
             f"site/proof/receipt.json is unreadable: {exc}"
         ) from exc
+    try:
+        keys_bytes = LIVE_KEYS.read_bytes()
+    except OSError as exc:
+        raise LaunchConfigurationError(
+            f"site/proof/trust-keys.json is unreadable: {exc}"
+        ) from exc
     if live.get("exit_code") != 0 or not live["output"].startswith("VERIFIED"):
         raise LaunchConfigurationError(
             "the live receipt did not verify when the transcript was recorded; "
@@ -512,6 +519,15 @@ def load_transcript() -> dict:
         raise LaunchConfigurationError(
             "transcript's live verifier output was recorded against different "
             "receipt.json bytes than the ones being published; re-run "
+            "python scripts/record_site_transcript.py"
+        )
+    # The same holds for the key set the verifier checked the signature
+    # against: the command beside the verdict names trust-keys.json, so the
+    # published file must be the one that produced the verdict.
+    if live.get("keys_sha256") != hashlib.sha256(keys_bytes).hexdigest():
+        raise LaunchConfigurationError(
+            "transcript's live verifier output was recorded against different "
+            "trust-keys.json bytes than the ones being published; re-run "
             "python scripts/record_site_transcript.py"
         )
     return transcript

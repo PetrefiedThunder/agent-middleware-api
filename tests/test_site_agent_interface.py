@@ -3058,6 +3058,10 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
         live["bundle_sha256"]
         == hashlib.sha256((SITE / "proof" / "receipt.json").read_bytes()).hexdigest()
     )
+    assert (
+        live["keys_sha256"]
+        == hashlib.sha256((SITE / "proof" / "trust-keys.json").read_bytes()).hexdigest()
+    )
     assert live["exit_code"] == 0
     assert live["output"].startswith(f"VERIFIED  {published_id}")
     assert "--expect-issuer https://api.thisisatest.tech" in live["command"]
@@ -3108,6 +3112,14 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     resigned["live_receipt_verification"]["bundle_sha256"] = "0" * 64
     path.write_text(json.dumps(resigned), encoding="utf-8")
     with pytest.raises(launch_error, match="different receipt.json bytes"):
+        load_transcript()
+
+    # A changed key set with the same receipt is just as stale: the verdict
+    # was produced against keys the published command no longer names.
+    rekeyed = json.loads(original)
+    rekeyed["live_receipt_verification"]["keys_sha256"] = "0" * 64
+    path.write_text(json.dumps(rekeyed), encoding="utf-8")
+    with pytest.raises(launch_error, match="different trust-keys.json bytes"):
         load_transcript()
 
     failing = json.loads(original)
