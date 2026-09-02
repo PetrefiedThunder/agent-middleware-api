@@ -44,10 +44,17 @@ ANALYTICS_FLAG_DISABLED = frozenset({"", "false"})
 # The queue shim lives in /va-init.js rather than an inline <script> so the
 # deployed Content-Security-Policy can stay script-src 'self' with no
 # 'unsafe-inline'. It must load before the insights script reads window.vaq.
-ANALYTICS_SCRIPTS = """<script src="/va-init.js?v=gateway-15"></script>
+ANALYTICS_SCRIPTS = """<script src="/va-init.js?v=gateway-16"></script>
     <script defer src="/_vercel/insights/script.js"></script>"""
 BUILD_DATE_TOKEN = "@@BUILD_DATE@@"
 FAQ_JSONLD_TOKEN = "@@FAQ_JSONLD@@"
+HERO_CONSOLE_TOKEN = "@@HERO_CONSOLE@@"
+LOOP_TRANSCRIPT_TOKEN = "@@LOOP_TRANSCRIPT@@"
+LIVE_VERIFICATION_TOKEN = "@@LIVE_VERIFICATION@@"
+TRANSCRIPT = SITE_ROOT / "proof" / "transcript.json"
+LIVE_RECEIPT = SITE_ROOT / "proof" / "receipt.json"
+#: The hero shows the loop's spine; the governed-path section shows all of it.
+HERO_CONSOLE_STEPS = ("authorize", "invoke", "replay", "verify")
 SECURITY_TXT_EXPIRES_TOKEN = "@@SECURITY_TXT_EXPIRES@@"
 # security.txt must carry a future Expires (RFC 9116 §2.5.5). Regenerating it
 # one year out on every build means a deployed site never serves a lapsed file.
@@ -89,6 +96,7 @@ REQUIRED_PUBLIC_ASSETS = (
     *COPY_ASSETS,
     "proof/receipt.json",
     "proof/trust-keys.json",
+    "proof/transcript.json",
 )
 PROVISIONAL_TERMS = (
     "change me",
@@ -402,6 +410,175 @@ class _FaqListParser(HTMLParser):
             self._parts.append(data)
 
 
+def load_transcript() -> dict:
+    """Read the recorded governed-loop transcript and refuse anything off.
+
+    The page renders this file verbatim, so a missing, malformed, or stale
+    transcript is a launch error, not a blank panel. Stale means the live
+    verifier output was recorded against a different receipt than the one
+    published beside it: republishing ``receipt.json`` without re-running
+    ``scripts/record_site_transcript.py`` fails here instead of shipping a
+    verdict for the wrong artifact.
+    """
+    try:
+        transcript = json.loads(TRANSCRIPT.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise LaunchConfigurationError(
+            "site/proof/transcript.json is missing; run "
+            "python scripts/record_site_transcript.py"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise LaunchConfigurationError(
+            f"site/proof/transcript.json is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(transcript, dict):
+        raise LaunchConfigurationError("site/proof/transcript.json must be an object")
+    steps = transcript.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise LaunchConfigurationError("site/proof/transcript.json has no steps")
+    for step in steps:
+        if not isinstance(step, dict) or not all(
+            isinstance(step.get(key), str) and step.get(key)
+            for key in ("id", "loop", "title", "request", "note")
+        ):
+            raise LaunchConfigurationError(
+                "every transcript step needs id, loop, title, request and note"
+            )
+        if not (
+            isinstance(step.get("response"), list)
+            or isinstance(step.get("output"), str)
+        ):
+            raise LaunchConfigurationError(
+                f"transcript step {step.get('id')!r} has neither a response nor an output"
+            )
+    ids = [step["id"] for step in steps]
+    missing = [name for name in HERO_CONSOLE_STEPS if name not in ids]
+    if missing:
+        raise LaunchConfigurationError(
+            "transcript lacks the steps the hero shows: " + ", ".join(missing)
+        )
+    source = transcript.get("source")
+    if not isinstance(source, dict) or not isinstance(source.get("label"), str):
+        raise LaunchConfigurationError("transcript must label its source")
+    live = transcript.get("live_receipt_verification")
+    if not isinstance(live, dict) or not all(
+        isinstance(live.get(key), str) for key in ("receipt_id", "command", "output")
+    ):
+        raise LaunchConfigurationError(
+            "transcript lacks the live receipt's verifier output"
+        )
+    try:
+        bundle = json.loads(LIVE_RECEIPT.read_text(encoding="utf-8"))
+        published_id = json.loads(bundle["signing_input"])["receipt_id"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise LaunchConfigurationError(
+            f"site/proof/receipt.json is unreadable: {exc}"
+        ) from exc
+    if live["receipt_id"] != published_id or published_id not in live["output"]:
+        raise LaunchConfigurationError(
+            "transcript's live verifier output is for "
+            f"{live['receipt_id']}, but receipt.json publishes {published_id}; "
+            "re-run python scripts/record_site_transcript.py"
+        )
+    if live.get("exit_code") != 0 or not live["output"].startswith("VERIFIED"):
+        raise LaunchConfigurationError(
+            "the live receipt did not verify when the transcript was recorded; "
+            "the site will not publish a failing verdict as proof"
+        )
+    return transcript
+
+
+def _console_output(text: str) -> str:
+    """A verifier's stdout as markup; the verdict word carries its own class."""
+    lines = html.escape(text).split("\n")
+    if lines and lines[0].startswith("VERIFIED"):
+        lines[0] = (
+            '<span class="console-ok">VERIFIED</span>' + lines[0][len("VERIFIED") :]
+        )
+    return "\n".join(lines)
+
+
+def _console_request(text: str) -> str:
+    """A request as a prompt line: the first line gets the ``$``."""
+    lines = html.escape(text).split("\n")
+    first = '<span class="console-prompt" aria-hidden="true">$ </span>' + lines[0]
+    rest = ["  " + line for line in lines[1:]]
+    return "\n".join([first, *rest])
+
+
+def render_console(
+    transcript: dict, *, steps: tuple[str, ...] | None, full: bool, labelled_by: str
+) -> str:
+    """Render recorded steps as a terminal panel.
+
+    ``full`` adds the loop label and title above each step; the hero omits
+    them and shows only the request, the response, and the note.
+    """
+    wanted = [
+        step for step in transcript["steps"] if steps is None or step["id"] in steps
+    ]
+    if steps is not None:
+        order = {name: index for index, name in enumerate(steps)}
+        wanted.sort(key=lambda step: order[step["id"]])
+    parts = [
+        f'<figure class="console{" console-full" if full else ""}" aria-labelledby="{labelled_by}">'
+    ]
+    recorded = html.escape(str(transcript.get("recorded_at", ""))[:10])
+    parts.append(
+        '<figcaption class="console-bar">'
+        f'<span class="console-title" id="{labelled_by}">governed loop · recorded</span>'
+        f'<span class="console-meta">make prove-trust-plane · <time datetime="{recorded}">{recorded}</time></span>'
+        "</figcaption>"
+    )
+    parts.append('<ol class="console-steps">')
+    for step in wanted:
+        parts.append(f'<li class="console-step" data-step="{html.escape(step["id"])}">')
+        if full:
+            parts.append(
+                f'<p class="console-loop">{html.escape(step["loop"])}</p>'
+                f'<h3 class="console-step-title">{html.escape(step["title"])}</h3>'
+            )
+        parts.append(
+            f'<pre class="console-request"><code>{_console_request(step["request"])}</code></pre>'
+        )
+        if isinstance(step.get("output"), str):
+            parts.append(
+                f'<pre class="console-output"><code>{_console_output(step["output"])}</code></pre>'
+            )
+        else:
+            rows = "".join(
+                f"<div><dt>{html.escape(str(key))}</dt><dd>{html.escape(str(value))}</dd></div>"
+                for key, value in step["response"]
+            )
+            parts.append(f'<dl class="console-response">{rows}</dl>')
+        parts.append(f'<p class="console-note">{html.escape(step["note"])}</p>')
+        parts.append("</li>")
+    parts.append("</ol>")
+    parts.append(
+        '<p class="console-foot">'
+        + html.escape(transcript["source"]["label"])
+        + ' <a href="/proof/transcript.json">Read the full recording.</a>'
+        "</p>"
+    )
+    parts.append("</figure>")
+    return "\n".join(parts)
+
+
+def render_live_verification(transcript: dict) -> str:
+    """The offline verifier's real output for the published receipt."""
+    live = transcript["live_receipt_verification"]
+    return (
+        '<figure class="console console-live" aria-labelledby="live-verify-title">'
+        '<figcaption class="console-bar">'
+        '<span class="console-title" id="live-verify-title">offline verifier · live receipt</span>'
+        '<span class="console-meta">b2a-verify-receipt</span>'
+        "</figcaption>"
+        f'<pre class="console-request"><code>{_console_request(live["command"])}</code></pre>'
+        f'<pre class="console-output"><code>{_console_output(live["output"])}</code></pre>'
+        "</figure>"
+    )
+
+
 def faq_jsonld(markup: str, *, indent: str = " " * 10) -> str:
     """Render the FAQPage node for a page from its own visible Q&A markup."""
 
@@ -525,6 +702,36 @@ def render_site(output: Path, environment: dict[str, str]) -> None:
             rendered = rendered.replace(FONTS_CSS_VERSION_TOKEN, fonts_css_version())
             if FAQ_JSONLD_TOKEN in rendered:
                 rendered = rendered.replace(FAQ_JSONLD_TOKEN, faq_jsonld(rendered))
+            if any(
+                token in rendered
+                for token in (
+                    HERO_CONSOLE_TOKEN,
+                    LOOP_TRANSCRIPT_TOKEN,
+                    LIVE_VERIFICATION_TOKEN,
+                )
+            ):
+                transcript = load_transcript()
+                rendered = rendered.replace(
+                    HERO_CONSOLE_TOKEN,
+                    render_console(
+                        transcript,
+                        steps=HERO_CONSOLE_STEPS,
+                        full=False,
+                        labelled_by="hero-console-title",
+                    ),
+                )
+                rendered = rendered.replace(
+                    LOOP_TRANSCRIPT_TOKEN,
+                    render_console(
+                        transcript,
+                        steps=None,
+                        full=True,
+                        labelled_by="loop-console-title",
+                    ),
+                )
+                rendered = rendered.replace(
+                    LIVE_VERIFICATION_TOKEN, render_live_verification(transcript)
+                )
         replacements = (
             markup_replacements
             if relative_path.endswith((".html", ".xml"))
