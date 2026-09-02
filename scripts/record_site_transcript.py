@@ -385,8 +385,18 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
         },
     ]
 
-    live_verification = _verify_cli(LIVE_RECEIPT, LIVE_KEYS, LIVE_ISSUER)
-    live_claims = json.loads(json.loads(LIVE_RECEIPT.read_text())["signing_input"])
+    # One read of the published receipt feeds the verifier, the claims, and
+    # the digest, so the three cannot describe different versions of the file
+    # if it is replaced while this runs. The verifier sees a snapshot of those
+    # bytes under the same file name, so the recorded command reads the same.
+    live_bundle_bytes = LIVE_RECEIPT.read_bytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        snapshot = Path(tmp) / LIVE_RECEIPT.name
+        snapshot.write_bytes(live_bundle_bytes)
+        live_verification = _verify_cli(snapshot, LIVE_KEYS, LIVE_ISSUER)
+    live_claims = json.loads(
+        json.loads(live_bundle_bytes.decode("utf-8"))["signing_input"]
+    )
 
     return {
         "schema_version": "1.0",
@@ -412,7 +422,7 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
             # this against the published file, so a receipt.json edited or
             # republished after recording (even under the same id) cannot
             # ship with this verdict beside it.
-            "bundle_sha256": hashlib.sha256(LIVE_RECEIPT.read_bytes()).hexdigest(),
+            "bundle_sha256": hashlib.sha256(live_bundle_bytes).hexdigest(),
             **live_verification,
         },
     }
