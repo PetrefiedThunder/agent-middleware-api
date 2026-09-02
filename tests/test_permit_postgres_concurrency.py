@@ -750,7 +750,11 @@ async def test_concurrent_refund_reconciliation_is_exactly_once_in_postgres(
     release_first_worker = asyncio.Event()
     verification_calls = 0
 
-    async def pause_first_worker(receipt: ReceiptModel) -> bool:
+    async def pause_first_worker(
+        receipt: ReceiptModel,
+        *,
+        session: Any = None,
+    ) -> bool:
         nonlocal verification_calls
         verification_calls += 1
         if verification_calls == 1:
@@ -758,7 +762,7 @@ async def test_concurrent_refund_reconciliation_is_exactly_once_in_postgres(
             await release_first_worker.wait()
         else:
             second_worker_reached_verification.set()
-        return await original_verify(receipt)
+        return await original_verify(receipt, session=session)
 
     monkeypatch.setattr(receipt_service, "verify_model", pause_first_worker)
     first_service = RefundReconciliationService()
