@@ -330,7 +330,7 @@ async def handle_messages(
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": {
-                        "code": -32003,
+                        "code": -32005,
                         "message": str(e),
                     },
                 }
@@ -2900,7 +2900,7 @@ def _value_error_jsonrpc_code(message: str) -> int:
     if message == "idempotency_key_required":
         return -32003
     if message == "idempotency_in_progress":
-        return -32003
+        return -32005
     if message == "insufficient_funds":
         return -32004
     if message in {"wallet_frozen", "wallet_expired"}:
@@ -3054,7 +3054,7 @@ async def invoke_tool(
         raise HTTPException(status_code=exc.status_code, detail=detail)
     except IdempotencyInProgressError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail={"error": str(exc)},
         ) from exc
     except ToolPermissionDenied as exc:

@@ -1143,7 +1143,7 @@ async def test_losing_dispatch_claim_does_not_compensate_or_send(
 
         assert loser.status_code == 200
         assert loser.json()["error"] == {
-            "code": -32003,
+            "code": -32005,
             "message": "idempotency_in_progress",
         }
         assert winner_claimed is True
@@ -1264,7 +1264,7 @@ async def test_prepare_commit_uncertain_preserves_owner_state_and_public_contrac
             )
             assert uncertain.status_code == 200
             assert uncertain.json()["error"] == {
-                "code": -32003,
+                "code": -32005,
                 "message": "idempotency_in_progress",
             }
         else:
@@ -1278,7 +1278,7 @@ async def test_prepare_commit_uncertain_preserves_owner_state_and_public_contrac
                 ),
                 headers=provisioned["agent_headers"],
             )
-            assert uncertain.status_code == 400
+            assert uncertain.status_code == 409
             assert uncertain.json()["detail"] == {"error": "idempotency_in_progress"}
         assert committed_attempt_id is not None
         assert executor.calls == []

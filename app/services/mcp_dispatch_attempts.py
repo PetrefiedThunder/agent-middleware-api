@@ -151,6 +151,25 @@ async def _claim_debit_is_valid(
     )
 
 
+def _unsupported_upstream_constraints(permit: PermitModel) -> list[str]:
+    """Return constraints the atomic upstream reservation cannot yet enforce.
+
+    The prepare path can atomically reserve a flat per-call cost, but the
+    per-tool call cap and the aggregate value cap are not yet enforceable
+    inside that single guarded reservation. When either is configured, a
+    prepared row must be treated as commit-uncertain rather than adopted as a
+    clean success or turned into a denial receipt.
+    """
+    return [
+        name
+        for name, configured in (
+            ("max_calls_per_tool", permit.max_calls_per_tool_json is not None),
+            ("aggregate_value_cap", permit.aggregate_value_cap is not None),
+        )
+        if configured
+    ]
+
+
 def _assert_sha256(value: str) -> str:
     if len(value) != 64:
         raise DispatchAttemptError("dispatch_request_hash_invalid")
@@ -507,20 +526,7 @@ class McpDispatchAttemptService:
                         wallet_id=wallet_id,
                         public_tool_id=public_tool_id,
                     )
-                    unsupported_constraints = [
-                        name
-                        for name, configured in (
-                            (
-                                "max_calls_per_tool",
-                                permit.max_calls_per_tool_json is not None,
-                            ),
-                            (
-                                "aggregate_value_cap",
-                                permit.aggregate_value_cap is not None,
-                            ),
-                        )
-                        if configured
-                    ]
+                    unsupported_constraints = _unsupported_upstream_constraints(permit)
 
                     existing = await self._get_by_idempotency_record(
                         session,
@@ -746,6 +752,15 @@ class McpDispatchAttemptService:
                             wallet_id=wallet_id,
                             public_tool_id=public_tool_id,
                         )
+                        if _unsupported_upstream_constraints(permit):
+                            # A row created by an older worker may already hold a
+                            # reservation the atomic path cannot re-validate.
+                            # Keep it commit-uncertain so the reconciler owns
+                            # its terminal classification instead of adopting it
+                            # here as a clean success or a new denial.
+                            raise DispatchPrepareCommitUncertainError(
+                                "dispatch_prepare_constraint_unsupported"
+                            )
             except DispatchPrepareCommitUncertainError:
                 raise
             except Exception as recovery_exc:
@@ -1334,6 +1349,23 @@ class McpDispatchAttemptService:
         factory = get_session_factory()
         async with factory() as session:
             async with session.begin():
+                # Acquire the SQLite writer transaction before the terminal
+                # read-modify-write. FOR UPDATE alone is a silent no-op on
+                # SQLite, so a live success finalizer and the stale-claim
+                # reconciler could otherwise both observe dispatch_claimed and
+                # persist conflicting terminal states. PostgreSQL additionally
+                # protects the row with FOR UPDATE below.
+                await session.execute(
+                    sa_update(McpDispatchAttemptModel)
+                    .where(
+                        cast(
+                            ColumnElement[bool],
+                            McpDispatchAttemptModel.attempt_id == attempt_id,
+                        )
+                    )
+                    .values(state=McpDispatchAttemptModel.state)
+                    .execution_options(synchronize_session=False)
+                )
                 attempt = await session.get(
                     McpDispatchAttemptModel,
                     attempt_id,

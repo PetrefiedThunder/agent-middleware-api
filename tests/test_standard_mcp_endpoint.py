@@ -371,7 +371,7 @@ async def test_tools_call_reports_auto_permit_contention_as_retryable(
 
     assert response.status_code == 200
     assert response.json()["error"] == {
-        "code": -32003,
+        "code": -32005,
         "message": "idempotency_in_progress",
     }
     assert calls == 0
@@ -416,6 +416,6 @@ async def test_tools_call_reports_governed_invoke_contention_with_existing_code(
 
     assert response.status_code == 200
     assert response.json()["error"] == {
-        "code": -32003,
+        "code": -32005,
         "message": "idempotency_in_progress",
     }
