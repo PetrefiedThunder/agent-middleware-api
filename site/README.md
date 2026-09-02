@@ -142,8 +142,8 @@ same-origin file instead.
 
 CSS and JS are served with `max-age=604800`, so cache busting is a **manual
 query token**: every reference looks like `/styles.css?v=gateway-16`. When you
-change any of those files (including `/wave.js`, `/arcade.js`, and
-`/arcade.css`), bump the token in
+change any of those files (including `/wave.js`, `/arcade-boot.js`,
+`/arcade.js`, and `/arcade.css`), bump the token in
 `index.html`, `proof/index.html`, `compare/index.html`, `concept/index.html`,
 `404.html`, and `build_site.py`'s `ANALYTICS_SCRIPTS`, or
 returning visitors
@@ -170,8 +170,16 @@ the offline verifier.
 This product is built for agents. During the governed loop the human has
 nothing to do, so the landing page's footer offers a way to spend that time:
 `HUMANS: PRESS START` fades the page and opens a full-screen arcade with one
-hundred cabinets. The whole feature lives in `/arcade.js` and `/arcade.css`, loaded on
-`/` only.
+hundred cabinets. The whole feature lives in `/arcade.js` and `/arcade.css`,
+and neither loads with the page: `/arcade-boot.js` (a few hundred bytes,
+landing page only) reveals the launcher and fetches both the first time
+someone presses START, hovers or focuses the control, or arrives on a
+`?arcade=` deep link. The arcade is by far the heaviest asset on the site
+(~145 KB gzipped), and nobody needs it until they ask for it. Once loaded,
+`arcade.js` owns the launcher exactly as it did when it loaded eagerly; the
+bootstrap steps aside. The asset URLs live on the launcher's `data-arcade-script`
+and `data-arcade-style` attributes so they carry the page's cache token like
+every other reference.
 
 The cabinets are declared in one `CABINETS` table, each with an `id`, a `name`,
 a `genre`, a `family`, a tagline, a controls line and a `pad` layout. Every one

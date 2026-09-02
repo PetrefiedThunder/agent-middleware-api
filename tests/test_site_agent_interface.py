@@ -1425,7 +1425,7 @@ def test_footer_reaches_the_same_places_on_every_page(tmp_path) -> None:
     Every full page offers the same three directories with the same
     destinations, so where a visitor can go next never depends on which page
     they happen to be reading. Only the waiting-room block differs — it is
-    landing-only by construction because ``arcade.js`` loads on ``/`` alone —
+    landing-only by construction because ``arcade-boot.js`` loads on ``/`` alone —
     and the 404 keeps its deliberately minimal footer.
     """
 
@@ -1753,6 +1753,7 @@ def test_local_site_assets_exist() -> None:
         SITE / "compare" / "index.html",
         SITE / "404.html",
         SITE / "a11y-preload.js",
+        SITE / "arcade-boot.js",
         SITE / "arcade.js",
         SITE / "arcade.css",
         SITE / "va-init.js",
@@ -2055,8 +2056,12 @@ def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
 
     The landing page's job is the funnel. The arcade is a joke told on top of
     it, so every part of it has to be removable: the launcher ships ``hidden``
-    and is revealed only once ``arcade.js`` runs, and nothing in the funnel
-    depends on either file loading.
+    and is revealed only once ``arcade-boot.js`` runs, and nothing in the
+    funnel depends on any of the three files loading.
+
+    The room itself is also the heaviest asset on the site, so it must not
+    load with the page: only the bootstrap does, and it names ``arcade.js``
+    and ``arcade.css`` on the launcher to fetch on first use.
     """
 
     output = tmp_path / "site"
@@ -2078,21 +2083,43 @@ def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
         "a button inside no form still defaults to submit in some engines"
     )
 
-    # Both assets ship, are cached like every other static asset, and carry the
-    # *same* token the rest of the page does. Merely requiring some token would
-    # let the arcade sit on a stale one through a bump and serve week-old bytes
-    # to returning visitors — which is the exact failure the manual token
-    # exists to prevent. Comparing against styles.css rather than hard-coding
-    # the current value keeps this from being one more literal to bump.
+    # All three assets ship, are cached like every other static asset, and
+    # carry the *same* token the rest of the page does. Merely requiring some
+    # token would let the arcade sit on a stale one through a bump and serve
+    # week-old bytes to returning visitors — which is the exact failure the
+    # manual token exists to prevent. Comparing against styles.css rather than
+    # hard-coding the current value keeps this from being one more literal to
+    # bump. The bootstrap is a normal deferred script; the room's two files
+    # are named on the launcher for the bootstrap to fetch on demand.
     shared_token = re.search(r'href="/styles\.css\?v=([^"]+)"', markup)
     assert shared_token, "index.html no longer references /styles.css with a token"
-    for asset in ("/arcade.js", "/arcade.css"):
-        expected = f'{asset}?v={shared_token.group(1)}"'
-        assert f'src="{expected}' in markup or f'href="{expected}' in markup, (
-            f"index.html does not reference {asset} with the page's "
-            f"?v={shared_token.group(1)} cache token"
-        )
+    token = shared_token.group(1)
+    assert f'<script defer src="/arcade-boot.js?v={token}"></script>' in markup, (
+        "index.html does not load the arcade bootstrap with the page's token"
+    )
+    assert f'data-arcade-script="/arcade.js?v={token}"' in launcher.group(0), (
+        "the launcher does not name /arcade.js with the page's cache token"
+    )
+    assert f'data-arcade-style="/arcade.css?v={token}"' in launcher.group(0), (
+        "the launcher does not name /arcade.css with the page's cache token"
+    )
+    for asset in ("/arcade-boot.js", "/arcade.js", "/arcade.css"):
         assert (output / asset.lstrip("/")).is_file(), f"{asset} was not published"
+    # The room must not ride along with the page: no <script> or <link> may
+    # fetch it eagerly. Lazy loading is the whole point of the bootstrap.
+    assert not re.search(r'<script[^>]*src="/arcade\.js', markup), (
+        "index.html loads /arcade.js eagerly; the bootstrap is supposed to"
+    )
+    assert not re.search(r'<link[^>]*href="/arcade\.css', markup), (
+        "index.html loads /arcade.css eagerly; the bootstrap is supposed to"
+    )
+    boot = (SITE / "arcade-boot.js").read_text(encoding="utf-8")
+    for attribute in ("data-arcade-script", "data-arcade-style"):
+        assert attribute in boot, f"arcade-boot.js does not read {attribute}"
+    assert "if (window.__amwArcade) return;" in boot, (
+        "the bootstrap's click handler does not step aside once arcade.js owns "
+        "the launcher, so a second press would open the room twice"
+    )
 
     config = json.loads((SITE / "vercel.json").read_text(encoding="utf-8"))
     cached_sources = {
@@ -2103,6 +2130,9 @@ def test_arcade_ships_as_progressive_enhancement(tmp_path) -> None:
     }
     assert any("arcade.js" in source for source in cached_sources), (
         "arcade.js has no long-lived cache rule"
+    )
+    assert any("arcade-boot.js" in source for source in cached_sources), (
+        "arcade-boot.js has no long-lived cache rule"
     )
     assert any("arcade.css" in source for source in cached_sources), (
         "arcade.css has no long-lived cache rule"

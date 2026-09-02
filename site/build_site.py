@@ -72,6 +72,7 @@ COPY_ASSETS = (
     ".well-known",
     "a11y.js",
     "a11y-preload.js",
+    "arcade-boot.js",
     "arcade.css",
     "arcade.js",
     "fonts",

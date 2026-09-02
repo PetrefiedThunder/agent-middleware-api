@@ -159,14 +159,16 @@
     @@FONT_PRELOADS@@
     <link rel="stylesheet" href="/fonts.css?v=@@FONTS_CSS_VERSION@@" />
     <link rel="stylesheet" href="/styles.css?v=gateway-16" />
-    <link rel="stylesheet" href="/arcade.css?v=gateway-16" />
     <!-- Blocking on purpose: saved accessibility preferences must apply before
          first paint. Kept in a file rather than inline so the Content-Security-
          Policy can be script-src 'self' with no 'unsafe-inline'. -->
     <script src="/a11y-preload.js?v=gateway-16"></script>
     @@VERCEL_ANALYTICS_SCRIPTS@@
     <script defer src="/wave.js?v=gateway-16"></script>
-    <script defer src="/arcade.js?v=gateway-16"></script>
+    <!-- The arcade is fetched on demand by this bootstrap (on PRESS START,
+         on hover/focus, or on a ?arcade= deep link); /arcade.js and
+         /arcade.css are named on the launcher below, not loaded here. -->
+    <script defer src="/arcade-boot.js?v=gateway-16"></script>
     <script defer src="/analytics.js?v=gateway-16"></script>
     <script defer src="/proof/proof.js?v=gateway-16"></script>
     <script defer src="/a11y.js?v=gateway-16"></script>
@@ -730,10 +732,19 @@
         >
         <a href="/.well-known/security.txt">Report a vulnerability</a>
       </div>
-      <!-- The waiting room. Hidden until /arcade.js proves it can run, so a
-           visitor without JavaScript never sees a dead control. -->
+      <!-- The waiting room. Hidden until /arcade-boot.js proves it can run,
+           so a visitor without JavaScript never sees a dead control. The
+           bootstrap reads the arcade's assets from the launcher's data
+           attributes and fetches them on first use. -->
       <div class="footer-arcade" hidden>
-        <button type="button" id="arcade-launch" class="arcade-launch" hidden>
+        <button
+          type="button"
+          id="arcade-launch"
+          class="arcade-launch"
+          data-arcade-script="/arcade.js?v=gateway-16"
+          data-arcade-style="/arcade.css?v=gateway-16"
+          hidden
+        >
           <span aria-hidden="true">▶</span> HUMANS: PRESS START
         </button>
         <p class="footer-arcade-note">
