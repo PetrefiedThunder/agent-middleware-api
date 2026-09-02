@@ -31,6 +31,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import re
@@ -407,6 +408,11 @@ def build_transcript(recording: Recording, summary: dict[str, Any]) -> dict[str,
         "steps": steps,
         "live_receipt_verification": {
             "receipt_id": live_claims["receipt_id"],
+            # The exact bytes the verdict was produced from. The build checks
+            # this against the published file, so a receipt.json edited or
+            # republished after recording (even under the same id) cannot
+            # ship with this verdict beside it.
+            "bundle_sha256": hashlib.sha256(LIVE_RECEIPT.read_bytes()).hexdigest(),
             **live_verification,
         },
     }

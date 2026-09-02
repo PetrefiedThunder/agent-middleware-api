@@ -58,8 +58,14 @@
       script.async = true;
       script.onload = function () {
         launcher.removeAttribute("aria-busy");
-        if (window.__amwArcade) resolve(window.__amwArcade);
-        else reject(new Error("arcade did not initialise"));
+        if (window.__amwArcade) {
+          resolve(window.__amwArcade);
+          return;
+        }
+        // The file arrived but never announced itself. Drop the failed
+        // attempt so the next press injects again instead of reusing it.
+        loading = null;
+        reject(new Error("arcade did not initialise"));
       };
       script.onerror = function () {
         launcher.removeAttribute("aria-busy");

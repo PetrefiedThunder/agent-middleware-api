@@ -481,7 +481,8 @@ def load_transcript() -> dict:
             "transcript lacks the live receipt's verifier output"
         )
     try:
-        bundle = json.loads(LIVE_RECEIPT.read_text(encoding="utf-8"))
+        bundle_bytes = LIVE_RECEIPT.read_bytes()
+        bundle = json.loads(bundle_bytes.decode("utf-8"))
         published_id = json.loads(bundle["signing_input"])["receipt_id"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise LaunchConfigurationError(
@@ -492,6 +493,15 @@ def load_transcript() -> dict:
             "transcript's live verifier output is for "
             f"{live['receipt_id']}, but receipt.json publishes {published_id}; "
             "re-run python scripts/record_site_transcript.py"
+        )
+    # Same id is not enough: the verdict must have been produced from the
+    # exact bytes being published, or a re-signed or edited bundle under
+    # the same receipt id would ship with a verdict it never earned.
+    if live.get("bundle_sha256") != hashlib.sha256(bundle_bytes).hexdigest():
+        raise LaunchConfigurationError(
+            "transcript's live verifier output was recorded against different "
+            "receipt.json bytes than the ones being published; re-run "
+            "python scripts/record_site_transcript.py"
         )
     if live.get("exit_code") != 0 or not live["output"].startswith("VERIFIED"):
         raise LaunchConfigurationError(

@@ -3054,6 +3054,10 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     published_id = json.loads(bundle["signing_input"])["receipt_id"]
 
     assert live["receipt_id"] == published_id
+    assert (
+        live["bundle_sha256"]
+        == hashlib.sha256((SITE / "proof" / "receipt.json").read_bytes()).hexdigest()
+    )
     assert live["exit_code"] == 0
     assert live["output"].startswith(f"VERIFIED  {published_id}")
     assert "--expect-issuer https://api.thisisatest.tech" in live["command"]
@@ -3085,6 +3089,12 @@ def test_live_verifier_output_matches_the_published_receipt(tmp_path) -> None:
     with pytest.raises(
         launch_error, match="re-run python scripts/record_site_transcript.py"
     ):
+        load_transcript()
+
+    resigned = json.loads(original)
+    resigned["live_receipt_verification"]["bundle_sha256"] = "0" * 64
+    path.write_text(json.dumps(resigned), encoding="utf-8")
+    with pytest.raises(launch_error, match="different receipt.json bytes"):
         load_transcript()
 
     failing = json.loads(original)
