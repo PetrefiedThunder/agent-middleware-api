@@ -1,12 +1,14 @@
 """Tests for governed permit→invoke→receipt flow in AutoGen wrapper."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 
 import httpx
 import pytest
+from autogen import ConversableAgent
 
-from autogen_b2a import B2AClient, B2AFunctionTool
+from autogen_b2a import B2AClient, B2AFunctionTool, register_b2a_tools
 
 
 def _permit_payload() -> dict:
@@ -233,3 +235,111 @@ async def test_missing_idempotency_key_rejected():
         )
 
     await base_client.close()
+
+
+def _governed_flow_handler(calls: dict[str, int], invoke_key: str, permit_key: str):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/permits":
+            calls["permit"] += 1
+            assert request.headers["idempotency-key"] == permit_key
+            return httpx.Response(201, json=_permit_payload())
+
+        if request.url.path == "/mcp/messages":
+            calls["invoke"] += 1
+            body = json.loads(request.content)
+            assert request.headers["idempotency-key"] == invoke_key
+            assert body["params"]["mcpContext"]["idempotency_key"] == invoke_key
+            assert body["params"]["arguments"] == {"query": "test"}
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": invoke_key,
+                    "result": {
+                        "content": [{"type": "text", "text": '{"ok": true}'}],
+                        "structuredContent": {"ok": True},
+                        "isError": False,
+                        "receipt": _receipt_payload(),
+                    },
+                },
+            )
+
+        return httpx.Response(404)
+
+    return handler
+
+
+def _call_mcp_tool_request(invoke_key: str, permit_key: str) -> dict:
+    return {
+        "name": "call_mcp_tool",
+        "arguments": json.dumps(
+            {
+                "tool_name": "partner.search",
+                "idempotency_key": invoke_key,
+                "permit_idempotency_key": permit_key,
+                "arguments": {"query": "test"},
+            }
+        ),
+    }
+
+
+def _registered_executor(handler) -> tuple[ConversableAgent, B2AClient]:
+    base_client = B2AClient(api_key="test-key", transport=httpx.MockTransport(handler))
+    tool = B2AFunctionTool(api_key="test-key", wallet_id="wallet-1")
+    tool.client = base_client
+    executor = ConversableAgent(
+        name="executor",
+        llm_config=False,
+        human_input_mode="NEVER",
+        code_execution_config=False,
+    )
+    register_b2a_tools(executor, tool)
+    return executor, base_client
+
+
+@pytest.mark.asyncio
+async def test_registered_tool_is_awaited_on_autogen_async_executor():
+    """a_execute_function must await the registered coroutine and return the receipt."""
+    calls = {"permit": 0, "invoke": 0}
+    executor, base_client = _registered_executor(
+        _governed_flow_handler(calls, "async-invoke-1", "async-permit-1")
+    )
+
+    ok, message = await executor.a_execute_function(
+        _call_mcp_tool_request("async-invoke-1", "async-permit-1")
+    )
+
+    content = str(message["content"])
+    assert ok, message
+    assert "coroutine object" not in content
+    assert "receipt-success" in content
+    assert "sig-success" in content
+    assert calls == {"permit": 1, "invoke": 1}
+
+    await base_client.close()
+
+
+def test_registered_tool_runs_on_autogen_sync_executor():
+    """execute_function (initiate_chat path) must run the coroutine, not stringify it.
+
+    AG2 Classic detects the awaitable result and drives it to completion in a
+    worker thread; the frozen autogen-agentchat 0.2 line did not, and recorded
+    ``str(coroutine)`` as the tool output.
+    """
+    calls = {"permit": 0, "invoke": 0}
+    executor, base_client = _registered_executor(
+        _governed_flow_handler(calls, "sync-invoke-1", "sync-permit-1")
+    )
+
+    ok, message = executor.execute_function(
+        _call_mcp_tool_request("sync-invoke-1", "sync-permit-1")
+    )
+
+    content = str(message["content"])
+    assert ok, message
+    assert "coroutine object" not in content
+    assert "receipt-success" in content
+    assert "sig-success" in content
+    assert calls == {"permit": 1, "invoke": 1}
+
+    asyncio.run(base_client.close())

@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from langchain_b2a import B2AClient
-from langchain_b2a.tools import get_mcp_tools
+from langchain_b2a.tools import get_langgraph_tools, get_mcp_tools
 
 
 def _permit_payload() -> dict:
@@ -319,5 +320,53 @@ async def test_permit_cache_prevents_duplicate_create_permit():
 
     assert "receipt-success" in result1
     assert "receipt-success" in result2
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_schema_is_model_bindable():
+    """The tool's argument schema must be a real JSON schema so chat models can bind it.
+
+    LangChain 1.x treats a dict ``args_schema`` as JSON Schema. A dict of Python
+    types made ``tool.args`` raise KeyError and produced a tool spec that could not
+    be serialised for ``model.bind_tools()``. The governed keys must be required.
+    """
+    transport = httpx.MockTransport(lambda req: httpx.Response(404))
+    client = B2AClient(api_key="test-key", transport=transport)
+    tool = get_mcp_tools(client, wallet_id="wallet-1")[0]
+
+    assert set(tool.args) == {
+        "tool_name",
+        "idempotency_key",
+        "permit_idempotency_key",
+        "arguments",
+    }
+
+    spec = convert_to_openai_tool(tool)
+    json.dumps(spec)  # must be JSON-serialisable for model binding
+    required = set(spec["function"]["parameters"]["required"])
+    assert {"tool_name", "idempotency_key", "permit_idempotency_key"} <= required
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_wallet_balance_tool_awaits_client():
+    """wallet_balance must await the SDK call rather than return a coroutine object."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/billing/wallets/wallet-1":
+            return httpx.Response(200, json={"wallet_id": "wallet-1", "balance": 42.5})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    client = B2AClient(api_key="test-key", transport=transport)
+    tools = get_langgraph_tools(client, wallet_id="wallet-1")
+    wallet_tool = next(t for t in tools if t.name == "wallet_balance")
+
+    result = await wallet_tool.ainvoke({})
+
+    assert result == "Balance: 42.5 credits"
 
     await client.close()
