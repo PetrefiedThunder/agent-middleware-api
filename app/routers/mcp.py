@@ -80,6 +80,7 @@ from ..trust import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
     InvalidIdempotencyKeyError,
+    decode_idempotency_key_header,
     McpGovernedAdapter,
     PolicyDecision,
     evaluate_tool_invocation,
@@ -192,30 +193,17 @@ class HumanApprovalPendingSignal(RuntimeError):
         self.status_code = status_code
 
 
-def _header_text(value: str) -> str:
-    """Read a header value the way the client wrote it.
-
-    The ASGI layer decodes header bytes as latin-1, so a key a client sent as
-    UTF-8 arrives as mojibake: it would not match the same key sent in the
-    body, and UTF-8 continuation bytes in the 0x80-0x9F range would read as C1
-    control characters. When the bytes are valid UTF-8, use that reading;
-    otherwise keep the latin-1 text unchanged.
-    """
-    try:
-        return value.encode("latin-1").decode("utf-8")
-    except UnicodeError:
-        return value
-
-
 def _header_idempotency_key_sources(request: Request) -> list[tuple[str, object]]:
     """Every ``Idempotency-Key`` header the caller sent, in wire order.
 
-    A repeated header is two explicit sources: identical copies collapse to
-    one key, differing copies are refused as a conflict rather than letting
-    the first one silently win.
+    Each line is read as the UTF-8 the client wrote, and refused when it is
+    not UTF-8, so a non-ASCII key equals the same key sent in the body and no
+    two wire values alias to one key. A repeated header is two explicit
+    sources: identical copies collapse to one key, differing copies are
+    refused as a conflict rather than letting the first one silently win.
     """
     return [
-        ("Idempotency-Key header", _header_text(value))
+        ("Idempotency-Key header", decode_idempotency_key_header(value))
         for value in request.headers.getlist("idempotency-key")
     ]
 

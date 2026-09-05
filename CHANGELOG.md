@@ -43,13 +43,17 @@ full release gate; do not backfill a final `v1.2.0` tag.
   legacy-shaped `params.mcpContext.idempotency_key` as a key source
   (validated and conflict-checked like the header and `_meta`) instead of
   silently running such a call un-keyed twice; a non-object `mcpContext`
-  is invalid params. An `Idempotency-Key` header is decoded as UTF-8 when
-  its bytes are, so a non-ASCII key no longer conflicts with the identical
-  key sent in the body or trips the control-character check on its
-  continuation bytes.
-- The adapter unwraps a JSON-RPC envelope only when the object carries no
+  is invalid params. An `Idempotency-Key` header is decoded as UTF-8 and
+  nothing else, on the MCP and governed AWI surfaces alike: a non-ASCII key
+  no longer conflicts with the identical key sent in the body or trips the
+  control-character check on its continuation bytes, and a header whose
+  bytes are not UTF-8 is refused (`idempotency_key_not_utf8`) rather than
+  read as latin-1, so two different wire values can never alias to one key.
+- The adapter recognises a JSON-RPC envelope by its protocol members
+  (`method`, `jsonrpc`) and otherwise unwraps only an object with no
   top-level tool `name`, so a `tools/call` whose params contain a key named
-  `params` is no longer misrouted. A legacy REST invoke whose
+  `params` is no longer misrouted while an envelope that also carries a
+  stray top-level `name` still is one. A legacy REST invoke whose
   `arguments.wallet_id` is not a string is a 400, not a validation error
   raised inside the handler.
 - Site: the machine-pointer files (`llm.txt`, `llms.txt`, `llms-full.txt`)

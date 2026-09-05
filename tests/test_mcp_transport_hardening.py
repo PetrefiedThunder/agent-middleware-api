@@ -13,7 +13,9 @@ landed, reproduced against it before being closed:
   the legacy ``params.mcpContext`` shape.
 * A UTF-8 ``Idempotency-Key`` header was read as latin-1 mojibake, so it
   conflicted with the identical key in the body and could trip the
-  control-character check on its continuation bytes.
+  control-character check on its continuation bytes. The header is now read
+  as UTF-8 and nothing else: bytes that are not UTF-8 are refused, so two
+  different wire values can never alias to one key.
 * A ``tools/call`` whose params contained a key named ``params`` was unwrapped
   as if it were an envelope and misrouted.
 * The REST invoke's legacy shape raised a pydantic error inside the handler
@@ -34,6 +36,7 @@ from app.core.config import get_settings
 from app.main import app
 from app.schemas.billing import ServiceCategory
 from app.services.service_registry import get_service_registry
+from app.trust import validate_tools_call_params
 from tests.test_trust_helpers import (
     BOOTSTRAP_HEADERS,
     create_tool_permit,
@@ -197,6 +200,7 @@ async def test_standard_malformed_legacy_context_key_is_refused(client, caller):
     assert error["data"]["reason_code"] == "idempotency_key_not_a_string"
     assert error["data"]["source"] == "params.mcpContext.idempotency_key"
     assert caller["effects"] == []
+    assert await _debits(client, caller["provisioned"]) == 0
 
 
 @pytest.mark.anyio
@@ -205,6 +209,7 @@ async def test_standard_non_object_legacy_context_is_invalid_params(client, call
     response = await client.post("/mcp", json=body, headers=caller["headers"])
     assert response.json()["error"]["code"] == -32602, response.text
     assert caller["effects"] == []
+    assert await _debits(client, caller["provisioned"]) == 0
 
 
 @pytest.mark.anyio
@@ -226,6 +231,47 @@ async def test_standard_utf8_header_key_agrees_with_the_same_meta_key(client, ca
 # --------------------------------------------------------------------------- #
 # POST /mcp/messages (legacy transport) and the REST invoke
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.anyio
+async def test_standard_non_utf8_header_key_is_refused_not_aliased(client, caller):
+    # b"\xe9" is "é" in latin-1 and is not UTF-8. Read as latin-1 it would be
+    # the same stored key as the UTF-8 "é" (b"\xc3\xa9"), so two different
+    # wire values would alias; the header has exactly one reading instead.
+    latin1 = {**caller["headers"], "Idempotency-Key": b"\xe9-1"}
+    response = await client.post("/mcp", json=_standard_call(), headers=latin1)
+    error = response.json()["error"]
+    assert error["code"] == -32602, response.text
+    assert error["data"]["reason_code"] == "idempotency_key_not_utf8"
+    assert error["data"]["source"] == "Idempotency-Key header"
+    assert caller["effects"] == []
+    assert await _debits(client, caller["provisioned"]) == 0
+
+    utf8 = {**caller["headers"], "Idempotency-Key": "é-1".encode("utf-8")}
+    first = _receipt_id(await client.post("/mcp", json=_standard_call(), headers=utf8))
+    replay = _receipt_id(await client.post("/mcp", json=_standard_call(), headers=utf8))
+    assert first == replay
+    assert caller["effects"] == ["one"]
+    assert await _debits(client, caller["provisioned"]) == 1
+
+
+def test_adapter_recognises_an_envelope_by_its_protocol_members():
+    envelope = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "name": "not-the-tool",
+        "params": {"name": TOOL, "arguments": {"text": "one"}},
+    }
+    unwrapped = validate_tools_call_params(envelope)
+    assert unwrapped["name"] == TOOL
+    assert unwrapped["arguments"] == {"text": "one"}
+
+    bare_envelope = {"params": {"name": TOOL, "arguments": {"text": "one"}}}
+    assert validate_tools_call_params(bare_envelope)["name"] == TOOL
+
+    params_with_a_params_key = {"name": TOOL, "arguments": {}, "params": {"name": "x"}}
+    assert validate_tools_call_params(params_with_a_params_key)["name"] == TOOL
 
 
 @pytest.fixture
@@ -321,6 +367,20 @@ async def test_legacy_utf8_header_key_matches_the_same_context_key(client, gover
     replay = await client.post("/mcp/messages", json=_legacy_call(governed, key=None), headers=headers)
     assert _receipt_id(first) == _receipt_id(replay)
     assert governed["effects"] == ["one"]
+
+
+@pytest.mark.anyio
+async def test_legacy_non_utf8_header_key_is_refused_before_any_effect(client, governed):
+    headers = {**governed["headers"], "Idempotency-Key": b"\xe9-1"}
+    response = await client.post(
+        "/mcp/messages", json=_legacy_call(governed, key=None), headers=headers
+    )
+    assert response.status_code == 200, response.text
+    error = response.json()["error"]
+    assert error["code"] == -32602
+    assert error["data"]["reason_code"] == "idempotency_key_not_utf8"
+    assert governed["effects"] == []
+    assert await _debits(client, governed["provisioned"]) == 0
 
 
 @pytest.mark.anyio
