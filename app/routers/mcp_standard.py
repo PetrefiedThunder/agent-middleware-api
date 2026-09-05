@@ -60,6 +60,7 @@ turns it on.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
 from datetime import timedelta
@@ -90,7 +91,7 @@ from app.routers.mcp import (
     _handle_tools_list,
     _header_idempotency_key_sources,
     _json_nesting_depth_exceeds,
-    _json_text_is_unrenderable,
+    _loads_strict_json,
     _value_error_jsonrpc_code,
 )
 from app.schemas.trust import PermitCreateRequest
@@ -137,12 +138,6 @@ _SERVER_INSTRUCTIONS = (
 def _mcp_error(code: int, message: str, data: dict[str, Any] | None = None) -> McpError:
     return McpError(mcp_types.ErrorData(code=code, message=message, data=data))
 
-
-# The raw-JSON guards are shared with the legacy transport. They live in
-# app.routers.mcp and are re-exported here under their historical names.
-__all__ = ["_MAX_JSON_NESTING_DEPTH", "_json_nesting_depth_exceeds", "router"]
-
-_LEGACY_CONTEXT_KEY_SOURCE = "params.mcpContext.idempotency_key"
 
 
 def _permit_error(
@@ -638,26 +633,27 @@ class _SdkTransportResponse(Response):
             await error_response(scope, receive, send)
             return
 
-        # Refuse JSON that only Python's parser accepts (NaN, Infinity,
-        # lone-surrogate escapes) before the SDK sees it. A lone surrogate in
-        # the request id parses, so the governed call ran and debited and the
-        # SDK then failed to serialize the answer — a 500 after the effect —
-        # while a non-finite id was silently dropped as a notification.
-        # Genuinely unparseable bytes are left to the SDK's own parse error.
-        if _json_text_is_unrenderable(bytes(body)):
+        # Refuse a body the reply could not carry before the SDK dispatches
+        # it. A JSON "\ud800" escape decodes to a lone surrogate that the
+        # SDK's JSON serializer cannot encode; as an ``id`` it failed the
+        # response *after* the governed tools/call had run and charged the
+        # wallet, so the client saw a 500 for a call that happened. Non-UTF-8
+        # bytes likewise escaped the SDK's JSONDecodeError handler as a 500.
+        # Malformed JSON is left to the SDK, which answers -32700 itself.
+        refusal: tuple[int, int, str] | None = None
+        try:
+            _loads_strict_json(bytes(body))
+        except json.JSONDecodeError:
+            pass
+        except UnicodeDecodeError:
+            refusal = (400, -32700, "Parse error: request body is not valid UTF-8")
+        except ValueError as exc:
+            refusal = (400, -32600, f"Invalid Request: {exc}")
+        if refusal is not None:
+            status_code, code, reason = refusal
             error_response = JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32700,
-                        "message": (
-                            "Parse error: NaN, Infinity and lone surrogates are "
-                            "not valid JSON"
-                        ),
-                    },
-                },
-                status_code=400,
+                {"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": reason}},
+                status_code=status_code,
             )
             await error_response(scope, receive, send)
             return
