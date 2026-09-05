@@ -44,26 +44,31 @@ full release gate; do not backfill a final `v1.2.0` tag.
   governed adapter seam, so every transport gets it. The REST
   `/mcp/tools/{service_id}/invoke` path applies the same key rules and
   answers HTTP 400.
-- **Both MCP transports parse the body strictly, so a call can no longer
-  charge and then fail to answer.** Python's parser accepts `NaN`,
-  `Infinity` and `1e400`, and a JSON `"\ud800"` escape decodes to a lone
-  surrogate; the response serializer refuses all of them — *after* the
-  governed tool had run and the wallet had been charged, so the caller saw
-  HTTP 500 for a call that happened and a keyed retry 500'd again on the
-  replay (an independent security review reproduced the surrogate case on
-  both `POST /mcp/messages` and `POST /mcp`). `POST /mcp/messages` now
-  reads the raw body, applies the standard endpoint's 100-level nesting
-  guard (shared from one definition; deep nesting previously raised
-  `RecursionError` → 500 on Python 3.11), parses with non-finite numbers
-  refused, rehearses the response encode to catch unpaired surrogates, and
-  answers HTTP 400 `Invalid JSON` — the same status a non-UTF-8 body now gets
-  instead of an unhandled `UnicodeDecodeError`. An envelope that states a
-  `jsonrpc` version other than `"2.0"` (a `"1.0"` request used to reach
-  dispatch) is `-32600`; a version-less envelope is still accepted, as this
-  route always has. `POST /mcp` runs the same strict parse on the raw bytes it already
-  buffers for the depth guard: an unechoable body is `-32600` and a
-  non-UTF-8 body is `-32700`, both HTTP 400, where the SDK previously
-  answered 500; syntax errors are still the SDK's own `-32700`.
+- **The governed AWI HTTP routes hold the same contract.**
+  `begin_awi_http_governed` — behind `POST /v1/awi/execute`,
+  `passkey/challenge`, `passkey/verify`, `dom/sync`, `rag/index`, and
+  `rag/query` — refused only an absent or blank `Idempotency-Key`, then
+  stored `key.strip()` as the replay identity, so `' k'` and `'k'` collapsed
+  into one record and the second call replayed the first receipt instead of
+  running; it applied no length cap, so a key wider than the 128-character
+  store column passed permit validation and reached the database; and it
+  read the header through a single-value parameter, so a second line
+  carrying a different key was never seen (adversarial verification of the
+  contract above, 2026-09). Every header line now goes through the shared
+  `resolve_client_idempotency_key` and the key is used verbatim: no header
+  is still `idempotency_key_required`; a present-but-unusable one, or two
+  lines that disagree, is HTTP 400 `invalid_idempotency_key` with the same
+  `reason_code`, `source`, and `remediation` fields plus the governed
+  `tool`, ahead of permit validation and before any record is written. A
+  blank header is therefore now `idempotency_key_blank` rather than
+  `idempotency_key_required`. Trimming was dropped on purpose: the Python
+  SDK trims client-side before sending and no first-party caller sends a
+  padded key, so server-side trimming only merged distinct client keys. The
+  handlers declare the header as a list so FastAPI delivers every line
+  (these proof-surface routes are not part of the exported core
+  `docs/openapi.json`, which is unchanged). `tests/test_awi_http_governance.py`
+  covers the absent, blank, over-long, control-character, conflicting, and
+  padded cases beside a valid-key replay control at the store width.
 - **`GET /health` now publishes `build_provenance`** alongside `commit_sha`,
   the same field `/health/dependencies` already carried, so the liveness
   probe alone can tell a trustworthy-but-behind deployment from a stale stamp.
