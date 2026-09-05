@@ -521,26 +521,40 @@ def _build_standard_mcp_server() -> Server:
             # driven by an unexpected transport. Fail closed.
             raise _mcp_error(-32603, "auth_context_missing")
 
-        # Validated before anything is minted or metered: a present-but-
-        # unusable key is refused here, and only a truly absent key proceeds
-        # to the generated-key path inside _governed_tools_call.
-        client_key = _client_idempotency_key(http_request, req.params)
+        request_id = str(ctx.request_id) if ctx.request_id is not None else None
+        try:
+            # Validated before anything is minted or metered: a present-but-
+            # unusable key is refused here, and only a truly absent key
+            # proceeds to the generated-key path inside _governed_tools_call.
+            client_key = _client_idempotency_key(http_request, req.params)
 
-        result = await _governed_tools_call(
-            auth=auth,
-            tool_name=req.params.name,
-            arguments=req.params.arguments or {},
-            client_idempotency_key=client_key,
-            request_id=str(ctx.request_id) if ctx.request_id is not None else None,
-        )
+            result = await _governed_tools_call(
+                auth=auth,
+                tool_name=req.params.name,
+                arguments=req.params.arguments or {},
+                client_idempotency_key=client_key,
+                request_id=request_id,
+            )
 
-        payload = dict(result)
-        receipt = payload.get("receipt")
-        if receipt is not None:
-            meta = dict(payload.get("_meta") or {})
-            meta[_RECEIPT_META_KEY] = receipt
-            payload["_meta"] = meta
-        return mcp_types.ServerResult(mcp_types.CallToolResult.model_validate(payload))
+            payload = dict(result)
+            receipt = payload.get("receipt")
+            if receipt is not None:
+                meta = dict(payload.get("_meta") or {})
+                meta[_RECEIPT_META_KEY] = receipt
+                payload["_meta"] = meta
+            return mcp_types.ServerResult(
+                mcp_types.CallToolResult.model_validate(payload)
+            )
+        except McpError:
+            raise
+        except Exception as e:
+            # The SDK reports any other exception that escapes a handler as
+            # str(e). This is the last boundary before it, so a failure in
+            # the registry lookup, the wallet-policy read, the auto-permit
+            # mint, or result validation is sanitized the same way as one
+            # inside the governed call.
+            error = _internal_error(e, surface="/mcp", request_id=request_id)
+            raise _mcp_error(error["code"], error["message"], error["data"]) from e
 
     server.request_handlers[mcp_types.CallToolRequest] = handle_call_tool
     return server

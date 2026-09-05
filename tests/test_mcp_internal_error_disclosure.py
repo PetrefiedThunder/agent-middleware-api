@@ -23,6 +23,7 @@ from httpx import ASGITransport, AsyncClient
 from app.core.config import get_settings
 from app.main import app
 from app.routers import mcp as mcp_router
+from app.routers import mcp_standard as standard_mcp_router
 from app.schemas.billing import ServiceCategory
 from app.services.service_registry import get_service_registry
 from tests.test_trust_helpers import provision_agent_wallet
@@ -170,6 +171,50 @@ async def test_standard_route_hides_unclassified_failure(
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["id"] == 7
+    correlation_id = _assert_internal_error(payload["error"], wire=resp.text)
+    _assert_logged_under(caplog, correlation_id)
+
+
+@pytest.mark.anyio
+async def test_standard_route_hides_failure_before_the_governed_call(
+    client,
+    standard_mcp_enabled,
+    clean_database,
+    registered_tool,
+    monkeypatch,
+    caplog,
+):
+    """The auto-permit mint runs before the governed call and must be covered too.
+
+    Anything that escapes the SDK's tool handler is reported by the SDK as
+    ``str(exc)``; the handler is the last boundary that can sanitize it.
+    """
+    provisioned = await provision_agent_wallet(client)
+
+    async def explode(**_kwargs):
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr(standard_mcp_router, "_mint_auto_permit", explode)
+
+    with caplog.at_level(logging.ERROR, logger=LOGGER):
+        resp = await client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": TOOL, "arguments": {}},
+            },
+            headers={
+                **provisioned["agent_headers"],
+                **MCP_HEADERS,
+                "Idempotency-Key": "leak-standard-mint-1",
+            },
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["id"] == 8
     correlation_id = _assert_internal_error(payload["error"], wire=resp.text)
     _assert_logged_under(caplog, correlation_id)
 

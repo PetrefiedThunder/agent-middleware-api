@@ -1819,7 +1819,12 @@ async def _execute_registered_tool(
                     status_code=500,
                     jsonrpc_code=-32603,
                 ) from refund_exc
-            raise ToolExecutionError(error) from refund_exc
+            # Not a ToolExecutionError: that type means compensation is
+            # complete, and here the refund itself failed. The composed reason
+            # (tool error plus refund error) is infrastructure text; it stays
+            # in the audit log and the client gets the sanitized internal
+            # error from the route's catch-all.
+            raise RuntimeError(error) from refund_exc
         if governed_call and permit_model:
             await get_permit_service().release_budget(
                 permit_model.permit_id,

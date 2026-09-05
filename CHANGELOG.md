@@ -545,11 +545,19 @@ full release gate; do not backfill a final `v1.2.0` tag.
   (the adversarial pass on #396 reproduced a `-32603` carrying the wallet
   `SELECT`). Each route now answers `internal_error` with a `correlation_id`
   in `data` (the legacy HTTP route carries it in `structuredContent`) and
-  logs the real exception under that id. Every message a client matches —
-  `insufficient_funds`, `wallet_frozen`, `idempotency_key_reused`,
-  `Tool not found…`, the tool's own error on a failed call — is unchanged;
-  the `ValueError` classifier is now explicit about which texts are contract
-  and treats the rest as unclassified.
+  logs the real exception under that id. On `POST /mcp` the boundary sits in
+  the SDK tool handler itself, so a failure in the registry lookup, the
+  wallet-policy read, or the auto-permit mint is sanitized too; the SDK would
+  otherwise answer any escaping exception as `str(err)`. Every message a
+  client matches — `insufficient_funds`, `wallet_frozen`,
+  `idempotency_key_reused`, `Tool not found…`, the tool's own error on a
+  failed call — is unchanged; the `ValueError` classifier is now explicit
+  about which texts are contract and treats the rest as unclassified. One
+  legacy message does change: an unpermitted call whose tool failed *and*
+  whose refund then failed used to return the composed
+  `tool_error:…;refund_failed:…` text; that is a refund-store failure, so it
+  is now `internal_error` on the wire, with the composed reason kept in the
+  audit event.
 - **The child-wallet lifetime spend cap is enforced by the database.**
   `lifetime_debits + charge_amount <= max_spend` was checked against an earlier
   read while the increment happened later, so concurrent charges could push a
