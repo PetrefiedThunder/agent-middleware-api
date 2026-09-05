@@ -37,6 +37,15 @@ provider extra for your model, for example:
 python -m pip install "autogen[openai]"
 ```
 
+### Running the tests
+
+From the repository root, in a fresh virtual environment:
+
+```bash
+python -m pip install -e ./b2a_sdk -e "wrappers/autogen-agent-middleware[dev]"
+python -m pytest wrappers/autogen-agent-middleware/tests
+```
+
 ## Quick Start (Governed Flow)
 
 ```python
