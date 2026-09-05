@@ -32,6 +32,10 @@ full release gate; do not backfill a final `v1.2.0` tag.
   the runner against the real application in-process: a retried tool call,
   including from a resumed process on the same store, returns the original
   signed receipt, and the wallet is debited once per distinct tool call.
+- **`tests/test_mcp_legacy_envelope_validation.py` docstring corrected.** It
+  listed a missing `jsonrpc` member as refused; only a stated version other
+  than `"2.0"` is refused, and the version-less legacy envelope stays
+  accepted, as the module's own control test pins.
 
 ### 🔒 A present-but-unusable replay key is refused, never replaced
 
