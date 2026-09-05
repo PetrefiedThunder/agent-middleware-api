@@ -218,6 +218,26 @@ exists. The stored identity is the header value exactly as received — it is
 not trimmed, so `' k'` and `'k'` are two different keys
 (`test_awi_http_governance`).
 
+Two details of *where* a key is read: on `POST /mcp` the body sources are
+`params._meta["io.agentmiddleware/idempotency_key"]` and, for a client written
+against the legacy transport, `params.mcpContext.idempotency_key` (the rest of
+that object is ignored there; the endpoint mints its own permit), and a
+`mcpContext` that is not an object is `-32602`. An `Idempotency-Key` header is
+decoded as UTF-8 when its bytes are valid UTF-8, so a non-ASCII key sent in the
+header equals the same key sent in the body instead of being read as latin-1
+mojibake (`test_mcp_transport_hardening`).
+
+Before any key is read, both transports refuse a body the reply could not
+carry: JSON that only Python's parser accepts (`NaN`, `Infinity`, an
+overflowing number, a lone-surrogate escape) would execute, debit, and then
+fail to answer, and a body nested deeper than 100 levels would hit the
+parser's recursion limit. `POST /mcp/messages` answers every such body, and a
+non-UTF-8 one, as HTTP 400 `Invalid JSON`. `POST /mcp` answers an unechoable
+body with `-32600` and non-UTF-8 bytes with `-32700` (both HTTP 400), and an
+over-nested body with `-32602`; a plain syntax error is the SDK's own
+`-32700`. No permit, record, debit, or dispatch exists for any of them
+(`test_mcp_legacy_envelope_validation`, `test_standard_mcp_endpoint`).
+
 ## Exactly-once refunds
 
 `failed_refunded` means the correlated refund is already durable — the receipt

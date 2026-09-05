@@ -116,6 +116,9 @@ router = APIRouter(prefix="/mcp", tags=["MCP Standard Endpoint"])
 _IDEMPOTENCY_META_KEY = "io.agentmiddleware/idempotency_key"
 _RECEIPT_META_KEY = "io.agentmiddleware/receipt"
 _META_KEY_SOURCE = 'params._meta["io.agentmiddleware/idempotency_key"]'
+# A legacy-transport client may send its key in params.mcpContext; the
+# source label names that location in the conflict/refusal payload.
+_LEGACY_CONTEXT_KEY_SOURCE = "params.mcpContext.idempotency_key"
 
 # Idempotency scope for auto-minted permits; distinct from the governed-call
 # scope so mint replay and call replay never collide.

@@ -192,56 +192,6 @@ class HumanApprovalPendingSignal(RuntimeError):
         self.status_code = status_code
 
 
-# Far above any legitimate MCP message, far below where Python 3.11's JSON
-# parser starts raising RecursionError instead of returning a parse result.
-# Shared by both transports; the standard endpoint re-exports these names.
-_MAX_JSON_NESTING_DEPTH = 100
-
-
-def _json_nesting_depth_exceeds(body: bytes, limit: int) -> bool:
-    """True when raw JSON bytes nest deeper than ``limit`` outside strings."""
-    depth = 0
-    in_string = False
-    escaped = False
-    for byte in body:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif byte == 0x5C:  # backslash
-                escaped = True
-            elif byte == 0x22:  # double quote
-                in_string = False
-        elif byte == 0x22:
-            in_string = True
-        elif byte in (0x7B, 0x5B):  # { or [
-            depth += 1
-            if depth > limit:
-                return True
-        elif byte in (0x7D, 0x5D):  # } or ]
-            depth = max(0, depth - 1)
-    return False
-
-
-def _json_text_is_unrenderable(body: bytes) -> bool:
-    """True when ``body`` parses as JSON but could never be answered.
-
-    Python's parser accepts the non-standard NaN and Infinity literals and
-    lone-surrogate escapes that RFC 8259 forbids; the response path (UTF-8,
-    ``allow_nan=False``) cannot render them back, so a request carrying them
-    would execute and debit and then fail to answer. Bytes that do not parse
-    at all return False — the transport's own parse error handles those.
-    """
-    try:
-        parsed = json.loads(body)
-    except ValueError:
-        return False
-    try:
-        json.dumps(parsed, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except ValueError:  # non-finite float, or UnicodeEncodeError (a subclass)
-        return True
-    return False
-
-
 def _header_text(value: str) -> str:
     """Read a header value the way the client wrote it.
 

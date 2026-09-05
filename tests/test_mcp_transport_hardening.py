@@ -147,16 +147,19 @@ def _standard_call(*, meta: Any = None, context: Any = None) -> dict:
         pytest.param("1e999", id="overflow-id"),
     ],
 )
-async def test_standard_unrenderable_json_is_a_parse_error_with_no_effect(
+async def test_standard_unrenderable_json_is_refused_with_no_effect(
     client, caller, raw_id
 ):
+    # Valid syntax the reply could not carry is an invalid request (-32600),
+    # HTTP 400, with a null id: the sent id is the very thing that cannot be
+    # echoed. Syntax errors stay the SDK's own -32700.
     response = await client.post(
         "/mcp", content=_standard_raw(raw_id), headers=caller["headers"]
     )
     assert response.status_code == 400, response.text
     payload = response.json()
     assert payload["id"] is None
-    assert payload["error"]["code"] == -32700
+    assert payload["error"]["code"] == -32600
     assert caller["effects"] == []
     assert await _debits(client, caller["provisioned"]) == 0
 
@@ -278,7 +281,7 @@ async def test_legacy_unrenderable_json_is_invalid_json_with_no_effect(
 
 
 @pytest.mark.anyio
-async def test_legacy_deeply_nested_body_is_an_invalid_request_not_a_500(client):
+async def test_legacy_deeply_nested_body_is_invalid_json_not_a_500(client):
     raw = (
         b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":'
         + b"[" * 5000
@@ -286,11 +289,11 @@ async def test_legacy_deeply_nested_body_is_an_invalid_request_not_a_500(client)
         + b"}"
     )
     response = await client.post("/mcp/messages", content=raw, headers=JSON_HEADERS)
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["id"] is None
-    assert payload["error"]["code"] == -32600
-    assert "nesting depth" in payload["error"]["message"]
+    # The legacy route answers every unparseable body as HTTP 400 with a
+    # ``detail`` string; a body it refuses to parse at all has no trustworthy
+    # id to echo, so it is not a JSON-RPC error envelope.
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "Invalid JSON: nesting depth exceeds the supported limit"
 
 
 @pytest.mark.anyio
