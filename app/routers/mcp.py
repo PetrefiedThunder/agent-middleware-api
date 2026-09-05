@@ -20,6 +20,7 @@ import asyncio
 import inspect
 import json
 import logging
+import uuid
 from decimal import Decimal
 from typing import Any, NoReturn
 
@@ -383,22 +384,9 @@ async def handle_messages(
                     },
                 }
             )
-        except ValueError as e:
-            code = _value_error_jsonrpc_code(str(e))
-            if code == -32603:
-                logger.error(f"MCP tool call failed: {e}")
-            return JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": code,
-                        "message": str(e),
-                    },
-                }
-            )
-        except Exception as e:
-            logger.error(f"MCP tool call failed: {e}")
+        except ToolExecutionError as e:
+            # Legacy (unpermitted) tool failure: compensation is complete and,
+            # as on the governed path, the message is the tool's own error.
             return JSONResponse(
                 {
                     "jsonrpc": "2.0",
@@ -407,6 +395,31 @@ async def handle_messages(
                         "code": -32603,
                         "message": str(e),
                     },
+                }
+            )
+        except ValueError as e:
+            code = _value_error_jsonrpc_code(str(e))
+            if code is None:
+                error_payload = _internal_error(
+                    e, surface="/mcp/messages", request_id=request_id
+                )
+            else:
+                error_payload = {"code": code, "message": str(e)}
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": error_payload,
+                }
+            )
+        except Exception as e:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": _internal_error(
+                        e, surface="/mcp/messages", request_id=request_id
+                    ),
                 }
             )
 
@@ -1707,7 +1720,7 @@ async def _execute_registered_tool(
                     status_code=500,
                     jsonrpc_code=-32603,
                 ) from refund_exc
-            raise RuntimeError(error) from refund_exc
+            raise ToolExecutionError(error) from refund_exc
         if governed_call and permit_model:
             await get_permit_service().release_budget(
                 permit_model.permit_id,
@@ -2899,7 +2912,14 @@ def _trust_metadata(
     return metadata
 
 
-def _value_error_jsonrpc_code(message: str) -> int:
+def _value_error_jsonrpc_code(message: str) -> int | None:
+    """JSON-RPC code for a ``ValueError`` the pipeline raised on purpose.
+
+    Every message here is contract: the Python SDK and existing clients match
+    these strings. ``None`` means the text is not one of ours — a library or
+    driver error that happens to subclass ``ValueError`` — and the route must
+    answer with ``internal_error`` instead of echoing it.
+    """
     if message in {"Missing tool name", "Missing wallet_id in mcpContext"}:
         return -32602
     if message.startswith("Tool not found"):
@@ -2914,7 +2934,51 @@ def _value_error_jsonrpc_code(message: str) -> int:
         return -32004
     if message in {"wallet_frozen", "wallet_expired"}:
         return -32003
-    return -32603
+    if message == "idempotency_key_reused":
+        # Re-raised from IdempotencyConflictError. Stays on -32603 because
+        # clients (and the SDK) match the message, not the code.
+        return -32603
+    return None
+
+
+INTERNAL_ERROR_MESSAGE = "internal_error"
+
+
+def _internal_error(
+    exc: BaseException, *, surface: str, request_id: object
+) -> dict[str, Any]:
+    """Log an unclassified failure and build the client-facing JSON-RPC error.
+
+    The exception text stays on the server. These catch-all branches used to
+    return ``str(exc)``, which for a database driver failure is the SQL
+    statement itself. The caller gets a fixed message and a correlation id;
+    the traceback is logged under that id for the operator.
+    """
+    correlation_id = uuid.uuid4().hex
+    logger.exception(
+        "mcp_unclassified_error surface=%s correlation_id=%s request_id=%s",
+        surface,
+        correlation_id,
+        request_id,
+        exc_info=exc,
+    )
+    return {
+        "code": -32603,
+        "message": INTERNAL_ERROR_MESSAGE,
+        "data": {"correlation_id": correlation_id},
+    }
+
+
+def _internal_error_tool_result(
+    exc: BaseException, *, surface: str
+) -> ToolCallResponse:
+    """The legacy HTTP route's shape for the same unclassified failure."""
+    error = _internal_error(exc, surface=surface, request_id=None)
+    return ToolCallResponse(
+        content=[{"type": "text", "text": f"Error: {INTERNAL_ERROR_MESSAGE}"}],
+        structuredContent={"error": INTERNAL_ERROR_MESSAGE, **error["data"]},
+        isError=True,
+    )
 
 
 async def _audit_mcp_invocation(
@@ -3081,8 +3145,19 @@ async def invoke_tool(
         raise HTTPException(status_code=exc.status_code, detail=detail)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+    except ToolExecutionError as exc:
+        # Legacy (unpermitted) tool failure: compensation is complete and the
+        # message is the tool's own error, as on the governed path.
+        return ToolCallResponse(
+            content=[{"type": "text", "text": f"Error: {exc}"}],
+            isError=True,
+        )
     except ValueError as exc:
         message = str(exc)
+        if _value_error_jsonrpc_code(message) is None:
+            return _internal_error_tool_result(
+                exc, surface="/mcp/tools/{service_id}/invoke"
+            )
         if message == "insufficient_funds":
             raise HTTPException(status_code=402, detail=message)
         if message in {"wallet_frozen", "wallet_expired"}:
@@ -3093,10 +3168,8 @@ async def invoke_tool(
             raise HTTPException(status_code=501, detail=message)
         raise HTTPException(status_code=400, detail=message)
     except Exception as exc:
-        logger.error(f"Tool invocation failed: {exc}")
-        return ToolCallResponse(
-            content=[{"type": "text", "text": f"Error: {str(exc)}"}],
-            isError=True,
+        return _internal_error_tool_result(
+            exc, surface="/mcp/tools/{service_id}/invoke"
         )
 
 

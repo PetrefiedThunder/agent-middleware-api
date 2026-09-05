@@ -79,6 +79,7 @@ from app.routers.mcp import (
     ToolPermissionDenied,
     _handle_tools_call,
     _handle_tools_list,
+    _internal_error,
     _value_error_jsonrpc_code,
 )
 from app.schemas.trust import PermitCreateRequest
@@ -425,14 +426,15 @@ async def _governed_tools_call(
         raise _mcp_error(-32003, str(e)) from e
     except ValueError as e:
         code = _value_error_jsonrpc_code(str(e))
-        if code == -32603:
-            logger.error(f"Standard MCP tool call failed: {e}")
+        if code is None:
+            error = _internal_error(e, surface="/mcp", request_id=request_id)
+            raise _mcp_error(error["code"], error["message"], error["data"]) from e
         raise _mcp_error(code, str(e)) from e
     except McpError:
         raise
     except Exception as e:
-        logger.error(f"Standard MCP tool call failed: {e}")
-        raise _mcp_error(-32603, str(e)) from e
+        error = _internal_error(e, surface="/mcp", request_id=request_id)
+        raise _mcp_error(error["code"], error["message"], error["data"]) from e
 
 
 def _build_standard_mcp_server() -> Server:
