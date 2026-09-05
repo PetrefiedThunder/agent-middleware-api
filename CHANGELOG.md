@@ -11,6 +11,32 @@ The next release consolidates the accumulated trust-plane and public-product
 work as `v1.3.0`. Create that tag only from the exact commit that passes the
 full release gate; do not backfill a final `v1.2.0` tag.
 
+### 🧩 OpenAI wrapper: the model's `tool_call.id` is the operation identity
+
+- **`wrappers/openai-agent-middleware` drives OpenAI function calling and the
+  Responses / Agents SDK through the governed permit → invoke → receipt
+  loop, and never invents a replay key.** Every tool call OpenAI emits
+  carries an id that is assigned once and lives in the transcript the
+  application already persists, so a retry of the same call after a dropped
+  connection, a crashed worker, or a resumed run carries the same id. The
+  runner derives the trust plane's `Idempotency-Key` from it (`oai-<id>`),
+  writes that derivation to an `OperationKeyStore` before the first network
+  call, and refuses a tool call that has no id rather than minting a key
+  that would turn the retry into a second charged action. One permit is
+  issued per `(run_id, tool)` under a stable key with its `expires_at`
+  recorded before the request, so a retried permit request is byte-identical
+  and the server replays it instead of rejecting it. Source-only like the
+  other wrappers, no `openai` dependency (it accepts the SDK's tool-call
+  objects and plain dicts), and not exercised against a live OpenAI model
+  in this repository's CI. `tests/test_openai_wrapper_trust_loop.py` drives
+  the runner against the real application in-process: a retried tool call,
+  including from a resumed process on the same store, returns the original
+  signed receipt, and the wallet is debited once per distinct tool call.
+- **`tests/test_mcp_legacy_envelope_validation.py` docstring corrected.** It
+  listed a missing `jsonrpc` member as refused; only a stated version other
+  than `"2.0"` is refused, and the version-less legacy envelope stays
+  accepted, as the module's own control test pins.
+
 ### 🔒 A present-but-unusable replay key is refused, never replaced
 
 - **`POST /mcp` no longer generates a key on the caller's behalf when the
@@ -69,6 +95,26 @@ full release gate; do not backfill a final `v1.2.0` tag.
   `docs/openapi.json`, which is unchanged). `tests/test_awi_http_governance.py`
   covers the absent, blank, over-long, control-character, conflicting, and
   padded cases beside a valid-key replay control at the store width.
+- **Both MCP transports parse the body strictly, so a call can no longer
+  charge and then fail to answer.** Python's parser accepts `NaN`,
+  `Infinity` and `1e400`, and a JSON `"\ud800"` escape decodes to a lone
+  surrogate; the response serializer refuses all of them — *after* the
+  governed tool had run and the wallet had been charged, so the caller saw
+  HTTP 500 for a call that happened and a keyed retry 500'd again on the
+  replay (an independent security review reproduced the surrogate case on
+  both `POST /mcp/messages` and `POST /mcp`). `POST /mcp/messages` now
+  reads the raw body, applies the standard endpoint's 100-level nesting
+  guard (shared from one definition; deep nesting previously raised
+  `RecursionError` → 500 on Python 3.11), parses with non-finite numbers
+  refused, rehearses the response encode to catch unpaired surrogates, and
+  answers HTTP 400 `Invalid JSON` — the same status a non-UTF-8 body now gets
+  instead of an unhandled `UnicodeDecodeError`. An envelope that states a
+  `jsonrpc` version other than `"2.0"` (a `"1.0"` request used to reach
+  dispatch) is `-32600`; a version-less envelope is still accepted, as this
+  route always has. `POST /mcp` runs the same strict parse on the raw bytes it already
+  buffers for the depth guard: an unechoable body is `-32600` and a
+  non-UTF-8 body is `-32700`, both HTTP 400, where the SDK previously
+  answered 500; syntax errors are still the SDK's own `-32700`.
 - **`GET /health` now publishes `build_provenance`** alongside `commit_sha`,
   the same field `/health/dependencies` already carried, so the liveness
   probe alone can tell a trustworthy-but-behind deployment from a stale stamp.
