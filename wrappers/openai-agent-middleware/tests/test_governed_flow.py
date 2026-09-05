@@ -112,7 +112,7 @@ class FakeTrustPlane:
 
 
 def _client(plane: FakeTrustPlane) -> B2AClient:
-    return B2AClient(api_key="agt-test", base_url="http://trust.test", transport=plane.transport())
+    return B2AClient(api_key="test-key", base_url="http://trust.test", transport=plane.transport())
 
 
 def _chat_tool_call(call_id: str = "call_abc123", arguments: str = '{"text": "hi"}'):
@@ -219,7 +219,7 @@ async def test_record_is_durable_before_the_first_network_call():
         raise httpx.ConnectError("boom", request=request)
 
     store = InMemoryOperationKeyStore()
-    client = B2AClient(api_key="agt-test", base_url="http://trust.test", transport=httpx.MockTransport(failing))
+    client = B2AClient(api_key="test-key", base_url="http://trust.test", transport=httpx.MockTransport(failing))
     runner = GovernedToolRunner(client, wallet_id=WALLET, run_id="run-1", key_store=store)
     runner.register_tool(TOOL, description="Append a note")
 
@@ -254,7 +254,7 @@ async def test_permit_retry_after_crash_resends_the_identical_body():
             "receipt": _receipt_payload(key)}})
 
     store = InMemoryOperationKeyStore()
-    client = B2AClient(api_key="agt-test", base_url="http://trust.test", transport=httpx.MockTransport(handler))
+    client = B2AClient(api_key="test-key", base_url="http://trust.test", transport=httpx.MockTransport(handler))
     runner = GovernedToolRunner(client, wallet_id=WALLET, run_id="run-1", key_store=store)
     with pytest.raises(TransportError):
         await runner.run(_chat_tool_call("call_abc123"))
