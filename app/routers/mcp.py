@@ -191,6 +191,71 @@ class HumanApprovalPendingSignal(RuntimeError):
         self.status_code = status_code
 
 
+# Far above any legitimate MCP message, far below where Python 3.11's JSON
+# parser starts raising RecursionError instead of returning a parse result.
+# Shared by both transports; the standard endpoint re-exports these names.
+_MAX_JSON_NESTING_DEPTH = 100
+
+
+def _json_nesting_depth_exceeds(body: bytes, limit: int) -> bool:
+    """True when raw JSON bytes nest deeper than ``limit`` outside strings."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in body:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # double quote
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):  # { or [
+            depth += 1
+            if depth > limit:
+                return True
+        elif byte in (0x7D, 0x5D):  # } or ]
+            depth = max(0, depth - 1)
+    return False
+
+
+def _json_text_is_unrenderable(body: bytes) -> bool:
+    """True when ``body`` parses as JSON but could never be answered.
+
+    Python's parser accepts the non-standard NaN and Infinity literals and
+    lone-surrogate escapes that RFC 8259 forbids; the response path (UTF-8,
+    ``allow_nan=False``) cannot render them back, so a request carrying them
+    would execute and debit and then fail to answer. Bytes that do not parse
+    at all return False — the transport's own parse error handles those.
+    """
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return False
+    try:
+        json.dumps(parsed, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except ValueError:  # non-finite float, or UnicodeEncodeError (a subclass)
+        return True
+    return False
+
+
+def _header_text(value: str) -> str:
+    """Read a header value the way the client wrote it.
+
+    The ASGI layer decodes header bytes as latin-1, so a key a client sent as
+    UTF-8 arrives as mojibake: it would not match the same key sent in the
+    body, and UTF-8 continuation bytes in the 0x80-0x9F range would read as C1
+    control characters. When the bytes are valid UTF-8, use that reading;
+    otherwise keep the latin-1 text unchanged.
+    """
+    try:
+        return value.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return value
+
+
 def _header_idempotency_key_sources(request: Request) -> list[tuple[str, object]]:
     """Every ``Idempotency-Key`` header the caller sent, in wire order.
 
@@ -199,7 +264,7 @@ def _header_idempotency_key_sources(request: Request) -> list[tuple[str, object]
     the first one silently win.
     """
     return [
-        ("Idempotency-Key header", value)
+        ("Idempotency-Key header", _header_text(value))
         for value in request.headers.getlist("idempotency-key")
     ]
 
@@ -328,9 +393,23 @@ async def handle_messages(
 
     The request body is a JSON-RPC 2.0 request.
     """
+    raw_body = await request.body()
+    # Refuse absurdly nested bodies before parsing them: past ~1000 frames
+    # json.loads raises RecursionError, not a ValueError, which surfaced as
+    # a 500. Same guard and limit as the standard endpoint.
+    if _json_nesting_depth_exceeds(raw_body, _MAX_JSON_NESTING_DEPTH):
+        return _jsonrpc_error_response(
+            None, -32600, "Invalid Request: JSON exceeds the supported nesting depth"
+        )
+    # Bytes that are not UTF-8 raise UnicodeDecodeError (a ValueError, not a
+    # JSONDecodeError) and used to 500; JSON that only Python's parser accepts
+    # (NaN, Infinity, lone-surrogate escapes) parsed, executed, debited, and
+    # then failed to render the answer. Both are malformed JSON, refused here.
+    if _json_text_is_unrenderable(raw_body):
+        raise HTTPException(status_code=400, detail="Invalid JSON")
     try:
-        body = await request.json()
-    except json.JSONDecodeError:
+        body = json.loads(raw_body)
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     # The envelope is validated before any member is read. A body that parsed
@@ -3122,8 +3201,14 @@ async def invoke_tool(
     """
     mcp_context = request.mcp_context
     if not mcp_context:
+        # Legacy shape: the wallet rides in the arguments. Check its type
+        # here; McpContext would otherwise raise a pydantic ValidationError
+        # inside the handler, which is a 500, not the 400 it should be.
+        argument_wallet = request.arguments.get("wallet_id", "")
+        if not isinstance(argument_wallet, str):
+            raise HTTPException(status_code=400, detail="Missing wallet_id")
         mcp_context = McpContext(
-            wallet_id=request.arguments.get("wallet_id", ""),
+            wallet_id=argument_wallet,
             request_path=None,
             permit_id=None,
             quote_id=None,

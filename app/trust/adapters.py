@@ -71,7 +71,9 @@ def validate_tools_call_params(raw: Any) -> dict[str, Any]:
     """
     if not isinstance(raw, dict):
         raise GovernedRequestInvalid("Invalid params: tools/call params must be an object")
-    params = raw["params"] if "params" in raw else raw
+    # An envelope never carries a top-level tool ``name``, so a params object
+    # that happens to contain a key called "params" is not unwrapped.
+    params = raw["params"] if ("params" in raw and "name" not in raw) else raw
     if not isinstance(params, dict):
         raise GovernedRequestInvalid("Invalid params: params must be an object")
 

@@ -205,6 +205,23 @@ operation. Clients that retry must always send their own persistent key; a
 governed `/mcp/messages` call without one is refused with
 `idempotency_key_required`.
 
+Two details of *where* a key is read: on `POST /mcp` the body sources are
+`params._meta["io.agentmiddleware/idempotency_key"]` and, for a client written
+against the legacy transport, `params.mcpContext.idempotency_key` (the rest of
+that object is ignored there; the endpoint mints its own permit). An
+`Idempotency-Key` header is decoded as UTF-8 when its bytes are valid UTF-8, so
+a non-ASCII key sent in the header equals the same key sent in the body instead
+of being read as latin-1 mojibake.
+
+Two details of what is refused before a key is even read: JSON that only
+Python's parser accepts (`NaN`, `Infinity`, lone-surrogate escapes) cannot be
+rendered back in a response, so a request carrying it would execute, debit,
+and then fail to answer. Both transports refuse it up front (`400 Invalid
+JSON` on `/mcp/messages`, JSON-RPC `-32700` on `/mcp`), and bodies nested
+deeper than 100 levels are refused before parsing (`-32600` on
+`/mcp/messages`, `-32602` on `/mcp`) rather than hitting the parser's
+recursion limit.
+
 ## Exactly-once refunds
 
 `failed_refunded` means the correlated refund is already durable — the receipt

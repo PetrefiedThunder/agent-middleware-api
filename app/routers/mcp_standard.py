@@ -82,12 +82,15 @@ from app.core.auth import AuthContext, get_auth_context
 from app.core.config import get_settings
 from app.core.time import utc_now
 from app.routers.mcp import (
+    _MAX_JSON_NESTING_DEPTH,
     GovernedToolError,
     HumanApprovalPendingSignal,
     ToolPermissionDenied,
     _handle_tools_call,
     _handle_tools_list,
     _header_idempotency_key_sources,
+    _json_nesting_depth_exceeds,
+    _json_text_is_unrenderable,
     _value_error_jsonrpc_code,
 )
 from app.schemas.trust import PermitCreateRequest
@@ -135,33 +138,11 @@ def _mcp_error(code: int, message: str, data: dict[str, Any] | None = None) -> M
     return McpError(mcp_types.ErrorData(code=code, message=message, data=data))
 
 
-# Far above any legitimate MCP message, far below where Python 3.11's JSON
-# parser starts raising RecursionError instead of returning a parse result.
-_MAX_JSON_NESTING_DEPTH = 100
+# The raw-JSON guards are shared with the legacy transport. They live in
+# app.routers.mcp and are re-exported here under their historical names.
+__all__ = ["_MAX_JSON_NESTING_DEPTH", "_json_nesting_depth_exceeds", "router"]
 
-
-def _json_nesting_depth_exceeds(body: bytes, limit: int) -> bool:
-    """True when raw JSON bytes nest deeper than ``limit`` outside strings."""
-    depth = 0
-    in_string = False
-    escaped = False
-    for byte in body:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif byte == 0x5C:  # backslash
-                escaped = True
-            elif byte == 0x22:  # double quote
-                in_string = False
-        elif byte == 0x22:
-            in_string = True
-        elif byte in (0x7B, 0x5B):  # { or [
-            depth += 1
-            if depth > limit:
-                return True
-        elif byte in (0x7D, 0x5D):  # } or ]
-            depth = max(0, depth - 1)
-    return False
+_LEGACY_CONTEXT_KEY_SOURCE = "params.mcpContext.idempotency_key"
 
 
 def _permit_error(
@@ -247,6 +228,18 @@ def _client_idempotency_key(
     meta_source = _meta_idempotency_key_source(params)
     if meta_source is not None:
         sources.append(meta_source)
+    # A client written against the legacy transport may send its key in
+    # params.mcpContext. This endpoint mints its own permit and ignores the
+    # rest of that object, but a key the caller explicitly sent must not be
+    # silently dropped: it is one more source, validated and conflict-checked
+    # like the others. JSON null reads as absent, as everywhere else.
+    legacy_context = (params.model_extra or {}).get("mcpContext")
+    if isinstance(legacy_context, dict):
+        context_value = legacy_context.get("idempotency_key")
+        if context_value is not None:
+            sources.append((_LEGACY_CONTEXT_KEY_SOURCE, context_value))
+    elif legacy_context is not None:
+        raise _mcp_error(-32602, "Invalid params: mcpContext must be an object")
     try:
         return resolve_client_idempotency_key(sources)
     except InvalidIdempotencyKeyError as exc:
@@ -641,6 +634,30 @@ class _SdkTransportResponse(Response):
                     },
                 },
                 status_code=200,
+            )
+            await error_response(scope, receive, send)
+            return
+
+        # Refuse JSON that only Python's parser accepts (NaN, Infinity,
+        # lone-surrogate escapes) before the SDK sees it. A lone surrogate in
+        # the request id parses, so the governed call ran and debited and the
+        # SDK then failed to serialize the answer — a 500 after the effect —
+        # while a non-finite id was silently dropped as a notification.
+        # Genuinely unparseable bytes are left to the SDK's own parse error.
+        if _json_text_is_unrenderable(bytes(body)):
+            error_response = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": (
+                            "Parse error: NaN, Infinity and lone surrogates are "
+                            "not valid JSON"
+                        ),
+                    },
+                },
+                status_code=400,
             )
             await error_response(scope, receive, send)
             return
