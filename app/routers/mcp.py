@@ -1730,7 +1730,13 @@ async def _execute_registered_tool(
                 description=f"Refund {description}",
             )
         except Exception as refund_exc:
-            error = f"refund_failed:{refund_exc}; tool_error:{exc}"
+            # Two reasons. The diagnostic one carries the refund store's (and,
+            # below, the audit store's) own text and goes to the server log
+            # and the audit event. The one that travels — error message,
+            # replayed envelope, receipt reason — names the tool's error but
+            # never infrastructure text, matching the upstream-dispatch shape.
+            diagnostic_error = f"refund_failed:{refund_exc}; tool_error:{exc}"
+            error = f"refund_failed; tool_error:{exc}"
             logger.error(
                 "Failed to refund MCP charge %s after tool error: %s",
                 charge_result.entry_id,
@@ -1743,7 +1749,7 @@ async def _execute_registered_tool(
                     endpoint=endpoint,
                     transport=transport,
                     ok=False,
-                    error=error,
+                    error=diagnostic_error,
                     extra_metadata={
                         **policy_metadata,
                         **_trust_metadata(
@@ -1758,7 +1764,8 @@ async def _execute_registered_tool(
                     },
                 )
             except Exception as audit_exc:
-                error = f"{error}; audit_failed:{audit_exc}"
+                diagnostic_error = f"{diagnostic_error}; audit_failed:{audit_exc}"
+                error = f"{error}; audit_failed"
                 logger.error(
                     "Failed to audit MCP refund failure for charge %s: %s",
                     charge_result.entry_id,
@@ -1820,11 +1827,10 @@ async def _execute_registered_tool(
                     jsonrpc_code=-32603,
                 ) from refund_exc
             # Not a ToolExecutionError: that type means compensation is
-            # complete, and here the refund itself failed. The composed reason
-            # (tool error plus refund error) is infrastructure text; it stays
-            # in the audit log and the client gets the sanitized internal
-            # error from the route's catch-all.
-            raise RuntimeError(error) from refund_exc
+            # complete, and here the refund itself failed. The diagnostic
+            # reason reaches the route's catch-all, which logs it under a
+            # correlation id and answers the sanitized internal error.
+            raise RuntimeError(diagnostic_error) from refund_exc
         if governed_call and permit_model:
             await get_permit_service().release_budget(
                 permit_model.permit_id,

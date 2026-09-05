@@ -582,7 +582,11 @@ full release gate; do not backfill a final `v1.2.0` tag.
   whose refund then failed used to return the composed
   `tool_error:…;refund_failed:…` text; that is a refund-store failure, so it
   is now `internal_error` on the wire, with the composed reason kept in the
-  audit event.
+  audit event. The governed counterpart (the `failed_unrefunded` receipt)
+  likewise drops the refund store's text from its message, replayed envelope
+  and receipt reason: it is now `refund_failed; tool_error:…`, the shape the
+  upstream-dispatch path already used, and the full diagnostic stays in the
+  server log and the linked audit event.
 - **The child-wallet lifetime spend cap is enforced by the database.**
   `lifetime_debits + charge_amount <= max_spend` was checked against an earlier
   read while the increment happened later, so concurrent charges could push a

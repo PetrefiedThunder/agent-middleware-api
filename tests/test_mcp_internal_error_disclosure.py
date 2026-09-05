@@ -26,7 +26,7 @@ from app.routers import mcp as mcp_router
 from app.routers import mcp_standard as standard_mcp_router
 from app.schemas.billing import ServiceCategory
 from app.services.service_registry import get_service_registry
-from tests.test_trust_helpers import provision_agent_wallet
+from tests.test_trust_helpers import create_tool_permit, provision_agent_wallet
 
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
@@ -250,6 +250,70 @@ async def test_http_invoke_route_hides_unclassified_failure(
     assert CORRELATION_ID.match(correlation_id)
     assert "SELECT" not in resp.text
     _assert_logged_under(caplog, correlation_id)
+
+
+@pytest.mark.anyio
+async def test_governed_refund_failure_keeps_refund_store_text_server_side(
+    client, clean_database, monkeypatch
+):
+    """A failed refund is a classified, receipted outcome; its message still
+    must not carry the refund store's own text, only the tool's error."""
+    provisioned = await provision_agent_wallet(client)
+    registry = get_service_registry()
+
+    def exploding_tool() -> dict:
+        raise RuntimeError("tool exploded")
+
+    async def failing_refund(self, **_kwargs):
+        raise RuntimeError(SECRET)
+
+    registry.register_local(
+        service_id="leak-refund-probe",
+        name="Leak Refund Probe",
+        description="Fails, then its refund fails with SQL-shaped text",
+        category=ServiceCategory.AGENT_COMMS,
+        func=exploding_tool,
+        credits_per_unit=2.0,
+        unit_name="call",
+    )
+    monkeypatch.setattr(
+        "app.services.agent_money.AgentMoney.refund_charge", failing_refund
+    )
+    try:
+        permit = await create_tool_permit(
+            client,
+            wallet_id=provisioned["agent_wallet_id"],
+            key_id=provisioned["key_id"],
+            tool_name="leak-refund-probe",
+            idem_key="leak-refund-permit-1",
+        )
+        resp = await client.post(
+            "/mcp/messages",
+            json={
+                "jsonrpc": "2.0",
+                "id": "leak-refund-1",
+                "method": "tools/call",
+                "params": {
+                    "name": "leak-refund-probe",
+                    "arguments": {},
+                    "mcpContext": {
+                        "wallet_id": provisioned["agent_wallet_id"],
+                        "permit_id": permit["permit_id"],
+                        "idempotency_key": "leak-refund-invoke-1",
+                    },
+                },
+            },
+            headers=provisioned["agent_headers"],
+        )
+    finally:
+        registry.unregister_local("leak-refund-probe")
+
+    assert resp.status_code == 200
+    error = resp.json()["error"]
+    assert error["code"] == -32603
+    assert error["message"] == "refund_failed; tool_error:tool exploded"
+    assert error["data"]["receipt"]["outcome"] == "failed_unrefunded"
+    assert "SELECT" not in resp.text
 
 
 @pytest.mark.anyio
